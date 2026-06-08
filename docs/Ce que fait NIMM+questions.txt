@@ -1,0 +1,76 @@
+## Comment NIMM retient les choses
+
+NIMM n'a pas une seule mémoire, il en a **quatre**, chacune avec un rôle distinct. C'est un peu comme un être humain qui aurait à la fois un carnet d'adresses, un journal intime, une bibliothèque et une mémoire de travail.
+
+---
+
+### 1. Les triplets — le carnet d'adresses
+C'est la mémoire **permanente et structurée**. Chaque fait stable est stocké sous la forme :
+
+> **qui** — **quoi** — **valeur**
+> *Laurent — métier — routier*
+> *Nadia — lien — épouse de Laurent*
+> *Maïssane — âge — 22 ans*
+
+NIMM les constitue automatiquement en arrière-plan, toutes les 30 secondes, en relisant les échanges récents. Il ne les injecte pas tous en bloc dans chaque conversation — il construit un **index thématique** et va chercher ce qui est pertinent à la demande.
+
+**Force** : très fiable pour les faits stables (famille, métier, goûts profonds).
+**Limite** : ne capture pas bien le contexte, les nuances, les choses qui changent selon les jours.
+
+---
+
+### 2. Le carnet de bord — le journal intime du fil
+Dans chaque conversation longue, NIMM génère périodiquement de courtes **notes en prose** qui résument ce qui vient de se passer :
+
+> *"Laurent parle de sa fatigue sur la route. Évoque le trajet Lyon-Barcelone de la semaine dernière. Ton mélancolique."*
+
+Ces notes sont propres à chaque fil de conversation. Elles servent à garder le fil conducteur sur les échanges longs, sans avoir à tout relire depuis le début.
+
+**Force** : capture l'émotion, le contexte, les nuances du moment.
+**Limite** : éphémère — lié au fil, pas partagé entre les conversations.
+
+---
+
+### 3. La bibliothèque — les archives
+Quand un fil est **supprimé ou archivé**, NIMM génère une fiche structurée en 7 composantes :
+- Le fil conducteur (de quoi a-t-on vraiment parlé ?)
+- Les nœuds (moments clés)
+- Les positions (ce que chacun a défendu)
+- Les questions ouvertes (ce qui est resté en suspens)
+- Les formulations clés (phrases marquantes)
+- Le climat (ton général)
+- Les ramifications (où ça aurait pu aller)
+
+Ces fiches sont indexées et consultables. Quand on reparle d'un sujet, NIMM peut rappeler ce qui avait été dit des semaines avant.
+
+**Force** : mémoire longue terme, riche, multi-dimensionnelle.
+**Limite** : ne se constitue qu'à la fermeture d'un fil — pas en temps réel.
+
+---
+
+### 4. Le bilan de session — la mémoire de travail
+En cours de conversation, NIMM pose des **balises** sur les faits confirmés dans l'échange en cours. Ça évite qu'il se contredise ou oublie quelque chose dit 20 messages plus tôt dans le même fil.
+
+**Force** : cohérence intra-conversation.
+**Limite** : disparaît à la fin du fil.
+
+---
+
+## Ce qui manque ou pourrait être amélioré
+
+Voilà les vraies questions ouvertes sur lesquelles ton avis serait précieux :
+
+**A. La mémoire émotionnelle**
+NIMM retient bien *les faits* mais mal *l'état*. Si Laurent dit "je suis épuisé en ce moment" un lundi, le mercredi NIMM ne le sait plus vraiment. Comment garder une trace de l'état émotionnel récent sans polluer la mémoire permanente ?
+
+**B. La mémoire des préférences conversationnelles**
+NIMM ne retient pas "Laurent préfère qu'on aille droit au but" ou "Nando aime qu'on développe les exemples". Est-ce que ça devrait être un type de triplet à part ? Un registre de style ?
+
+**C. L'oubli volontaire**
+Aujourd'hui un triplet peut être supprimé manuellement. Mais il n'y a pas de mécanique d'**oubli naturel** — les choses anciennes et peu confirmées restent indéfiniment. Comment décider qu'un fait est périmé sans intervention humaine ?
+
+**D. La mémoire partagée**
+Chaque utilisateur a sa propre base. Mais certaines choses concernent plusieurs personnes (un événement familial, par exemple). Faut-il un espace de mémoire commun ? Avec quelles règles d'accès ?
+
+**E. La mémoire procédurale**
+NIMM retient *ce que* Laurent fait, mais pas *comment il aime faire les choses*. "Laurent préfère qu'on lui propose 2 options plutôt qu'une liste de 10" — ce type de savoir-faire sur l'utilisateur n'a pas de maison aujourd'hui.

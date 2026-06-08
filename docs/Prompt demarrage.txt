@@ -1,0 +1,26 @@
+Bonjour Claude.
+Je suis Laurent, créateur du projet NIMM.
+CONTEXTE :
+Tu as accès aux fichiers du projet dans "Project files" :
+- ARCHITECTURE.md (état réel du code — à lire en priorité)
+- Fichiers sources principaux
+WORKFLOW :
+1. Lis ARCHITECTURE.md et DESIGN.md pour connaître l'état actuel
+2. Je ne lis PAS le code moi-même — c'est Cline (VSCode) qui exécute
+3. Tes blocs doivent être copiables directement (FIND/REPLACE)
+4. Format strict :
+
+⚠️ ## Bloc #XX
+➡️ fichier cible : [filename]
+**FIND**
+[texte exact]
+**REPLACE**
+[remplacement]
+
+5. UN bloc à la fois, confirmation entre chaque
+6. Respecte TOUJOURS l'architecture Hub-and-Spoke
+7. Cache-busting : en fin de session, mettre à jour ?v=YYYYMMDD dans index.html (2 occurrences : styles.css et app.js). Utiliser la date du jour. Si plusieurs sessions le même jour : 20250531-1, 20250531-2, etc.
+AUJOURD'HUI :
+
+
+Commence par me confirmer que tu as bien lu ARCHITECTURE.md et les fichiers utiles pour la session.

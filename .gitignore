@@ -1,0 +1,286 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# UV
+#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#uv.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#poetry.lock
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#pdm.lock
+#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
+#   in version control.
+#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#.idea/
+
+# Ruff stuff:
+.ruff_cache/
+
+# PyPI configuration file
+.pypirc
+
+# Cursor  
+#  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
+#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
+#  refer to https://docs.cursor.com/context/ignore-files
+.cursorignore
+.cursorindexingignore
+
+# Google Drive temp files
+*.tmp.driveupload
+.tmp.driveupload/
+**/.tmp.driveupload/
+
+# Fichiers temporaires système
+*.tmp
+~$*
+.DS_Store
+Thumbs.db
+
+# ══════════════════════════════════════════
+# NIMM — fichiers à ne jamais publier
+# ══════════════════════════════════════════
+
+# Base de données utilisateur (mémoire, conversations, clés API)
+# ⚠️ Ne PAS exclure data/ entier — mood_prompts.json doit être commité
+data/nimm.db
+data/nimm.db-shm
+data/nimm.db-wal
+data/nimm_*.db
+data/nimm_*.db-shm
+data/nimm_*.db-wal
+data/nimm_global.json
+data/users.json
+
+# Modèles lourds — Kokoro TTS
+kokoro-v1.0.onnx
+voices-v1.0.bin
+
+# Modèles lourds — Piper TTS
+piper_voices/
+
+# Logs applicatifs
+nimm.log
+logs/
+
+# Fichier de config local (clés API en fallback)
+.env
+
+# Tests internes — publiés (utiles pour comprendre la calibration)
+# tests/
+
+# Masques personnels — ne pas publier
+# Masques privés — ne pas publier
+modules/masks/lia.json
+modules/masks/edna.json
+modules/masks/claudio.json
+modules/masks/eve.json
+modules/masks/themis.json
+
+# Documents internes de développement
+## CDC_v3.md
+## CONTEXT_NIMM.md
+ETAT_NIMM.md
+ETAT_NIMM_v2.md
+DEEPSEEK_LEXIQUE.md
+install_log.txt
+stress_results.json
+prompt demarrage fil.txt
+.clinerules
+arborescence.txt
+
+# Scripts de correctifs temporaires
+fix_appjs.py
+fix_appjs_agenda_new.txt
+fix_css.py
+fix_index.py
+fix_index.py
+_insert_css.py
+temp_restore2.txt
+temp_styles_backup.css
+temp_tail.css
+
+# Notes personnelles
+docs/Bugs NIMM.txt
+docs/log NIMM Mardi matin.txt
+docs/Retours Lia.txt
+
+# Installateur GUI — en cours de mise à jour
+installer_gui.py
+
+# Dossier de travail Mac (remplacé par INSTALLER_NIMM.sh)
+pour mac/
+
+# Tests à la racine (doublons — versions dans tests/)
+test_intent_gate.py
+test_os_biblio.py
+*.db
+*.db-shm
+
+# Clé Tailscale
+*.key
+
+# Masques exemples — réservés à la version publique
+modules/masks/exemple_confidente.json
+modules/masks/exemple_expert.json
+modules/masks/exemple_mentor.json
+modules/masks/exemple_pote.json
+modules/masks/exemple_prof.json
+data/nimm_laurent.db-wal
+data/nimm_laurent.db-shm
+data/nimm_laurent.db-shm
+*.db-shm

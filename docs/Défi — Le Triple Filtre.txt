@@ -1,0 +1,42 @@
+Défi — Le Triple Filtre de la mémoire conversationnelle
+Contexte
+Un assistant IA personnel (NIMM) mémorise des faits sur ses utilisateurs sous forme de triplets : sujet / prédicat / objet. Exemple : Laurent / métier / chauffeur poids lourd.
+Ces triplets sont extraits automatiquement par un LLM à partir des conversations. Le LLM reçoit un prompt avec des règles d'extraction, puis décide librement de ce qui mérite d'être extrait.
+Le problème
+Cette liberté produit des triplets aberrants. Exemples réels extraits par erreur :
+
+mis_au_chomage / enfant / Laurent — un verbe utilisé comme sujet
+mon fils / parent / Laurent — un groupe nominal au lieu d'un prénom
+collègue non nommé / collegue / Laurent — une entité vague sans identité
+Louis XIV / conjoint / Madame de Montespan — des personnages historiques discutés en conversation
+Laurent / a_conjoint / NIMM — l'assistant lui-même traité comme une personne
+
+La cause profonde : le LLM interprète les règles au lieu de les appliquer. Plus les règles sont longues, plus il a de surface pour glisser.
+L'objectif
+Trouver une règle de validation formulable en trois questions binaires maximum — sur le modèle du Triple Filtre de Socrate — telle que :
+
+Chaque question reçoit OUI ou NON, sans zone grise
+Un seul NON élimine le triplet
+Le LLM extracteur n'a plus à juger — il teste
+
+Contraintes
+
+Les trois questions doivent couvrir à elles seules tous les cas aberrants listés ci-dessus
+Elles doivent laisser passer tous les triplets valides
+Elles doivent être formulables en langage naturel, sans jargon technique
+Elles ne doivent pas être une liste d'exceptions déguisée — une liste d'exceptions, c'est encore du jugement
+
+Proposition de départ à challenger ou améliorer
+
+
+Le sujet est-il une personne que l'utilisateur pourrait appeler par son prénom dans la vraie vie ?
+Le fait serait-il encore vrai et compréhensible si on le lisait seul, six mois plus tard, sans relire la conversation ?
+L'utilisateur l'a-t-il dit de lui-même ou d'un proche — et non commenté ou raconté à propos d'un tiers ?
+
+
+Ce qu'on attend de toi
+
+Valide, affine ou remplace ces trois questions
+Justifie chaque question par un ou deux cas concrets (parmi ceux listés, ou nouveaux)
+Si tu proposes une reformulation, teste-la explicitement sur les 5 exemples aberrants ET sur 2 triplets valides de ton choix
+Bonus : propose une formulation ultra-courte (moins de 30 mots au total) qui conserve la même puissance de filtrage

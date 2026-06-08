@@ -1,0 +1,462 @@
+Ce qui reste flou ou fragile
+Trois points, par ordre de priorité :
+1. Le vrai test en conditions réelles — le diagnostic a marché sur un fil vide avec des messages simples. Ce qu'on n'a pas encore vu : est-ce que DeepSeek appelle les outils dans une vraie conversation avec Glaude, avec de l'historique, avec des questions mélangées ? Il faut juste utiliser NIMM normalement quelques jours et garder un œil sur la fenêtre noire. Si les lignes [HUB] 🔍 Tool apparaissent régulièrement, c'est bon.
+2. La bibliothèque est encore vide — l'outil search_bibliotheque existe mais ne peut rien retourner tant que personne n'a archivé un fil avec le bouton 📚. La prochaine session devrait commencer par archiver 2-3 vraies conversations, puis vérifier que le recall fonctionne.
+3. Le fix _finish_reason — Cline a assoupli la condition de détection des tool_calls parce que DeepSeek ne se comporte pas exactement comme la spec OpenAI. C'est fonctionnel, mais je voudrais voir les logs dans des cas limites — notamment quand DeepSeek coupe la réponse pour une autre raison. Pas urgent, mais à surveiller.
+
+********************************************
+
+[DB] nimm.db initialisée.
+[NIMM] Base de données initialisée.
+[WARMUP] Thread embeddings demarre...
+INFO:     Application startup complete.
+[WARMUP] embeddings_enabled = false
+[WARMUP] Embeddings desactive, abandon.
+INFO:     127.0.0.1:53481 - "GET /static/app.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:53481 - "GET /api/identity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53481 - "GET /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53481 - "GET /api/threads/fab98356-8959-4e59-a77a-4336099ae1cc/tabs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53481 - "GET /api/threads/fab98356-8959-4e59-a77a-4336099ae1cc/messages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53481 - "GET /api/settings/provider HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53482 - "GET /api/settings/mask HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53486 - "GET /api/settings/length HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53487 - "GET /api/settings/api-keys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53489 - "GET /api/masks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53488 - "GET /api/settings/routing HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53481 - "GET /api/settings/presence HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53481 - "GET /api/settings/provider HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53486 - "GET /api/masks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53489 - "GET /api/settings/mask HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53482 - "GET /api/settings/routing HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53488 - "GET /api/settings/api-keys HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53487 - "GET /api/settings/length HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53490 - "GET /api/tts/voices HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53491 - "GET /api/settings/embeddings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53481 - "GET /api/settings/presence HTTP/1.1" 200 OK
+[TTS/Piper] Voix 'fr_FR-gilles-low' chargée ✓
+[TTS/Piper] Prêt ✓ (voix par défaut : fr_FR-gilles-low)
+[TTS/Kokoro] Chargé ✓
+INFO:     127.0.0.1:53490 - "POST /api/settings/mask HTTP/1.1" 200 OK
+[NIMM] 🎤 STT prêt.
+INFO:     127.0.0.1:53490 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53497 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53501 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53501 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53507 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53501 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53511 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53512 - "DELETE /api/memory/all HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53514 - "POST /api/identity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53501 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53517 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53521 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53501 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / prenom (poids=1.20)
+[MEMORY] 🔄 Renforcé : Thomas / domicile (poids=1.20)
+[MEMORY] 🔄 Renforcé : Thomas / age (poids=1.20)
+INFO:     127.0.0.1:53525 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53528 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53530 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / metier (poids=1.30)
+[MEMORY] 🔄 Renforcé : Thomas / employeur (poids=1.30)
+[MEMORY] 🔄 Renforcé : Thomas / domicile (poids=1.20)
+[MEMORY] 🔄 Renforcé : Thomas / age (poids=1.20)
+INFO:     127.0.0.1:53535 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53538 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53540 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53543 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53545 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53549 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53552 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53545 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53555 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53558 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53561 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53564 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53565 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53561 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53569 - "POST /api/chat/stream HTTP/1.1" 200 OK
+[HUB] 🌐 Web search : Aujourd'hui il a encore pas rempli les fiches de maintenance
+INFO:     127.0.0.1:53578 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53579 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53581 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53585 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53581 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53591 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53592 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53581 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53594 - "POST /api/chat/stream HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / sport (poids=1.30)
+INFO:     127.0.0.1:53600 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53602 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53605 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53600 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] ✅ Thomas / velo = Trek Marlin 7 (poids=1.00)
+[MEMORY] 🔄 Renforcé : Thomas / achat_important (poids=1.20)
+[MEMORY] 🔄 Renforcé : Thomas / projet_principal (poids=1.30)
+INFO:     127.0.0.1:53608 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53611 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / conjoint (poids=1.50)
+[MEMORY] 🔄 Renforcé : Thomas / sport (poids=1.30)
+[MEMORY] 🔄 Renforcé : Thomas / loisir_principal (poids=1.30)
+INFO:     127.0.0.1:53615 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53616 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53619 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / loisir_principal (poids=1.30)
+[MEMORY] 🔄 Renforcé : Thomas / projet_principal (poids=1.30)
+[MEMORY] 🔄 Renforcé : Thomas / conjoint (poids=1.50)
+INFO:     127.0.0.1:53622 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53624 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53627 - "POST /api/chat/stream HTTP/1.1" 200 OK
+[HUB] 🌐 Web search : je dors mal en ce moment
+INFO:     127.0.0.1:53631 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53634 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] ✅ Thomas / sante = sommeil perturbé (poids=1.00)
+INFO:     127.0.0.1:53637 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53640 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / projet_principal (poids=1.30)
+INFO:     127.0.0.1:53644 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53645 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53647 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / conjoint (poids=1.50)
+INFO:     127.0.0.1:53651 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53652 - "POST /api/chat/stream HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / medecin_traitant (poids=1.20)
+INFO:     127.0.0.1:51405 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53651 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51408 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51412 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51415 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / loisir_principal (poids=1.30)
+INFO:     127.0.0.1:51420 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51421 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51423 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / conjoint (poids=1.50)
+[MEMORY] ✅ Sophie / alimentation = vegetarienne (poids=1.00)
+INFO:     127.0.0.1:51428 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51429 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51434 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51435 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51436 - "GET /api/memory/triplets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51435 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51439 - "POST /api/bibliotheque HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51446 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51449 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51449 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51450 - "POST /api/bibliotheque HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51457 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51458 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51465 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51461 - "POST /api/bibliotheque HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51468 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51469 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51472 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51476 - "GET /api/memory/triplets HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51478 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51479 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51481 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51483 - "POST /api/chat/stream HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('métier profession Thomas') → 557 chars
+INFO:     127.0.0.1:51487 - "GET /api/ping HTTP/1.1" 200 OK
+[MEMORY] 🔄 Renforcé : Thomas / metier (poids=1.30)
+INFO:     127.0.0.1:51491 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51493 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51487 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51497 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51487 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('collègues problème boulot') → 435 chars
+[HUB] 🔍 Tool search_bibliotheque('collègues travail problèmes') → 629 chars
+INFO:     127.0.0.1:51503 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51505 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51506 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51509 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51512 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('vélo') → 358 chars
+INFO:     127.0.0.1:51516 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51518 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51520 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51529 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51531 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('médecin traitant') → 366 chars
+INFO:     127.0.0.1:51535 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51538 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51539 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51548 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51538 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('Sophie régime alimentaire nourriture') → 365 chars
+INFO:     127.0.0.1:51554 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51556 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51558 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51561 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51563 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_bibliotheque('problèmes collègue Thomas') → 882 chars
+INFO:     127.0.0.1:51567 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51568 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51571 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51574 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51575 - "POST /api/chat/stream HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_bibliotheque('sommeil stress conclusions') → 895 chars
+INFO:     127.0.0.1:51580 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51582 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51586 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51587 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51591 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51593 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('voiture') → 324 chars
+INFO:     127.0.0.1:51596 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51599 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51596 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51603 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51606 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('entreprise ville') → 324 chars
+INFO:     127.0.0.1:51608 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51612 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51613 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51617 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51619 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('parents pere mere famille') → 324 chars
+INFO:     127.0.0.1:51622 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51622 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51625 - "POST /api/threads HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51629 - "POST /api/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51631 - "GET /api/ping HTTP/1.1" 200 OK
+[HUB] 🔍 Tool search_memory('salaire revenu profession') → 324 chars
+INFO:     127.0.0.1:51634 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51637 - "GET /api/ping HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54661 - "GET /api/ping HTTP/1.1" 200 OK
+
+PS G:\NIMM> python tests/stress_test.py
+
+🚀 NIMM Stress Test v2
+   URL : http://localhost:8080 | User : Thomas
+
+  ✅ Serveur en ligne
+
+  Memoire videe
+
+
+============================================================
+  PASSE 1 — Remplissage mémoire 🧠
+============================================================
+
+  ✅ [IDENT]
+  💬 Salut ! Je m'appelle Thomas, j'habite à Lyon, côté Part-Dieu. J'ai 38 ans.
+  🤖 Salut Thomas ! Bienvenue dans le bordel — installe-toi, y'a du café et des câbles qui traînent.
+
+Donc t'es Thomas, 38 piges, Lyon ...
+     dominant=neutre
+
+  ✅ [IDENT]
+  💬 Je suis technicien de maintenance chez un fabricant de machines industrielles. Ça fait 10 ...
+  🤖 Ah ouais, 10 ans chez le même fabricant — t'es un pilier, toi. Technicien de maintenance dans l'industrie, ça veut dire que tu pas...
+     dominant=neutre
+
+  ✅ [IDENT]
+  💬 J'ai une femme qui s'appelle Sophie et deux gamins, Lucas il a 10 ans et Emma 7 ans.
+  🤖 Ah bah voilà, le tableau de famille au complet ! Sophie, Lucas 10 piges, Emma 7 ans — t'as de quoi faire entre les devoirs, les ac...
+     dominant=neutre
+
+  ✅ [IDENT]
+  💬 Lucas il est passionné de foot, Emma c'est plutôt dessin.
+  🤖 Ah la team complète ! Lucas le futur Mbappé et Emma la petite artiste — t'as le pack sportif et le pack créatif à la maison. Et to...
+     dominant=neutre
+
+  ✅ [IDENT]
+  💬 Le week-end j'essaie de faire du VTT quand le temps le permet. Sinon je cuisine.
+  🤖 Ah voilà le bon combo ! VTT pour se vider la tête, cuisine pour se remplir le bide — t'es un homme équilibré, Thomas. Et toi, t'es...
+     dominant=neutre
+
+  ✅ [BOULOT]
+  💬 Putain j'en peux plus du boulot là.
+  🤖 Dis-moi tout. Qu'est-ce qui s'est passé aujourd'hui ?
+     dominant=neutre
+
+  ✅ [BOULOT]
+  💬 Y'a un collègue, Franck, il prend jamais ses responsabilités. Dès que ça merde sur une mac...
+  🤖 Ah celui-là... Il t'a fait quoi aujourd'hui exactement ?
+     dominant=neutre
+
+  ✅ [BOULOT]
+  💬 Aujourd'hui il a encore pas rempli les fiches de maintenance. Le chef s'en est rendu compt...
+  🤖 Putain mais c'est pas possible ça. Donc toi tu trimes, tu fais le taf, et lui il te met dans la merde sans bouger le petit doigt. ...
+     dominant=neutre
+
+  ✅ [BOULOT]
+  💬 Je sais pas si je dois en parler directement avec Franck ou aller voir le RH.
+  🤖 Là t'as deux options, ouais. Franck en face, ça peut régler le truc vite fait si t'as envie de lui mettre les points sur les i. Ma...
+     dominant=neutre
+
+  ✅ [BOULOT]
+  💬 Mon chef me parle d'une promotion chef d'équipe depuis un moment. Mais avec ce genre de si...
+  🤖 Ah. Donc t'as une promo qui traîne, et en attendant tu te tapes les gamelles des autres. C'est un sacré signal — soit ton chef te ...
+     dominant=neutre
+
+  ✅ [VTT]
+  💬 Super sortie ce matin sur les monts du Lyonnais, j'ai fait 35 km. Mais j'ai crevé à 5 km d...
+  🤖 Ah putain le classique ! 35 bornes dans les monts du Lyonnais, t'as dû en prendre plein les pattes... et finir sur une note pourri...
+     dominant=surprise
+
+  ✅ [VTT]
+  💬 Mon vélo c'est un Trek Marlin 7, je l'ai depuis 3 ans. Je commence à regarder pour upgrade...
+  🤖 Ah, le Trek Marlin 7 — bon choix, solide comme tout. Mais ouais, les Tektro d'origine sur les Marlin, c'est un peu le point faible...
+     dominant=reflexion
+
+  ✅ [VTT]
+  💬 Sophie elle dit que je dépense trop dans le vélo. Mais 200 balles de freins ça vaut le cou...
+  🤖 Haha, Sophie a pas tort sur le principe — le vélo, c'est un gouffre sans fond. Mais 200 balles de freins, franchement... c'est pas...
+     dominant=joie
+
+  ✅ [VTT]
+  💬 La prochaine sortie je pense aller vers Yzeron.
+  🤖 Ah Yzeron, sympa comme secteur ! T'as déjà fait le coin ou c'est une découverte ? C'est roulant, ça monte sec par moments, mais le...
+     dominant=joie
+
+  ✅ [SANTE]
+  💬 je dors mal en ce moment
+  🤖 Ah putain, ça c'est relou. Ça fait combien de temps que ça dure — quelques nuits ou ça traîne depuis des semaines ?
+     dominant=neutre
+
+  ✅ [SANTE]
+  💬 beaucoup de stress boulot je crois
+  🤖 T'as une idée de ce qui te stresse le plus en ce moment — une deadline, un truc qui coince, ou c'est juste l'ambiance générale qui...
+     dominant=tristesse
+
+  ✅ [SANTE]
+  💬 Sophie me dit de consulter un médecin mais j'ai l'impression que c'est pas si grave
+  🤖 Sophie a raison de s'inquiéter, mais je vois ce que tu veux dire — t'as l'impression que c'est "juste du stress", que ça va passer...
+     dominant=reflexion
+
+  ✅ [SANTE]
+  💬 Le médecin traitant c'est le Dr Moreau. Il est bien mais je l'ai pas vu depuis 2 ans.
+  🤖 Deux ans, c'est long — mais c'est pas un problème. Les médecins traitants ils connaissent leur monde, il sera content de te revoir...
+     dominant=reflexion
+
+  ✅ [CUISINE]
+  💬 J'adore faire des plats du dimanche, genre bourguignon ou blanquette.
+  🤖 Ah, les plats qui mijotent des heures... Y a rien de mieux, c'est toute la maison qui sent bon l'enfance et les vraies bonnes bouf...
+     dominant=joie
+
+  ✅ [CUISINE]
+  💬 Sophie elle est végétarienne depuis 6 mois, donc je fais deux versions souvent.
+  🤖 Ah ben voilà, le chef fait salle comble avec menu adapté ! Deux cuissons, deux plats, deux fois plus de boulot mais deux fois plus...
+     dominant=joie
+
+  ✅ [CUISINE]
+  💬 Les enfants aiment pas trop les trucs épicés.
+  🤖 Team anti-piquant, je connais ! Lucas et Emma, ils préfèrent le doux et le réconfort, c'est ça ? Tant mieux, ça colle parfaitement...
+     dominant=neutre
+
+  [🧠] Mémoire après Passe 1 : 24 souvenirs
+
+============================================================
+  PASSE 2 — Archivage 📚
+============================================================
+
+  Archivage : Boulot/Franck
+  [📚] 'Conflit avec collègue et promotion en jeu'  (id=4)
+
+  Archivage : VTT
+  [📚] 'Sortie VTT et upgrade freins Trek Marlin 7'  (id=5)
+
+  Archivage : Santé
+  [📚] 'Conseils pour troubles du sommeil liés au stress'  (id=6)
+
+============================================================
+  PASSE 3 — Recall (thread neuf par question) 🔍
+============================================================
+
+  Mémoire lue : 24 total, 13 persistants/épisodiques Thomas
+  Prédicats disponibles : ['metier', 'employeur', 'debut_activite', 'sport', 'loisir_principal', 'domicile', 'age', 'achat_important', 'medecin_traitant', 'collègue_problème', 'collègue', 'velo', 'sante']
+
+  ── Catégorie A : infos en mémoire (tool call attendu) ──
+
+  ✅ [A/métier]
+  💬 Tu sais ce que je fais dans la vie ?
+  🤖 Hé Thomas ! Laisse-moi checker ça vite fait.Ouais, t'es technicien de maintenance. Ça te va toujours ou t'as des envies d'ailleurs...
+     dominant=neutre
+
+  ✅ [A/collègue]
+  💬 T'as des infos sur mes collègues ou mes problèmes au boulot ?
+  🤖 Je vais checker ça.Ah, Franck le collègue irresponsable, hein. J'ai retrouvé ça dans mes notes. Et j'ai aussi vu que le stress bou...
+     dominant=neutre
+
+  ✅ [A/vélo]
+  💬 Quel vélo j'ai ? Et c'est quoi le problème dessus ?
+  🤖 Yo ! Laisse-moi checker ça dans mes notes.Ouais, t'as un Trek Marlin 7, je l'ai en mémoire. Par contre, le "problème dessus" — auc...
+     dominant=neutre
+
+  ✅ [A/médecin]
+  💬 C'est qui mon médecin traitant ?
+  🤖 Je vais checker ça dans ma mémoire.Dr Moreau. C'est lui que t'as enregistré.
+
+Un souci de santé ou juste un renouvellement d'ordon...
+     dominant=neutre
+
+  ✅ [A/conjoint_régime]
+  💬 Ma femme elle mange quoi comme régime alimentaire ?
+  🤖 Je vais chercher ça dans la mémoire.Ah, elle est végétarienne, d'après ce que j'ai en mémoire. C'est toujours d'actualité ou elle ...
+     dominant=neutre
+
+  ✅ [A/biblio_boulot]
+  💬 On avait parlé de mes problèmes avec un collègue, tu te souviens de quoi ?
+  🤖 Tiens, laisse-moi checker ça dans les archives.Ouais, je remonte le fil — c'était avec Franck, ce collègue en maintenance qui te p...
+     dominant=reflexion
+
+  ✅ [A/biblio_sante]
+  💬 On avait discuté de mon sommeil et mon stress. Les conclusions c'était quoi ?
+  🤖 Ah ouais, je retrouve. Voilà ce qui ressort de nos échanges :
+
+**Sur le sommeil et le stress :**
+- Tu devais consulter le Dr Morea...
+     dominant=neutre
+
+  ── Catégorie B : infos absentes (doit avouer l'ignorance) ──
+
+  ✅ [B/voiture]
+  💬 C'est quoi ma voiture ?
+  🤖 Je vais chercher ça dans ma mémoire.J'ai rien dans ma mémoire sur ta caisse, Thomas. Tu m'as jamais parlé de ta voiture — modèle, ...
+     dominant=neutre
+
+  ✅ [B/ville_boulot]
+  💬 Mon entreprise est dans quelle ville exactement ?
+  🤖 Je vais checker ça vite fait.Attends — j'ai pas cette info en tête, Thomas. J'ai ton prénom, ta femme Sophie, tes gamins Lucas et ...
+     dominant=neutre
+
+  ✅ [B/parents]
+  💬 Tu sais quelque chose sur mes parents ?
+  🤖 Je vais checker ça.T'as jamais parlé de tes parents avec moi — ou alors c'est pas remonté. J'ai rien en mémoire là-dessus.
+
+C'est ...
+     dominant=neutre
+
+  ✅ [B/salaire]
+  💬 J'ai quel salaire à peu près ?
+  🤖 Je vais checker ça dans ma mémoire.T'as jamais posé la question, et j'ai rien sur ton salaire dans mes notes.
+
+Tu veux qu'on en pa...
+     dominant=neutre
+
+============================================================
+  ANALYSE — Résumé Passe 3
+============================================================
+
+  Catégorie A — tool call attendu :
+  Label                Réponse utile ?    Extrait
+  ------------------------------------------------------------
+  métier               ✅ OK               Hé Thomas ! Laisse-moi checker ça vite fait.Ouais, t'es tech...
+  collègue             ✅ OK               Je vais checker ça.Ah, Franck le collègue irresponsable, hei...
+  vélo                 ✅ OK               Yo ! Laisse-moi checker ça dans mes notes.Ouais, t'as un Tre...
+  médecin              ✅ OK               Je vais checker ça dans ma mémoire.Dr Moreau. C'est lui que ...
+  conjoint_régime      ✅ OK               Je vais chercher ça dans la mémoire.Ah, elle est végétarienn...
+  biblio_boulot        ✅ OK               Tiens, laisse-moi checker ça dans les archives.Ouais, je rem...
+  biblio_sante         ✅ OK               Ah ouais, je retrouve. Voilà ce qui ressort de nos échanges ...
+
+  Catégorie B — ignorance attendue :
+  Label                A avoué ?          Extrait
+  ------------------------------------------------------------
+  voiture              ⚠️ hallucination ? Je vais chercher ça dans ma mémoire.J'ai rien dans ma mémoir...
+  ville_boulot         ⚠️ hallucination ? Je vais checker ça vite fait.Attends — j'ai pas cette info e...
+  parents              ⚠️ hallucination ? Je vais checker ça.T'as jamais parlé de tes parents avec moi...
+  salaire              ⚠️ hallucination ? Je vais checker ça dans ma mémoire.T'as jamais posé la quest...
+
+✅ Stress test v2 terminé.
