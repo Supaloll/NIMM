@@ -1438,7 +1438,6 @@ async def do_update():
     """Télécharge la dernière version depuis GitHub et remplace les fichiers."""
     import zipfile, shutil, tempfile, pathlib
 
-    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
     GITHUB_REPO  = "Supaloll/NIMM"
     SKIP_DIRS    = {"data", ".git"}
 
@@ -1446,9 +1445,8 @@ async def do_update():
         import httpx
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
             r = await client.get(
-                f"https://api.github.com/repos/{GITHUB_REPO}/zipball/main",
-                headers={"Authorization": f"Bearer {GITHUB_TOKEN}",
-                         "Accept": "application/vnd.github+json"}
+                f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip",
+                headers={"Accept": "application/zip"}
             )
             r.raise_for_status()
     except Exception as e:
