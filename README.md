@@ -8,7 +8,7 @@ Tourne entièrement sur ta machine — tes conversations ne quittent jamais ton 
 ![Platform](https://img.shields.io/badge/plateforme-Windows%2010%2F11-blue?style=flat-square)
 ![Python](https://img.shields.io/badge/python-3.11%2B-yellow?style=flat-square)
 ![Licence](https://img.shields.io/badge/licence-CC%20BY--NC--SA%204.0-green?style=flat-square)
-![Status](https://img.shields.io/badge/statut-actif-brightgreen?style=flat-square)
+![Status](https://img.shields.io/badge/statut-en%20développement-orange?style=flat-square)
 
 ![Screenshot de NIMM](docs/screenshot.png)
 
