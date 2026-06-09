@@ -572,6 +572,59 @@ Animation "bretzel" pendant la génération de réponse.
 
 ## BACKLOG
 
+### [PRIORITÉ] Refonte cycle de vie mémoire — 6 chantiers liés
+
+Audit mémoire du 09/06/2026 — décisions validées :
+
+**A — Inférence déclenchée après extraction** (au lieu du polling toutes les 30s)
+`run_inference_engine()` ne se déclenche plus sur timer aveugle mais uniquement après qu'une extraction worker ait effectivement écrit un ou plusieurs triplets. Économie CPU + cohérence causale.
+
+**B — Chiralité symétrie** (fix court terme)
+`PREDICATS_INVERSES` : `prenom_pere` et équivalents génèrent `enfant_de` comme inverse, pas `parent`. Évite la lecture contre-intuitive dans la modale mémoire.
+
+**C — Poids initial à 0.5** (règle Occurrence / Coïncidence / Récurrence)
+Tout nouveau triplet entre avec `poids = 0.5` (fragile). La règle devient :
+- Occurrence 1 : poids 0.5 — fragile, soumis au decay normal
+- Occurrence 2 : poids 1.0 — coïncidence, survit mieux, remonte dans les recalls
+- Occurrence 3+ : poids ≥ 1.5 → consolidé, immune au decay, éligible Profil certain
+Seuils existants `POIDS_PERMANENT_SEUIL = 2.5` et `REPETITIONS_PERMANENT_SEUIL = 3` conservés.
+
+**D — Decay actif** (tâche au démarrage de session)
+Appliquer `DECAY_RATES` aux mémoires non-permanentes au démarrage du serveur (une fois par session). Objectif : un fait vu une seule fois (poids 0.5) disparaît du recall entre 3 et 6 mois. Taux cibles à calibrer — base de travail : 0.3–0.5%/24h selon catégorie. Seuil d'invisibilité : `POIDS_RECALL_MIN = 0.1` (déjà en place).
+
+**E — Résolution conflit par récence**
+Si deux triplets ont même sujet + prédicat mais objets différents, le plus récent (`timestamp`) prime sur le plus lourd (`poids`). Évite qu'un fait ancien bien renforcé écrase une mise à jour récente (ex : ancien employeur qui prime sur le nouveau).
+
+**F — Embeddings installation silencieuse**
+Au premier démarrage : lancer `pip install sentence-transformers` en subprocess non-bloquant, poser un flag en base (`embeddings_status : installing / ready`). `_get_model()` consulte ce flag — mode keyword si installing, modèle chargé si ready. L'utilisateur n'a rien à faire, l'installation aboutit au prochain démarrage si interrompue.
+
+**G — Normaliseur prédicats libres** (à la demande)
+Passe manuelle déclenchable depuis l'interface (bouton dans la modale mémoire ?) qui tente de fusionner les prédicats libres sémantiquement proches vers leurs équivalents canoniques. Évite les doublons du type `conduit_camion` + `metier`.
+
+**Ordre d'implémentation suggéré :** B → C → D → E → A → F → G
+
+---
+
+### [PRIORITÉ] Agrandissement fenêtre active + Carnet progressif
+
+Décision du 09/06/2026 — objectif : supporter les fils très longs (style de l'utilisateur principal).
+
+**Problème actuel :** fenêtre de 30 messages trop courte — Lia perd le fil d'une conversation soutenue bien avant que le Carnet intervienne (seuil 80 messages).
+
+**Trois constantes à modifier dans `hub.py` :**
+- Nombre de messages chargés : 30 → 60
+- `CARNET_WINDOW` : 80 → 50 (Carnet se déclenche avant que les vieux messages sortent de fenêtre)
+- `CARNET_INTERVAL` : 7 → 5 (résumés plus fréquents = plus granulaires = moins de perte)
+
+**Résultat attendu sur un fil de 200 messages :**
+- Messages 141-200 : fenêtre active complète (tout le détail)
+- Messages 1-140 : ~28 notes Carnet courtes, fil conducteur narratif
+- Faits importants : mémoire triplet, permanents en parallèle
+
+**Vigilance à l'implémentation :** vérifier qu'il n'y a pas d'effet de bord sur la génération des notes Carnet (fréquence, déduplication anti-doublon).
+
+---
+
 ### [FUTUR] Module export document (suggéré par Nando)
 Permettre à NIMM de générer des documents complets et accessibles (PDF, DOCX, PPTX)
 depuis une conversation.
@@ -602,5 +655,9 @@ depuis une conversation.
 **Prérequis :** Éric et Nando sont déjà collaborateurs sur le repo GitHub privé.
 **Statut :** à construire lors d'un appel test avec Nando — session dédiée.
 
-### [MINEUR] Chiralité symétrie — `parent` au lieu de `enfant_de`
-Quand le worker extrait `Jean / prenom_pere / Laurent`, la symétrie génère `Laurent / parent → Jean` — alors que le prédicat correct serait `enfant_de` ou `pere_de`. Pas de fantôme créé, mais la lecture dans la modale est contre-intuitive. Fix : ajuster `PREDICATS_INVERSES` pour que `prenom_pere` et équivalents génèrent `enfant_de` comme inverse.
+### [FUTUR] Normaliseur prédicats libres (G)
+Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les prédicats libres sémantiquement proches vers leurs équivalents canoniques (ex : `conduit_camion` → `metier: chauffeur poids lourd`). Complexe : une fusion naïve perd l'information contenue dans le prédicat libre. Nécessite une UI de validation avant application. À affiner avant d'implémenter.
+
+---
+
+| 09/06/2026 | **Audit mémoire — 6 chantiers** : [hub.py] Fenêtre active 30→60 msgs. `CARNET_WINDOW` 80→50, `CARNET_INTERVAL` 7→5 — Carnet se déclenche avant que les vieux messages sortent de fenêtre. Prompt carnet reformulé : capture ce qui a **bougé** (delta), note complémentaire si sujet déjà couvert, SKIP réservé aux échanges vides. [memory.py] `PREDICATS_INVERSES` corrigés : chiralité symétrie — `enfant_1`→`enfant_4`, `fils`, `fille`, `enfant`, `parent` génèrent `enfant_de` comme inverse ; `prenom_pere`/`prenom_mere`→`enfant_de`, `prenom_fils`/`prenom_fille`→`parent` ajoutés. [hub.py] Poids initial nouveaux triplets 1.0→0.5 (règle Occurrence/Coïncidence/Récurrence). [memory.py] `apply_decay_on_startup()` — decay appliqué une fois par session au démarrage, suppression sous `POIDS_RECALL_MIN`. [main.py] Thread daemon `_run_decay` lancé au démarrage avant `_run_inference`. [memory.py] Résolution conflit par récence dans `save_inline_memory()` — timestamp nouveau vs existant, le plus récent prime même sur prédicat protégé. [hub.py] `_worker_process_user()` — `run_inference_engine()` déclenché uniquement si `total_stored > 0` (économie CPU + cohérence causale). Cache-busting : `20260609-1`. |

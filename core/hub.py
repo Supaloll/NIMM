@@ -68,8 +68,8 @@ async def generate_tab_title(content: str) -> str:
 # SYNTHESE ONGLET -- resume rapatriable
 # ══════════════════════════════════════════
 
-CARNET_WINDOW    = 80     # seuil d'injection du Carnet dans le system prompt
-CARNET_INTERVAL  = 7      # une note tous les 7 echanges (14 messages)
+CARNET_WINDOW    = 50     # seuil d'injection du Carnet dans le system prompt
+CARNET_INTERVAL  = 5      # une note tous les 5 echanges (10 messages)
 MAX_TOKENS_CHAT  = 4096
 MAX_TOKENS_MEM   = 2000
 MEMORY_SIM_THRESHOLD = 0.80
@@ -1430,12 +1430,13 @@ async def maybe_generate_carnet_note(thread_id: str, settings: dict):
         "Tu tiens le carnet de bord d'une conversation en cours.\n"
         + existing_block +
         "Lis les échanges ci-dessous et écris une note courte (1 à 2 phrases) "
-        "qui capture l'essentiel de ce qui vient de se passer : sujet abordé, "
-        "ton de l'échange, décision ou information importante si présente.\n"
+        "qui capture ce qui a bougé : nouveau sujet, information ajoutée, "
+        "tournant dans le ton, tension apparue ou résolue.\n"
+        "Si le sujet est le même que dans les notes existantes mais que quelque chose "
+        "s'est précisé, nuancé ou approfondi, note ce complément — ne répète pas ce qui est déjà écrit.\n"
         "Style : prose naturelle, première personne, présent ou passé composé.\n"
-        "Si ces échanges n'apportent rien de nouveau par rapport aux notes existantes "
-        "— ni fait nouveau, ni tournant émotionnel, ni anecdote, ni changement de ton ou de sujet — "
-        "réponds uniquement : SKIP. En cas de doute, écris la note.\n"
+        "SKIP uniquement si les échanges sont vides de contenu "
+        "(salutations, accusés de réception, aucune information ni évolution).\n"
         "Contrainte stricte : 1 à 2 phrases, pas de liste, pas de titre.\n\n"
         f"Échanges :\n{conv_text}\n\n"
         "Note :"
@@ -1626,7 +1627,7 @@ async def extract_memories_from_window(messages: list, settings: dict) -> int:
             item.setdefault('expiration',      None)
             item.setdefault('timestamp',       __import__('datetime').datetime.now().isoformat())
             item.setdefault('repetitions',     0)
-            item.setdefault('poids',           1.0)
+            item.setdefault('poids',           0.5)
             item.setdefault('embedding',       None)
             item.setdefault('last_reinforced', None)
             save_inline_memory(item, existing=existing)
@@ -1669,6 +1670,7 @@ async def _worker_process_user(user_id: str):
     )
     set_user_context(user_id)
     thread_ids = get_threads_with_unprocessed()
+    total_stored = 0
     for thread_id in thread_ids:
         unprocessed_ids = get_unprocessed_message_ids(thread_id)
         if not unprocessed_ids:
@@ -1695,6 +1697,7 @@ async def _worker_process_user(user_id: str):
         count = await extract_memories_from_window(messages, settings)
         mark_messages_processed(unprocessed_ids)
         if count > 0:
+            total_stored += count
             print(f"[WORKER] 🧠 [{user_id}] Fil {thread_id[:8]}… → {count} souvenir(s)")
 
     from core.database import purge_episodic_memories
@@ -1702,8 +1705,13 @@ async def _worker_process_user(user_id: str):
     if purged > 0:
         print(f"[WORKER] 🗑️ [{user_id}] {purged} souvenir(s) episodique(s) expire(s) supprime(s).")
 
-    from modules.memory import run_inference_engine
-    await asyncio.get_event_loop().run_in_executor(None, run_inference_engine, user_id)
+    # Inférence déclenchée uniquement si de nouveaux triplets ont été écrits ce cycle
+    if total_stored > 0:
+        from modules.memory import run_inference_engine
+        print(f"[WORKER] 🔗 [{user_id}] {total_stored} nouveau(x) triplet(s) — inférence déclenchée.")
+        await asyncio.get_event_loop().run_in_executor(None, run_inference_engine, user_id)
+    else:
+        print(f"[WORKER] ⏭️ [{user_id}] Aucun nouveau triplet — inférence ignorée.")
 
 
 _worker_running: bool = False
@@ -2030,8 +2038,8 @@ async def process_message(
     session_bilans = _get_session_bilans(thread_id)
     system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans)
 
-    # 7. Historique récent (30 derniers messages)
-    history = get_messages(thread_id, limit=80)
+    # 7. Historique récent (60 derniers messages)
+    history = get_messages(thread_id, limit=60)
     messages = [{'role': m['role'], 'content': m['content']} for m in history]
 
     # 8. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
@@ -2301,7 +2309,7 @@ async def process_message_stream(
     system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans)
 
     # 4. Historique
-    history  = get_messages(thread_id, limit=80)
+    history  = get_messages(thread_id, limit=60)
     messages = [{'role': m['role'], 'content': m['content']} for m in history]
 
     # 5. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.

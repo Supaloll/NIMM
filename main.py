@@ -78,6 +78,19 @@ def _warmup_embeddings():
         import traceback
         traceback.print_exc()
 
+def _run_decay():
+    """Applique le decay mémoire une fois au démarrage — thread daemon."""
+    import time
+    time.sleep(2)  # Laisse les DB s'initialiser
+    from core.database import _load_users
+    from modules.memory import apply_decay_on_startup
+    users = _load_users()
+    if not users:
+        print("[DECAY] Aucun utilisateur — decay ignoré au démarrage.")
+        return
+    for u in users:
+        apply_decay_on_startup(user_id=u['id'])
+
 def _run_inference():
     """Lance le moteur d'inférence mémoire en thread daemon."""
     import time
@@ -157,6 +170,7 @@ async def lifespan(app: FastAPI):
         print("[NIMM] Watchdog désactivé.")
     else:
         print("[NIMM] Watchdog désarmé (mode serveur).")
+    threading.Thread(target=_run_decay,        daemon=True).start()
     threading.Thread(target=_run_inference,    daemon=True).start()
     asyncio.create_task(memory_worker())
     yield

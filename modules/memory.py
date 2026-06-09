@@ -140,19 +140,23 @@ PREDICATS_INVERSES = {
     'compagne':    'compagnon',
     'partenaire':  'partenaire',
     # Relations parent-enfant (liste fermée)
-    'enfant_1':    'parent',
-    'enfant_2':    'parent',
-    'enfant_3':    'parent',
-    'enfant_4':    'parent',
+    'enfant_1':    'enfant_de',
+    'enfant_2':    'enfant_de',
+    'enfant_3':    'enfant_de',
+    'enfant_4':    'enfant_de',
     # Relations parent-enfant (libres)
-    'fils':        'pere',
-    'fille':       'pere',
-    'enfant':      'parent',
-    'parent':      'enfant',
+    'fils':        'enfant_de',
+    'fille':       'enfant_de',
+    'enfant':      'enfant_de',
+    'parent':      'enfant_de',
     'enfant_de':   'parent',
     # Ascendants
     'pere':        'enfant_de',
     'mere':        'enfant_de',
+    'prenom_pere': 'enfant_de',
+    'prenom_mere': 'enfant_de',
+    'prenom_fils': 'parent',
+    'prenom_fille':'parent',
     # Fratrie
     'frere':       'frere_ou_soeur',
     'soeur':       'frere_ou_soeur',
@@ -798,9 +802,16 @@ def save_inline_memory(record: dict, user_msg: str = '', existing: list = None):
             nouveau_poids = float(duplicate.get('poids', 1.0))
             nouvelles_rep = int(duplicate.get('repetitions', 0))
 
-        # Correction naturelle : signal explicite OU prédicat non protégé
+        # Correction naturelle : signal explicite, prédicat non protégé, ou nouveau plus récent
         correction_explicite = any(s in user_msg.lower() for s in SIGNAUX_CORRECTION) if user_msg else False
-        if correction_explicite or predicat_norm not in PREDICATS_PROTEGES:
+        # Résolution par récence — le triplet le plus récent prime sur le plus lourd
+        try:
+            ts_new = datetime.fromisoformat(record.get('timestamp', ''))
+            ts_old = datetime.fromisoformat(duplicate.get('timestamp', ''))
+            plus_recent = ts_new > ts_old
+        except Exception:
+            plus_recent = False
+        if correction_explicite or predicat_norm not in PREDICATS_PROTEGES or plus_recent:
             nouvel_objet    = record.get('objet',  duplicate.get('objet', ''))
             nouvelle_valeur = record.get('valeur', duplicate.get('valeur', ''))
         else:
@@ -1072,6 +1083,63 @@ def recall_anecdotes(query: str, limit: int = 3) -> list:
 # ══════════════════════════════════════════
 # MOTEUR D'INFÉRENCE MÉMORIELLE (tâche de fond)
 # ══════════════════════════════════════════
+
+def apply_decay_on_startup(user_id: str = None) -> int:
+    """
+    Applique le decay une fois par session au démarrage du serveur.
+    Réduit le poids des mémoires non-permanentes selon DECAY_RATES.
+    Les mémoires sous POIDS_RECALL_MIN (0.1) sont supprimées silencieusement.
+    Retourne le nombre de mémoires affectées.
+    """
+    if user_id:
+        from core.database import set_user_context
+        set_user_context(user_id)
+
+    try:
+        existing = get_all_memory()
+        affected = 0
+        now = datetime.now()
+
+        for m in existing:
+            # Les permanents sont immunisés
+            if m.get('type_temporal') == 'permanent':
+                continue
+            # Les mémoires déjà consolidées (poids ≥ POIDS_PERMANENT_SEUIL) aussi
+            poids = float(m.get('poids', 1.0))
+            if poids >= POIDS_PERMANENT_SEUIL:
+                continue
+
+            categorie = m.get('categorie', 'quotidien')
+            taux = DECAY_RATES.get(categorie, 0.010)
+            if taux == 0.0:
+                continue
+
+            # Calcul du delta depuis le dernier renforcement ou timestamp de création
+            ref_str = m.get('last_reinforced') or m.get('timestamp') or ''
+            try:
+                ref_dt = datetime.fromisoformat(ref_str)
+            except Exception:
+                ref_dt = now
+            delta_days = max(0.0, (now - ref_dt).total_seconds() / 86400)
+
+            nouveau_poids = round(poids * ((1 - taux) ** delta_days), 4)
+
+            if nouveau_poids < POIDS_RECALL_MIN:
+                delete_memory(m['key'])
+                print(f"[DECAY] Supprime : {m.get('sujet','')} / {m.get('predicat','')} (poids {poids:.2f} -> {nouveau_poids:.4f})")
+            elif abs(nouveau_poids - poids) > 0.001:
+                update_memory_value(m['key'], m.get('valeur', ''), nouveau_poids)
+                affected += 1
+
+        print(f"[DECAY] OK Decay applique -- {affected} memoire(s) allegee(s).")
+        return affected
+
+    except Exception as e:
+        import traceback
+        print(f"[DECAY] Erreur : {e}")
+        traceback.print_exc()
+        return 0
+
 
 def run_inference_engine(user_id: str = None):
     """
