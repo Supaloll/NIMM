@@ -279,6 +279,16 @@ def purge_old_interets(jours: int = 30) -> int:
     return deleted
 
 
+def get_bibliotheque_index() -> list:
+    """Retourne l'index léger de toutes les fiches : id, titre, tags, categories, date_conversation."""
+    conn = get_conn()
+    rows = conn.execute(
+        'SELECT id, titre, tags, categories, date_conversation FROM bibliotheque ORDER BY date_creation DESC'
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_bibliotheque_entries(limit: int = 100) -> list:
     """Retourne les entrées les plus récentes."""
     conn = get_conn()

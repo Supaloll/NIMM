@@ -28,3 +28,6 @@ python-dotenv>=1.0.0
 
 # ── Web scraping ──
 beautifulsoup4>=4.12.0
+
+# ── Matching flou ──
+rapidfuzz>=3.0.0

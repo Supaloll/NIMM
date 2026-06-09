@@ -1085,6 +1085,103 @@ def build_memory_context_permanent_only() -> str:
 # BIBLIOTHÈQUE — RECALL THÉMATIQUE
 # ══════════════════════════════════════════
 
+# Mots vides français — ignorés dans le matching bibliothèque
+_MOTS_VIDES = {
+    'le','la','les','un','une','des','de','du','et','en','au','aux','ce','se',
+    'je','tu','il','elle','on','nous','vous','ils','elles','me','te','lui',
+    'que','qui','quoi','dont','où','car','mais','ou','donc','or','ni','si',
+    'est','sont','avoir','être','fait','avec','pour','sur','sous','dans','par',
+    'mon','ton','son','ma','ta','sa','nos','vos','ses','mes','tes',
+    'plus','très','bien','aussi','tout','tous','cette','cet','ces',
+    'pas','ne','plus','jamais','rien','personne','quand','comme','alors',
+}
+
+# Mots-clés déclenchant un seuil de rappel abaissé
+_MOTS_RAPPEL = {
+    'souviens','rappelle','rappelles','souvient','souvenez','souvenons',
+    'on avait','tu avais','on avait parlé','tu te souviens','tu te rappelles',
+    'déjà parlé','discuté','abordé','évoqué','mentionné',
+}
+
+def _match_bibliotheque(user_message: str) -> str:
+    """
+    Matching fuzzy entre le message utilisateur et l'index bibliothèque.
+    Retourne un biblio_context prêt à injecter dans le system prompt, ou '' si rien ne matche.
+    Scoring : tag fuzzy match → +2 pts | mot titre fuzzy match → +1 pt
+    Seuil normal : 3 pts | Seuil avec mot-clé rappel détecté : 2 pts
+    Maximum 2 fiches injectées.
+    """
+    try:
+        from rapidfuzz import fuzz
+        from core.database import get_bibliotheque_index
+        from modules.bibliotheque import recall_bibliotheque as _rb
+
+        fiches = get_bibliotheque_index()
+        if not fiches:
+            return ''
+
+        # Nettoyer le message — mots utiles uniquement
+        msg_mots = [
+            m.lower().strip(".,!?;:'\"()[]")
+            for m in user_message.split()
+            if len(m) > 2 and m.lower() not in _MOTS_VIDES
+        ]
+        if not msg_mots:
+            return ''
+
+        # Détecter mot-clé de rappel → seuil abaissé
+        msg_lower = user_message.lower()
+        seuil = 2 if any(mot in msg_lower for mot in _MOTS_RAPPEL) else 3
+
+        resultats = []
+        for fiche in fiches:
+            score = 0
+
+            # Tags : chaque tag comparé à chaque mot du message
+            tags_bruts = fiche.get('tags') or ''
+            tags = [t.strip().lower() for t in tags_bruts.split() if len(t.strip()) > 2]
+            for mot in msg_mots:
+                for tag in tags:
+                    if fuzz.ratio(mot, tag) >= 82:
+                        score += 2
+                        break  # un seul +2 par mot
+
+            # Titre : mots du titre (hors mots vides) comparés au message
+            titre_mots = [
+                t.lower().strip(".,!?;:'\"")
+                for t in (fiche.get('titre') or '').split()
+                if len(t) > 2 and t.lower() not in _MOTS_VIDES
+            ]
+            for mot in msg_mots:
+                for tmot in titre_mots:
+                    if fuzz.ratio(mot, tmot) >= 82:
+                        score += 1
+                        break
+
+            if score >= seuil:
+                resultats.append((score, fiche))
+
+        if not resultats:
+            return ''
+
+        # Trier par score décroissant, garder max 2
+        resultats.sort(key=lambda x: x[0], reverse=True)
+        resultats = resultats[:2]
+
+        contextes = []
+        for _, fiche in resultats:
+            contenu = _rb(fiche.get('titre', ''), limit=1)
+            if contenu:
+                contextes.append(contenu)
+            print(f"[HUB] Biblio match -> '{fiche.get('titre','?')}' (score {_})")
+
+        return '\n\n'.join(contextes) if contextes else ''
+
+    except Exception as e:
+        print(f"[HUB] Erreur match_bibliotheque : {e}")
+        return ''
+
+
 def recall_bibliotheque(query: str, limit: int = 3) -> str:
     """Recall thématique bibliothèque — délégué à modules/bibliotheque.py."""
     from modules.bibliotheque import recall_bibliotheque as _rb
@@ -1927,9 +2024,7 @@ async def process_message(
     last_dominant = _detect_user_mood(user_message) or get_setting(f'dominant_{thread_id}', '')
 
     # 7. Construire le system prompt
-    # biblio_context = '' — la bibliothèque est récupérée à la demande via tool calling (search_bibliotheque)
-    # Cohérent avec process_message_stream() — les deux pipelines suivent le même comportement.
-    biblio_context = ''
+    biblio_context = _match_bibliotheque(user_message)
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
@@ -2186,8 +2281,9 @@ async def process_message_stream(
     # 3. Contexte — push allégé : seuls les permanents sont injectés d'emblée.
     # Les souvenirs épisodiques/persistants et la bibliothèque sont désormais
     # récupérés à la demande du LLM via tool calling (search_memory / search_bibliotheque).
+    # biblio_context = _match_bibliotheque() — matching fuzzy automatique sur l'index bibliothèque
     memory_context = build_memory_context_permanent_only()
-    biblio_context = ''
+    biblio_context = _match_bibliotheque(user_message)
     # Carnet — injecté uniquement si la fenêtre est pleine
     n_messages = count_messages(thread_id)
     carnet_notes = None
