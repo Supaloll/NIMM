@@ -205,7 +205,8 @@ async def serve_manifest():
 @app.get("/")
 async def root():
     from fastapi.responses import HTMLResponse
-    html = open(os.path.join(FRONTEND_DIR, 'index.html'), encoding='utf-8').read()
+    with open(os.path.join(FRONTEND_DIR, 'index.html'), encoding='utf-8') as _f:
+        html = _f.read()
     html = html.replace('/static/styles.css"', f'/static/styles.css?v={_STATIC_VERSION}"')
     html = html.replace('/static/app.js"',    f'/static/app.js?v={_STATIC_VERSION}"')
     return HTMLResponse(content=html)
@@ -228,7 +229,7 @@ async def embeddings_status():
 @app.post("/api/embeddings/warmup")
 async def warmup_embeddings():
     """Déclenche le chargement embeddings dans un thread — non bloquant."""
-    import asyncio, concurrent.futures
+    import asyncio
     from core.database import get_setting
     if get_setting('embeddings_enabled', 'false').lower() != 'true':
         return {"status": "disabled"}
@@ -238,10 +239,11 @@ async def warmup_embeddings():
     def _load():
         from modules.memory import _get_model
         _get_model()
-    loop = asyncio.get_event_loop()
-    asyncio.create_task(
-        loop.run_in_executor(concurrent.futures.ThreadPoolExecutor(), _load)
-    )
+    # run_in_executor renvoie un Future : inutile de l'envelopper dans create_task
+    # (qui attend une coroutine — l'ancien appel levait une TypeError silencieuse).
+    # Pool de threads par défaut — pas de ThreadPoolExecutor jetable jamais fermé.
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, _load)
     return {"status": "loading"}
 
 
@@ -791,8 +793,8 @@ async def get_global_keys():
         try:
             with open(_gpath, 'r', encoding='utf-8') as _f:
                 global_keys = json.loads(_f.read()).get('api_keys', {})
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[GLOBAL-KEYS] Lecture impossible ({_gpath}) : {_e}")
     providers = ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave']
     return {p: bool(global_keys.get(p)) for p in providers}
 
@@ -806,8 +808,11 @@ async def save_global_keys(req: ApiKeysSetting):
         try:
             with open(_gpath, 'r', encoding='utf-8') as _f:
                 existing = json.loads(_f.read())
-        except Exception:
-            pass
+        except Exception as _e:
+            # Fichier présent mais illisible : refus d'écrire pour ne pas
+            # écraser un contenu existant potentiellement récupérable.
+            print(f"[GLOBAL-KEYS] Lecture impossible avant écriture ({_gpath}) : {_e}")
+            raise HTTPException(500, detail="Fichier de clés globales illisible — écriture annulée pour éviter une perte de données.")
     current_keys = existing.get('api_keys', {})
     updates = req.dict(exclude_none=True)
     current_keys.update({k: v for k, v in updates.items() if v})

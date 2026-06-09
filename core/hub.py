@@ -1713,6 +1713,13 @@ async def _worker_process_user(user_id: str):
     else:
         print(f"[WORKER] ⏭️ [{user_id}] Aucun nouveau triplet — inférence ignorée.")
 
+    # Rattrapage des vecteurs manquants ou issus d'un autre modèle (par lots,
+    # dans un thread pour ne pas bloquer la boucle). Sans effet si désactivé.
+    try:
+        from modules.memory import backfill_embeddings
+        await asyncio.get_running_loop().run_in_executor(None, backfill_embeddings, user_id)
+    except Exception as e:
+        print(f"[WORKER] ⚠️ [{user_id}] Rattrapage embeddings : {e}")
 
 _worker_running: bool = False
 

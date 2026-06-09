@@ -19,6 +19,10 @@ from core.database import save_memory, get_all_memory, delete_memory, update_mem
 _embed_model = None   # modèle chargé en mémoire une seule fois
 _embed_error  = None  # message d'erreur si le chargement a échoué
 
+# Nom du modèle d'embeddings. Stocké avec chaque vecteur — un changement de
+# modèle est détecté automatiquement et les anciens vecteurs sont recalculés.
+_EMBED_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
+
 def _is_embeddings_enabled() -> bool:
     """Vérifie si la recherche par sens est activée dans les settings."""
     try:
@@ -38,7 +42,7 @@ def _get_model():
         from sentence_transformers import SentenceTransformer
         print("[MEMORY] 🔄 Chargement du modèle embeddings...")
         _embed_error = None
-        _embed_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        _embed_model = SentenceTransformer(_EMBED_MODEL_NAME)
         print("[MEMORY] ✅ Modèle embeddings chargé.")
     except Exception as e:
         print(f"[MEMORY] ⚠️ Modèle embeddings non disponible : {e}")
@@ -66,6 +70,89 @@ def _cosine(a, b) -> float:
         return float(np.dot(a, b))
     except Exception:
         return 0.0
+
+def _serialize_embedding(vec) -> str:
+    """Sérialise un vecteur avec le nom du modèle (pour détecter un changement)."""
+    import json as _json
+    return _json.dumps({'model': _EMBED_MODEL_NAME, 'vec': vec.tolist()})
+
+def _parse_embedding(raw):
+    """Parse un embedding stocké. Retourne (vecteur np ou None, nom_modèle ou None).
+    Rétro-compatible : l'ancien format est une simple liste JSON (modèle inconnu)."""
+    if not raw:
+        return None, None
+    import json as _json
+    import numpy as np
+    try:
+        data = _json.loads(raw)
+    except Exception:
+        return None, None
+    if isinstance(data, dict):
+        vec, model = data.get('vec'), data.get('model')
+    else:
+        vec, model = data, None  # ancien format : liste nue, modèle inconnu
+    if not vec:
+        return None, None
+    try:
+        return np.array(vec, dtype='float32'), model
+    except Exception:
+        return None, None
+
+# Seuil de similarité minimal pour qu'un souvenir devienne candidat par le sens.
+VECTOR_CANDIDATE_MIN = 0.45
+
+def _vector_candidate_keys(query_vec, limit: int = 50) -> list:
+    """Candidats par similarité vectorielle : parcourt tous les souvenirs
+    vectorisés et renvoie les clés les plus proches du sens de la requête,
+    y compris ceux qui ne partagent aucun mot avec elle."""
+    if query_vec is None:
+        return []
+    try:
+        from core.database import get_all_embeddings
+    except Exception:
+        return []
+    sims = []
+    for key, raw in get_all_embeddings():
+        mem_vec, model = _parse_embedding(raw)
+        if mem_vec is None:
+            continue
+        if model is not None and model != _EMBED_MODEL_NAME:
+            continue  # vecteur d'un autre modèle : incomparable
+        s = _cosine(query_vec, mem_vec)
+        if s >= VECTOR_CANDIDATE_MIN:
+            sims.append((s, key))
+    sims.sort(key=lambda x: x[0], reverse=True)
+    return [k for _, k in sims[:limit]]
+
+def backfill_embeddings(user_id: str = None, batch: int = 50) -> int:
+    """Recalcule les vecteurs manquants ou issus d'un autre modèle, par lots.
+    Appelé par le worker dans un thread. Aucun effet de bord : seul l'embedding change."""
+    if not _is_embeddings_enabled() or _get_model() is None:
+        return 0
+    if user_id:
+        try:
+            from core.database import set_user_context
+            set_user_context(user_id)
+        except Exception:
+            pass
+    from core.database import get_all_memory, save_memory
+    done = 0
+    for m in get_all_memory():
+        if done >= batch:
+            break
+        raw = m.get('embedding')
+        mem_vec, model = _parse_embedding(raw) if raw else (None, None)
+        if mem_vec is not None and model == _EMBED_MODEL_NAME:
+            continue  # déjà vectorisé avec le modèle courant
+        vec = _embed(f"{m.get('sujet','')} {m.get('predicat','')} {m.get('valeur','')} {m.get('objet','')}")
+        if vec is None:
+            continue
+        m['embedding'] = _serialize_embedding(vec)
+        save_memory(m)
+        done += 1
+    if done:
+        print(f"[MEMORY] 🧩 {done} vecteur(s) (ré)calculé(s) par le rattrapage.")
+    return done
 
 # Prédicats protégés — ne s'écrasent que sur signal de correction explicite.
 # Liste volontairement courte : couvre les faits d'identité fondamentale.
@@ -627,16 +714,19 @@ def recall(query: str, limit: int = 20) -> list:
     permanents = get_permanent_memories()
     perm_keys  = {m['key'] for m in permanents}
 
-    # ── 3. Récupérer uniquement les enregistrements utiles
-    candidate_keys = list(fts_keys | perm_keys)
+    # ── 3. Candidats vectoriels — souvenirs proches par le SENS, sans mot en commun
+    query_vec = _embed(query_resolved) if _is_embeddings_enabled() else None
+    vec_keys  = set(_vector_candidate_keys(query_vec)) if query_vec is not None else set()
+
+    # ── 4. Récupérer uniquement les enregistrements utiles (union des 3 sources)
+    candidate_keys = list(fts_keys | perm_keys | vec_keys)
     if not candidate_keys:
         return []
 
     memories = get_memories_by_keys(candidate_keys)
 
-    # ── 4. Scoring
-    # Embedding de la requête — calculé une seule fois pour tous les candidats
-    query_vec = _embed(query_resolved) if _is_embeddings_enabled() else None
+    # ── 5. Scoring
+    # query_vec déjà calculé ci-dessus
 
     scored = []
     permanent_fallback = []
@@ -673,14 +763,13 @@ def recall(query: str, limit: int = 20) -> list:
         raw_emb = m.get('embedding')
         if raw_emb and query_vec is not None:
             try:
-                import json as _json
-                import numpy as np
-                mem_vec = np.array(_json.loads(raw_emb), dtype='float32')
-                sim = _cosine(query_vec, mem_vec)
-                if sim > 0.7:
-                    score += sim * 1.5
-                elif sim > 0.5:
-                    score += sim * 0.8
+                mem_vec, emb_model = _parse_embedding(raw_emb)
+                if mem_vec is not None and (emb_model is None or emb_model == _EMBED_MODEL_NAME):
+                    sim = _cosine(query_vec, mem_vec)
+                    if sim > 0.7:
+                        score += sim * 1.5
+                    elif sim > 0.5:
+                        score += sim * 0.8
             except Exception:
                 pass
 
@@ -1128,7 +1217,7 @@ def apply_decay_on_startup(user_id: str = None) -> int:
                 delete_memory(m['key'])
                 print(f"[DECAY] Supprime : {m.get('sujet','')} / {m.get('predicat','')} (poids {poids:.2f} -> {nouveau_poids:.4f})")
             elif abs(nouveau_poids - poids) > 0.001:
-                update_memory_value(m['key'], m.get('valeur', ''), nouveau_poids)
+                save_memory({**m, 'poids': nouveau_poids})
                 affected += 1
 
         print(f"[DECAY] OK Decay applique -- {affected} memoire(s) allegee(s).")

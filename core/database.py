@@ -1496,6 +1496,17 @@ def update_memory_value(key: str, valeur: str):
     conn.commit()
     conn.close()
 
+def get_all_embeddings() -> list:
+    """Retourne [(key, embedding)] pour les souvenirs vectorises.
+    Sert a la recherche par sens : permet de parcourir tous les vecteurs sans
+    charger les enregistrements complets."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT key, embedding FROM memory WHERE embedding IS NOT NULL AND embedding != ''"
+    ).fetchall()
+    conn.close()
+    return [(r['key'], r['embedding']) for r in rows]
+
 
 # ══════════════════════════════════════════
 # RAPPELS / AGENDA
