@@ -82,8 +82,38 @@ document.getElementById('search-web-btn')?.addEventListener('click', () => {
 });
 
 function _splitSentences(text) {
-    const parts = text.match(/[^.!?…]+[.!?…]+/g) || [text];
-    return parts.map(s => s.trim()).filter(s => s.length > 1);
+    // 1. Convertir les \n littéraux en vrais sauts de ligne
+    let t = text.replace(/\\n/g, '\n');
+
+    // 2. Nettoyer
+    t = t.replace(/<hr\s*\/?>/gi, '\n');
+    t = t.replace(/<br\s*\/?>/gi, '\n');
+    t = t.replace(/<li[^>]*>(.*?)<\/li>/gis, (_, c) => c.trim().replace(/[.,;:]*$/, '') + '.\n');
+    t = t.replace(/<[^>]{1,80}>/g, ' ');
+    t = t.replace(/^---+$/gm, '\n');
+    t = t.replace(/^[•\-\*]\s+(.*)$/gm, (_, c) => c.trim().replace(/[.,;:]*$/, '') + '.');
+    t = t.replace(/^\d+[\.\)]\s+(.*)$/gm, (_, c) => c.trim().replace(/[.,;:]*$/, '') + '.');
+    t = t.replace(/\*+/g, '');
+    t = t.replace(/#{1,6}\s/g, '');
+    t = t.replace(/\s*—\s*/g, ', ');
+    // Espace manquant après ponctuation
+    t = t.replace(/([.!?])([A-ZÀ-Ÿa-zà-ÿ])/g, '$1 $2');
+
+    // 3. Découper sur fins de phrases ET sauts de ligne
+    const raw = t.split(/(?<=[.!?…])\s+|\n+/);
+
+    // 4. Regrouper les fragments trop courts avec le suivant
+    const parts = [];
+    let buf = '';
+    for (const chunk of raw) {
+        const c = chunk.trim();
+        if (!c) continue;
+        buf = buf ? buf + ' ' + c : c;
+        if (buf.length >= 20) { parts.push(buf); buf = ''; }
+    }
+    if (buf) parts.push(buf);
+
+    return parts.filter(s => s.length > 1);
 }
 
 async function _fetchAudio(sentence) {
