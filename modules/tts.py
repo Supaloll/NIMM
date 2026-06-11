@@ -87,7 +87,7 @@ PIPER_DIR     = BASE_DIR / 'piper_voices'
 # ══════════════════════════════════════════
 
 def _clean_text(text: str) -> str:
-    """Nettoie le texte avant synthèse — retire markdown, tags %%, didascalies."""
+    """Nettoie le texte avant synthèse — retire markdown, tags %%, balises HTML, didascalies."""
     # Supprimer les émojis (plans Unicode supplémentaires + symboles courants)
     import re as _re
     text = _re.sub(r'[\U00010000-\U0010ffff]', '', text)  # émojis Supplementary planes
@@ -99,15 +99,28 @@ def _clean_text(text: str) -> str:
     # Tags NIMM — complets et partiels (sécurité si chunk mal découpé)
     text = re.sub(r'%%[^%]*%%', '', text)
     text = re.sub(r'%%.*$', '', text, flags=re.MULTILINE)
-    # Sauts de ligne et retours chariot → espace (sinon lus comme "n" par les moteurs TTS)
-    text = re.sub(r'\\n|[\r\n]+', ', ', text)
+    # HTML — séparateurs et sauts → pause (. pour marquer une coupure propre)
+    text = re.sub(r'<hr\s*/?>', '. ', text, flags=re.IGNORECASE)
+    text = re.sub(r'<br\s*/?>', ', ', text, flags=re.IGNORECASE)
+    # HTML — items de liste → phrase terminée par un point
+    text = re.sub(r'<li[^>]*>(.*?)</li>', lambda m: m.group(1).strip().rstrip('.,;:') + '. ', text, flags=re.IGNORECASE | re.DOTALL)
+    # HTML — toutes les autres balises → supprimées
+    text = re.sub(r'<[^>]{1,80}>', '', text)
+    # Items de liste Markdown (•, -, *, chiffre.) en début de ligne → phrase terminée par un point
+    text = re.sub(r'(?m)^[\s]*[•\-\*][\s]+(.*?)$', lambda m: m.group(1).strip().rstrip('.,;:') + '. ', text)
+    text = re.sub(r'(?m)^[\s]*\d+[\.\)]\s+(.*?)$', lambda m: m.group(1).strip().rstrip('.,;:') + '. ', text)
+    # Sauts de ligne et retours chariot → pause (après traitement des listes)
+    text = re.sub(r'\\n|[\r\n]+', ' ', text)
     # Tiret cadratin → virgule (pause naturelle à la lecture)
     text = re.sub(r'\s*—\s*', ', ', text)
-    # Markdown
+    # Markdown résiduel
     text = re.sub(r'\*+', '', text)
     text = re.sub(r'#{1,6}\s', '', text)
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
     text = re.sub(r'\[[^\]]{2,80}\]', '', text)
+    # Espace manquant après ponctuation (ex: "fin.Début" → "fin. Début")
+    text = re.sub(r'([.!?])([A-ZÀ-Ÿa-zà-ÿ])', r'\1 \2', text)
+    # Espaces multiples
     text = re.sub(r' {2,}', ' ', text)
     return text.strip()
 
