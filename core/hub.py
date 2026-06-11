@@ -1288,11 +1288,53 @@ NIMM_TOOLS = [
 ]
 
 
+# Perissabilite d'une information -> duree de vie en cache (jours ; 0 = permanent)
+_PERISSABILITE_JOURS = {'ephemere': 1, 'normale': 30, 'durable': 365, 'permanente': 0}
+
+async def classify_perissabilite_jours(query: str, content: str = "") -> int | None:
+    """Estime la duree de validite de l'information repondant a `query`, via le LLM.
+    Si `content` est fourni (extrait des resultats trouves), il aide a trancher les
+    cas ou la requete seule est ambigue. Retourne un nombre de jours (0 = permanent)
+    ou None si indetermine (le cache se rabat alors sur son heuristique)."""
+    try:
+        settings = load_settings()
+        extrait = " ".join((content or "").split())
+        if len(extrait) > 800:
+            extrait = extrait[:800] + "..."
+        prompt = (
+            "Classe la DUREE DE VALIDITE de l'information repondant a cette requete, "
+            "en UN SEUL mot parmi : ephemere, normale, durable, permanente.\n"
+            "- ephemere : quelques heures a un jour (meteo, cours de bourse, score, actualite immediate)\n"
+            "- normale : quelques semaines (prix, classements, tendances)\n"
+            "- durable : des mois a un an (faits recents, statistiques annuelles)\n"
+            "- permanente : intemporel (definitions, histoire, concepts, science etablie)\n"
+            "Reponds UNIQUEMENT par un de ces quatre mots.\n\n"
+            f"Requete : {query}\n"
+            + (f"Extrait des resultats trouves :\n{extrait}\n" if extrait else "")
+        )
+        reponse = await call_llm(
+            messages    = [{'role': 'user', 'content': prompt}],
+            provider    = settings.get('provider', ''),
+            max_tokens  = 4,
+            temperature = 0.0,
+            api_keys    = settings.get('api_keys', {}),
+            model       = settings.get('model'),
+        )
+        import unicodedata
+        txt = "".join(c for c in unicodedata.normalize('NFD', (reponse or '').strip().lower())
+                      if unicodedata.category(c) != 'Mn')
+        mot = txt.split()[0] if txt.split() else ''
+        return _PERISSABILITE_JOURS.get(mot)  # None si non reconnu
+    except Exception as e:
+        print(f"[WEBCACHE] Classification perissabilite impossible : {e}")
+        return None
+
+
 async def _execute_tool(name: str, args: dict) -> str:
     """
-    Exécute un outil demandé par le LLM et retourne le résultat en texte.
-    Appelé par process_message_stream() pendant la phase tool calling.
-    Retourne toujours une chaîne — jamais None.
+    Execute un outil demande par le LLM et retourne le resultat en texte.
+    Appele par process_message_stream() pendant la phase tool calling.
+    Retourne toujours une chaine -- jamais None.
     """
     query = args.get('query', '').strip()
     if not query:
@@ -1341,8 +1383,8 @@ async def _execute_tool(name: str, args: dict) -> str:
 
     elif name == 'search_web':
         try:
-            from modules.websearch import search as brave_search
-            result = await brave_search(query)
+            from modules.websearch import search_with_cache as brave_search
+            result = await brave_search(query, classify=classify_perissabilite_jours)
             print(f"[HUB] 🌐 Tool search_web({query!r}) → {len(result)} chars")
             return result
         except Exception as e:
@@ -1720,6 +1762,15 @@ async def _worker_process_user(user_id: str):
         await asyncio.get_running_loop().run_in_executor(None, backfill_embeddings, user_id)
     except Exception as e:
         print(f"[WORKER] ⚠️ [{user_id}] Rattrapage embeddings : {e}")
+
+    # Purge des references web expirees (peremption de l'information)
+    try:
+        from core.database import purge_web_references
+        n = purge_web_references()
+        if n:
+            print(f"[WORKER] 🧹 [{user_id}] {n} reference(s) web expiree(s) purgee(s).")
+    except Exception as e:
+        print(f"[WORKER] ⚠️ [{user_id}] Purge references web : {e}")
 
 _worker_running: bool = False
 

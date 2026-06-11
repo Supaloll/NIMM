@@ -1175,59 +1175,48 @@ def recall_anecdotes(query: str, limit: int = 3) -> list:
 
 def apply_decay_on_startup(user_id: str = None) -> int:
     """
-    Applique le decay une fois par session au démarrage du serveur.
-    Réduit le poids des mémoires non-permanentes selon DECAY_RATES.
-    Les mémoires sous POIDS_RECALL_MIN (0.1) sont supprimées silencieusement.
-    Retourne le nombre de mémoires affectées.
+    Passe de nettoyage, une fois par session au démarrage.
+
+    La décroissance elle-même est calculée à la volée par effective_poids() au
+    moment du rappel (poids × (1 - taux)^jours depuis le dernier renforcement).
+    Cette passe ne réécrit donc AUCUN poids — elle se contente de supprimer
+    définitivement les souvenirs non permanents dont le poids effectif est tombé
+    sous POIDS_RECALL_MIN, pour éviter que la base se remplisse de souvenirs
+    devenus invisibles. Réécrire le poids ici provoquerait un double comptage
+    avec effective_poids() à chaque démarrage.
+
+    Retourne le nombre de souvenirs supprimés.
     """
     if user_id:
         from core.database import set_user_context
         set_user_context(user_id)
 
+    supprimes = 0
     try:
-        existing = get_all_memory()
-        affected = 0
-        now = datetime.now()
-
-        for m in existing:
-            # Les permanents sont immunisés
+        for m in get_all_memory():
+            # Permanents et souvenirs consolidés : immunisés
             if m.get('type_temporal') == 'permanent':
                 continue
-            # Les mémoires déjà consolidées (poids ≥ POIDS_PERMANENT_SEUIL) aussi
-            poids = float(m.get('poids', 1.0))
-            if poids >= POIDS_PERMANENT_SEUIL:
+            if float(m.get('poids', 1.0)) >= POIDS_PERMANENT_SEUIL:
+                continue
+            # Catégories sans décroissance (famille / santé / croyances)
+            if DECAY_RATES.get(m.get('categorie', 'quotidien'), 0.005) == 0.0:
                 continue
 
-            categorie = m.get('categorie', 'quotidien')
-            taux = DECAY_RATES.get(categorie, 0.010)
-            if taux == 0.0:
-                continue
-
-            # Calcul du delta depuis le dernier renforcement ou timestamp de création
-            ref_str = m.get('last_reinforced') or m.get('timestamp') or ''
-            try:
-                ref_dt = datetime.fromisoformat(ref_str)
-            except Exception:
-                ref_dt = now
-            delta_days = max(0.0, (now - ref_dt).total_seconds() / 86400)
-
-            nouveau_poids = round(poids * ((1 - taux) ** delta_days), 4)
-
-            if nouveau_poids < POIDS_RECALL_MIN:
+            if effective_poids(m) < POIDS_RECALL_MIN:
                 delete_memory(m['key'])
-                print(f"[DECAY] Supprime : {m.get('sujet','')} / {m.get('predicat','')} (poids {poids:.2f} -> {nouveau_poids:.4f})")
-            elif abs(nouveau_poids - poids) > 0.001:
-                save_memory({**m, 'poids': nouveau_poids})
-                affected += 1
+                supprimes += 1
+                print(f"[DECAY] Oubli : {m.get('sujet','')} / {m.get('predicat','')} "
+                      f"(poids effectif < {POIDS_RECALL_MIN})")
 
-        print(f"[DECAY] OK Decay applique -- {affected} memoire(s) allegee(s).")
-        return affected
+        print(f"[DECAY] Nettoyage terminé -- {supprimes} souvenir(s) oublié(s).")
+        return supprimes
 
     except Exception as e:
         import traceback
         print(f"[DECAY] Erreur : {e}")
         traceback.print_exc()
-        return 0
+        return supprimes
 
 
 def run_inference_engine(user_id: str = None):

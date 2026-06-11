@@ -5159,10 +5159,99 @@ function setupUpload() {
     const btn    = document.getElementById('upload-btn');
     const input  = document.getElementById('file-input');
     const chip   = document.getElementById('file-chip');
-    const chipNm = document.getElementById('file-chip-name');
+    const preview = document.getElementById('file-chip-preview');
     const chipRm = document.getElementById('file-chip-remove');
     const menu   = document.getElementById('plus-menu');
     if (!btn || !input) return;
+
+    // ── Construit la vignette dans #file-chip-preview ──
+    function _buildChip(file) {
+        preview.innerHTML = '';
+        const isImage = file.type.startsWith('image/');
+        const ext = file.name.split('.').pop().toUpperCase().slice(0, 5);
+
+        const iconMap = { PDF:'📄', DOC:'📝', DOCX:'📝', TXT:'📃', CSV:'📊',
+                          XLS:'📊', XLSX:'📊', PPT:'📑', PPTX:'📑',
+                          PY:'🐍', JS:'🟨', JSON:'🔧', ZIP:'🗜️', RAR:'🗜️' };
+
+        // Conteneur vignette (position:relative pour le ✕)
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'position:relative; display:inline-flex; flex-direction:column; align-items:center; gap:4px;';
+
+        const thumb = document.createElement('div');
+        thumb.className = 'chip-thumb';
+
+        if (isImage) {
+            const localUrl = URL.createObjectURL(file);
+            const img = document.createElement('img');
+            img.src = localUrl;
+            img.alt = file.name;
+            img.onload = () => URL.revokeObjectURL(localUrl);
+            thumb.appendChild(img);
+        } else {
+            const icon = document.createElement('div');
+            icon.className = 'chip-icon';
+            icon.textContent = iconMap[ext] || '📎';
+            const extBadge = document.createElement('div');
+            extBadge.className = 'chip-ext';
+            extBadge.textContent = ext;
+            thumb.appendChild(icon);
+            thumb.appendChild(extBadge);
+        }
+
+        // ✕ injecté dans le wrap, ancré en haut à droite du thumb
+        const rmBtn = document.createElement('button');
+        rmBtn.textContent = '✕';
+        rmBtn.title = 'Retirer le fichier joint';
+        rmBtn.setAttribute('aria-label', 'Retirer le fichier joint');
+        rmBtn.style.cssText = 'position:absolute; top:-6px; right:-6px; width:18px; height:18px; border-radius:50%; background:#2a2420; border:1px solid #3a3530; color:#e8e8e8; cursor:pointer; font-size:0.65rem; display:flex; align-items:center; justify-content:center; z-index:10; line-height:1;';
+        rmBtn.addEventListener('click', () => {
+            _pendingFile       = null;
+            chip.style.display = 'none';
+            preview.innerHTML  = '';
+        });
+
+        const fname = document.createElement('div');
+        fname.className = 'chip-filename';
+        fname.textContent = file.name;
+
+        wrap.appendChild(thumb);
+        wrap.appendChild(rmBtn);
+        wrap.appendChild(fname);
+        preview.appendChild(wrap);
+
+        chip.setAttribute('aria-label', `Fichier joint : ${file.name}. Bouton disponible pour retirer.`);
+        chip.style.display = 'flex';
+        document.getElementById('user-input').focus();
+    }
+
+    // ── Traitement upload (commun bouton + drop) ──
+    async function _processFile(file) {
+        if (!file) return;
+        btn.innerHTML = SVG_LOADING;
+        btn.disabled = true;
+        _buildChip(file);
+
+        try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const r    = await fetch('/api/upload', { method: 'POST', body: fd });
+            const data = await r.json();
+            if (data.text) {
+                _pendingFile = { text: data.text, name: file.name, b64: data.b64 || null, mime_type: data.mime_type || null };
+            } else {
+                _pendingFile       = null;
+                chip.style.display = 'none';
+            }
+        } catch(e) {
+            console.error('[NIMM] Erreur upload :', e);
+            _pendingFile       = null;
+            chip.style.display = 'none';
+        } finally {
+            btn.textContent = '+';
+            btn.disabled    = false;
+        }
+    }
 
     // "+" ouvre/ferme le mini-menu
     btn.addEventListener('click', (e) => {
@@ -5182,59 +5271,62 @@ function setupUpload() {
     // Option 2 : Créer une image → injecte le préfixe 🖼️ dans la saisie
     document.getElementById('plus-imagegen')?.addEventListener('click', () => {
         menu.classList.add('hidden');
-        const input = document.getElementById('user-input');
-        if (!input.value.startsWith('🖼️ ')) {
-            input.value = '🖼️ ' + input.value;
+        const inp = document.getElementById('user-input');
+        if (!inp.value.startsWith('🖼️ ')) {
+            inp.value = '🖼️ ' + inp.value;
         }
-        input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
     });
 
+    // Sélection via input file
     input.addEventListener('change', async () => {
         const file = input.files[0];
         input.value = '';
-        if (!file) return;
-
-        btn.innerHTML = SVG_LOADING;
-        btn.disabled    = true;
-
-        // Miniature locale immédiate — pas besoin d'attendre le serveur
-        const isImage = file.type.startsWith('image/');
-        if (isImage) {
-            const localUrl = URL.createObjectURL(file);
-            chipNm.innerHTML = `<img src="${localUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:6px;" onload="URL.revokeObjectURL(this.src)"> ${file.name}`;
-        } else {
-            chipNm.textContent = '📄 ' + file.name;
-        }
-        chip.style.display = 'flex';
-
-        try {
-            const fd = new FormData();
-            fd.append('file', file);
-            const r    = await fetch('/api/upload', { method: 'POST', body: fd });
-            const data = await r.json();
-            if (data.text) {
-                _pendingFile = { text: data.text, name: file.name, b64: data.b64 || null, mime_type: data.mime_type || null };
-                document.getElementById('user-input').focus();
-            } else {
-                // Erreur serveur — retirer le chip
-                _pendingFile       = null;
-                chip.style.display = 'none';
-            }
-        } catch(e) {
-            console.error('[NIMM] Erreur upload :', e);
-            _pendingFile       = null;
-            chip.style.display = 'none';
-        } finally {
-            btn.textContent = '+';
-            btn.disabled    = false;
-        }
+        await _processFile(file);
     });
 
-    chipRm.addEventListener('click', () => {
+    // Retirer le fichier
+    chipRm?.addEventListener('click', () => {
         _pendingFile       = null;
         chip.style.display = 'none';
+        preview.innerHTML  = '';
     });
+
+    // ── Drag-and-drop ──
+    const overlay = document.getElementById('drop-overlay');
+    let _dragCounter = 0;
+
+    document.addEventListener('dragenter', (e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        _dragCounter++;
+        if (overlay) overlay.classList.add('active');
+    });
+
+    document.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        _dragCounter--;
+        if (_dragCounter <= 0) {
+            _dragCounter = 0;
+            if (overlay) overlay.classList.remove('active');
+        }
+    });
+
+    document.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    });
+
+    document.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        _dragCounter = 0;
+        if (overlay) overlay.classList.remove('active');
+        const file = e.dataTransfer?.files?.[0];
+        if (file) await _processFile(file);
+    });
+
 }
 
 // ══════════════════════════════════════════

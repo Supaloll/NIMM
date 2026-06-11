@@ -835,6 +835,63 @@ def delete_anecdote(anecdote_id: int):
     conn.commit()
     conn.close()
 
+# ==========================================
+# CACHE REFERENCES WEB
+# ==========================================
+
+def _ensure_web_reference_table(conn):
+    conn.execute(
+        '''CREATE TABLE IF NOT EXISTS web_reference (
+               id          INTEGER PRIMARY KEY AUTOINCREMENT,
+               query       TEXT NOT NULL,
+               query_norm  TEXT,
+               content     TEXT NOT NULL,
+               embedding   TEXT,
+               captured_at TEXT NOT NULL,
+               expiration  TEXT
+           )'''
+    )
+
+def save_web_reference(query, query_norm, content, embedding, expiration):
+    """Enregistre le resultat d'une recherche web. `expiration` = ISO ou None (jamais)."""
+    from datetime import datetime
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    conn.execute(
+        '''INSERT INTO web_reference (query, query_norm, content, embedding, captured_at, expiration)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (query, query_norm, content, embedding, datetime.now().isoformat(), expiration)
+    )
+    conn.commit()
+    conn.close()
+
+def get_active_web_references() -> list:
+    """References non expirees (expiration nulle ou future)."""
+    from datetime import datetime
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    now = datetime.now().isoformat()
+    rows = conn.execute(
+        "SELECT * FROM web_reference WHERE expiration IS NULL OR expiration > ?", (now,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def purge_web_references() -> int:
+    """Supprime les references expirees. Retourne le nombre supprime."""
+    from datetime import datetime
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    now = datetime.now().isoformat()
+    cur = conn.execute(
+        "DELETE FROM web_reference WHERE expiration IS NOT NULL AND expiration <= ?", (now,)
+    )
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
 def delete_carnet_note(thread_id: str, note_number: int):
     """Supprime une note du carnet de bord."""
     conn = get_conn()

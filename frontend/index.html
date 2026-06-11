@@ -15,7 +15,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260610-1">
+<link rel="stylesheet" href="/static/styles.css?v=20260611-1">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 </head>
 <body>
@@ -107,11 +107,10 @@
                 </div>
             </div>
 
-            <div id="file-chip" style="display:none">
-                <span id="file-chip-name"></span>
-                <button id="file-chip-remove" title="Retirer" aria-label="Retirer le fichier joint">✕</button>
-            </div>
             <div id="input-area">
+                <div id="file-chip" style="display:none" role="status" aria-live="polite">
+                    <div id="file-chip-preview"></div>
+                </div>
 <input type="file" id="file-input" accept=".pdf,.txt,.md,.csv,.py,.json,.js,.ts,.jsx,.tsx,.html,.htm,.css,.xml,.yaml,.yml,.toml,.ini,.sh,.bat,.ps1,.sql,.log,.c,.cpp,.h,.java,.rs,.go,.rb,.php,.swift,.kt,.r,.m,image/*" style="display:none">
                 <textarea id="user-input" placeholder="Écris ton message..." rows="1" aria-label="Zone de saisie du message" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"></textarea>
                 <div id="input-actions">
@@ -794,6 +793,9 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260610-1"></script>
+<div id="drop-overlay" aria-hidden="true">
+    <span>📎 Déposer le fichier ici</span>
+</div>
+<script src="/static/app.js?v=20260611-1"></script>
 </body>
 </html>
