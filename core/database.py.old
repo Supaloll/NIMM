@@ -835,6 +835,63 @@ def delete_anecdote(anecdote_id: int):
     conn.commit()
     conn.close()
 
+# ==========================================
+# CACHE REFERENCES WEB
+# ==========================================
+
+def _ensure_web_reference_table(conn):
+    conn.execute(
+        '''CREATE TABLE IF NOT EXISTS web_reference (
+               id          INTEGER PRIMARY KEY AUTOINCREMENT,
+               query       TEXT NOT NULL,
+               query_norm  TEXT,
+               content     TEXT NOT NULL,
+               embedding   TEXT,
+               captured_at TEXT NOT NULL,
+               expiration  TEXT
+           )'''
+    )
+
+def save_web_reference(query, query_norm, content, embedding, expiration):
+    """Enregistre le resultat d'une recherche web. `expiration` = ISO ou None (jamais)."""
+    from datetime import datetime
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    conn.execute(
+        '''INSERT INTO web_reference (query, query_norm, content, embedding, captured_at, expiration)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (query, query_norm, content, embedding, datetime.now().isoformat(), expiration)
+    )
+    conn.commit()
+    conn.close()
+
+def get_active_web_references() -> list:
+    """References non expirees (expiration nulle ou future)."""
+    from datetime import datetime
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    now = datetime.now().isoformat()
+    rows = conn.execute(
+        "SELECT * FROM web_reference WHERE expiration IS NULL OR expiration > ?", (now,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def purge_web_references() -> int:
+    """Supprime les references expirees. Retourne le nombre supprime."""
+    from datetime import datetime
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    now = datetime.now().isoformat()
+    cur = conn.execute(
+        "DELETE FROM web_reference WHERE expiration IS NOT NULL AND expiration <= ?", (now,)
+    )
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
 def delete_carnet_note(thread_id: str, note_number: int):
     """Supprime une note du carnet de bord."""
     conn = get_conn()
@@ -927,151 +984,6 @@ def get_permanent_memories() -> list:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
-
-
-def get_all_embeddings() -> list:
-    """Retourne [(key, embedding)] pour les souvenirs vectorisés.
-    Sert à la recherche par sens : permet de parcourir tous les vecteurs sans
-    charger les enregistrements complets."""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT key, embedding FROM memory WHERE embedding IS NOT NULL AND embedding != ''"
-    ).fetchall()
-    conn.close()
-    return [(r['key'], r['embedding']) for r in rows]
-
-
-# ══════════════════════════════════════════
-# RÉFÉRENCES WEB — cache des recherches scrapées
-# Zone SÉPARÉE de la mémoire personnelle (ne pollue pas le profil).
-# Chaque entrée porte une expiration = périssabilité de l'information.
-# ══════════════════════════════════════════
-
-def _ensure_web_reference_table(conn):
-    conn.execute(
-        '''CREATE TABLE IF NOT EXISTS web_reference (
-               id          INTEGER PRIMARY KEY AUTOINCREMENT,
-               query       TEXT NOT NULL,
-               query_norm  TEXT,
-               content     TEXT NOT NULL,
-               embedding   TEXT,
-               captured_at TEXT NOT NULL,
-               expiration  TEXT,
-               source      TEXT
-           )'''
-    )
-    # Migration : ajoute `source` aux bases créées avant l'introduction de la colonne.
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(web_reference)").fetchall()]
-    if 'source' not in cols:
-        conn.execute("ALTER TABLE web_reference ADD COLUMN source TEXT")
-
-def save_web_reference(query, query_norm, content, embedding, expiration, source=None):
-    """Enregistre une référence web. `expiration` = ISO ou None (jamais).
-    `source` distingue l'origine : 'recherche' (cache auto) ou une URL / 'texte' (ingéré)."""
-    from datetime import datetime
-    conn = get_conn()
-    _ensure_web_reference_table(conn)
-    cur = conn.execute(
-        '''INSERT INTO web_reference (query, query_norm, content, embedding, captured_at, expiration, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?)''',
-        (query, query_norm, content, embedding, datetime.now().isoformat(), expiration, source)
-    )
-    rid = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return rid
-
-def get_active_web_references() -> list:
-    """Références non expirées (expiration nulle ou future)."""
-    from datetime import datetime
-    conn = get_conn()
-    _ensure_web_reference_table(conn)
-    now = datetime.now().isoformat()
-    rows = conn.execute(
-        "SELECT * FROM web_reference WHERE expiration IS NULL OR expiration > ?", (now,)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-def purge_web_references() -> int:
-    """Supprime les références expirées. Retourne le nombre supprimé."""
-    from datetime import datetime
-    conn = get_conn()
-    _ensure_web_reference_table(conn)
-    now = datetime.now().isoformat()
-    cur = conn.execute(
-        "DELETE FROM web_reference WHERE expiration IS NOT NULL AND expiration <= ?", (now,)
-    )
-    n = cur.rowcount
-    conn.commit()
-    conn.close()
-    return n
-
-def delete_web_reference(ref_id) -> bool:
-    """Supprime une référence par son id (et ses passages). True si une ligne supprimée."""
-    conn = get_conn()
-    _ensure_web_reference_table(conn)
-    cur = conn.execute("DELETE FROM web_reference WHERE id = ?", (ref_id,))
-    n = cur.rowcount
-    conn.commit()
-    conn.close()
-    try:
-        delete_reference_chunks(ref_id)
-    except Exception:
-        pass
-    return n > 0
-
-
-# ══════════════════════════════════════════
-# PASSAGES DE RÉFÉRENCE — découpage des documents ingérés pour la recherche
-# (« interroge mes documents »). Séparé de la mémoire personnelle.
-# ══════════════════════════════════════════
-
-def _ensure_reference_chunk_table(conn):
-    conn.execute(
-        '''CREATE TABLE IF NOT EXISTS reference_chunk (
-               id         INTEGER PRIMARY KEY AUTOINCREMENT,
-               ref_id     INTEGER,
-               titre      TEXT,
-               source     TEXT,
-               ordinal    INTEGER,
-               content    TEXT NOT NULL,
-               embedding  TEXT,
-               created_at TEXT
-           )'''
-    )
-
-def save_reference_chunks(ref_id, titre, source, chunks):
-    """`chunks` = liste de tuples (ordinal, content, embedding_sérialisé|None)."""
-    from datetime import datetime
-    conn = get_conn()
-    _ensure_reference_chunk_table(conn)
-    now = datetime.now().isoformat()
-    conn.executemany(
-        '''INSERT INTO reference_chunk (ref_id, titre, source, ordinal, content, embedding, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)''',
-        [(ref_id, titre, source, o, c, e, now) for (o, c, e) in chunks]
-    )
-    conn.commit()
-    conn.close()
-
-def get_all_reference_chunks() -> list:
-    """Tous les passages (pour la recherche par sens). Liste de dicts."""
-    conn = get_conn()
-    _ensure_reference_chunk_table(conn)
-    rows = conn.execute(
-        "SELECT id, ref_id, titre, source, ordinal, content, embedding FROM reference_chunk"
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-def delete_reference_chunks(ref_id):
-    """Supprime les passages d'un document."""
-    conn = get_conn()
-    _ensure_reference_chunk_table(conn)
-    conn.execute("DELETE FROM reference_chunk WHERE ref_id = ?", (ref_id,))
-    conn.commit()
-    conn.close()
 
 
 def get_memory_index_by_theme() -> dict:
@@ -1640,6 +1552,17 @@ def update_memory_value(key: str, valeur: str):
     )
     conn.commit()
     conn.close()
+
+def get_all_embeddings() -> list:
+    """Retourne [(key, embedding)] pour les souvenirs vectorises.
+    Sert a la recherche par sens : permet de parcourir tous les vecteurs sans
+    charger les enregistrements complets."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT key, embedding FROM memory WHERE embedding IS NOT NULL AND embedding != ''"
+    ).fetchall()
+    conn.close()
+    return [(r['key'], r['embedding']) for r in rows]
 
 
 # ══════════════════════════════════════════

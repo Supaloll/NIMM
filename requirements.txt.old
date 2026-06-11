@@ -1,0 +1,33 @@
+# ── Cœur serveur ──
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+httpx>=0.27.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+
+# ── LLM / ML ──
+openai-whisper
+numpy>=1.26.0
+sentence-transformers>=2.7.0
+
+# ── Audio / Voix ──
+soundfile>=0.12.0
+edge-tts>=6.1.9
+# Voix locales (optionnel — voir docs/voix.md) :
+# kokoro-onnx>=0.4.0
+# piper-tts>=1.2.0
+
+# ── Fichiers ──
+pypdf>=4.0.0
+
+# ── Web search ──
+# ddgs remplacé par Brave Search API (clé configurée dans les paramètres)
+
+# ── Tests ──
+python-dotenv>=1.0.0
+
+# ── Web scraping ──
+beautifulsoup4>=4.12.0
+
+# ── Matching flou ──
+rapidfuzz>=3.0.0

@@ -19,10 +19,8 @@ from core.database import save_memory, get_all_memory, delete_memory, update_mem
 _embed_model = None   # modèle chargé en mémoire une seule fois
 _embed_error  = None  # message d'erreur si le chargement a échoué
 
-# Modèle d'embeddings utilisé. Son nom est enregistré avec chaque vecteur : si
-# l'on change de modèle un jour, les anciens vecteurs sont détectés comme
-# incompatibles et recalculés par le worker, au lieu de produire des
-# similarités erronées (deux modèles ne sont pas comparables).
+# Nom du modèle d'embeddings. Stocké avec chaque vecteur — un changement de
+# modèle est détecté automatiquement et les anciens vecteurs sont recalculés.
 _EMBED_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
 
 def _is_embeddings_enabled() -> bool:
@@ -73,9 +71,6 @@ def _cosine(a, b) -> float:
     except Exception:
         return 0.0
 
-# Seuil de similarité minimal pour qu'un souvenir devienne candidat « par le sens ».
-VECTOR_CANDIDATE_MIN = 0.45
-
 def _serialize_embedding(vec) -> str:
     """Sérialise un vecteur avec le nom du modèle (pour détecter un changement)."""
     import json as _json
@@ -103,11 +98,13 @@ def _parse_embedding(raw):
     except Exception:
         return None, None
 
+# Seuil de similarité minimal pour qu'un souvenir devienne candidat par le sens.
+VECTOR_CANDIDATE_MIN = 0.45
+
 def _vector_candidate_keys(query_vec, limit: int = 50) -> list:
     """Candidats par similarité vectorielle : parcourt tous les souvenirs
-    vectorisés et renvoie les clés les plus proches du SENS de la requête —
-    y compris ceux qui ne partagent aucun mot avec elle. Force brute, adapté
-    à quelques milliers de souvenirs ; au-delà, prévoir un index vectoriel."""
+    vectorisés et renvoie les clés les plus proches du sens de la requête,
+    y compris ceux qui ne partagent aucun mot avec elle."""
     if query_vec is None:
         return []
     try:
@@ -128,9 +125,8 @@ def _vector_candidate_keys(query_vec, limit: int = 50) -> list:
     return [k for _, k in sims[:limit]]
 
 def backfill_embeddings(user_id: str = None, batch: int = 50) -> int:
-    """Recalcule les vecteurs manquants (souvenirs créés sans embedding) ou
-    issus d'un autre modèle. Traité par lots pour borner le coût ; appelé par
-    le worker dans un thread. Aucun effet de bord : seul l'embedding change."""
+    """Recalcule les vecteurs manquants ou issus d'un autre modèle, par lots.
+    Appelé par le worker dans un thread. Aucun effet de bord : seul l'embedding change."""
     if not _is_embeddings_enabled() or _get_model() is None:
         return 0
     if user_id:
@@ -711,25 +707,26 @@ def recall(query: str, limit: int = 20) -> list:
     def _fuzzy(a: str, b: str) -> float:
         return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
-    # ── Embedding de la requête — calculé une seule fois (candidats ET scoring)
-    query_vec = _embed(query_resolved) if _is_embeddings_enabled() else None
-
-    # ── 1. Candidats FTS5 (pré-filtrage rapide par mots-clés côté SQLite)
+    # ── 1. Candidats FTS5 (pré-filtrage rapide côté SQLite)
     fts_keys  = set(search_memory_fts(query_resolved, limit=50))
 
-    # ── 2. Candidats vectoriels (recherche par sens, même sans mot commun)
-    vec_keys  = set(_vector_candidate_keys(query_vec, limit=50))
-
-    # ── 3. Permanents — toujours injectés quelle que soit la requête
+    # ── 2. Permanents — toujours injectés quelle que soit la requête
     permanents = get_permanent_memories()
     perm_keys  = {m['key'] for m in permanents}
 
-    # ── 4. Récupérer uniquement les enregistrements utiles
-    candidate_keys = list(fts_keys | vec_keys | perm_keys)
+    # ── 3. Candidats vectoriels — souvenirs proches par le SENS, sans mot en commun
+    query_vec = _embed(query_resolved) if _is_embeddings_enabled() else None
+    vec_keys  = set(_vector_candidate_keys(query_vec)) if query_vec is not None else set()
+
+    # ── 4. Récupérer uniquement les enregistrements utiles (union des 3 sources)
+    candidate_keys = list(fts_keys | perm_keys | vec_keys)
     if not candidate_keys:
         return []
 
     memories = get_memories_by_keys(candidate_keys)
+
+    # ── 5. Scoring
+    # query_vec déjà calculé ci-dessus
 
     scored = []
     permanent_fallback = []
@@ -765,13 +762,16 @@ def recall(query: str, limit: int = 20) -> list:
         # Bonus cosinus (recherche par sens)
         raw_emb = m.get('embedding')
         if raw_emb and query_vec is not None:
-            mem_vec, _emb_model = _parse_embedding(raw_emb)
-            if mem_vec is not None and (_emb_model is None or _emb_model == _EMBED_MODEL_NAME):
-                sim = _cosine(query_vec, mem_vec)
-                if sim > 0.7:
-                    score += sim * 1.5
-                elif sim > 0.5:
-                    score += sim * 0.8
+            try:
+                mem_vec, emb_model = _parse_embedding(raw_emb)
+                if mem_vec is not None and (emb_model is None or emb_model == _EMBED_MODEL_NAME):
+                    sim = _cosine(query_vec, mem_vec)
+                    if sim > 0.7:
+                        score += sim * 1.5
+                    elif sim > 0.5:
+                        score += sim * 0.8
+            except Exception:
+                pass
 
         # Bonus poids effectif + confiance
         score += ep * 0.2
@@ -927,10 +927,11 @@ def save_inline_memory(record: dict, user_msg: str = '', existing: list = None):
         label = '✏️ Corrigé' if correction_explicite else '🔄 Renforcé'
         print(f"[MEMORY] {label} : {duplicate['sujet']} / {duplicate['predicat']} (poids={nouveau_poids:.2f})")
     else:
-        # Calcul embedding si disponible (sujet + prédicat + valeur + objet)
-        vec = _embed(f"{record.get('sujet','')} {record.get('predicat','')} {record.get('valeur','')} {record.get('objet','')}")
+        # Calcul embedding si disponible
+        vec = _embed(f"{record.get('sujet','')} {record.get('predicat','')} {record.get('objet','')}")
         if vec is not None:
-            record['embedding'] = _serialize_embedding(vec)
+            import json as _json
+            record['embedding'] = _json.dumps(vec.tolist())
         record.setdefault('registre', 'neutre')
         save_memory(record)
         existing.append(record)
@@ -1208,7 +1209,7 @@ def apply_decay_on_startup(user_id: str = None) -> int:
                 print(f"[DECAY] Oubli : {m.get('sujet','')} / {m.get('predicat','')} "
                       f"(poids effectif < {POIDS_RECALL_MIN})")
 
-        print(f"[DECAY] Nettoyage terminé — {supprimes} souvenir(s) oublié(s).")
+        print(f"[DECAY] Nettoyage terminé -- {supprimes} souvenir(s) oublié(s).")
         return supprimes
 
     except Exception as e:
