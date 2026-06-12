@@ -789,7 +789,7 @@ async def save_routing(req: RoutingSetting):
 
 @app.get("/api/settings/length")
 async def get_length():
-    return {"value": int(get_setting('max_tokens', '1024'))}
+    return {"value": int(get_setting('max_tokens', '3500'))}
 
 @app.post("/api/settings/length")
 async def set_length(req: LengthSetting):

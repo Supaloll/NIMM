@@ -70,7 +70,7 @@ async def generate_tab_title(content: str) -> str:
 
 CARNET_WINDOW    = 50     # seuil d'injection du Carnet dans le system prompt
 CARNET_INTERVAL  = 5      # une note tous les 5 echanges (10 messages)
-MAX_TOKENS_CHAT  = 4096
+MAX_TOKENS_CHAT  = 3500
 MAX_TOKENS_MEM   = 2000
 MEMORY_SIM_THRESHOLD = 0.80
 
