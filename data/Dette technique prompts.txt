@@ -1,0 +1,49 @@
+Dette technique à régler :
+
+Parfait, mystère résolu.
+
+"Libre" = **2500 tokens** de sortie réservés. Avec une fenêtre DeepSeek à 128K, c'est largement suffisant — le problème ne venait donc pas d'un dépassement de fenêtre.
+
+Ce qui s'est passé : le sélecteur n'avait **jamais été sauvegardé** en base, donc `hub.py` prenait son défaut à lui : **4096**. Et visiblement DeepSeek a un comportement bizarre sur les tool results quand `max_tokens` est à 4096 — il coupe silencieusement. Passer à 2500 a suffi à débloquer.
+
+C'est un bug de cohérence entre les deux défauts (4096 dans `hub.py`, 1024 dans `main.py`, et 2500 dans le HTML) — trois valeurs différentes pour le même paramètre selon où on regarde. Quand tu voudras régler ça proprement, la solution est simple : aligner le défaut de `hub.py` sur 2500 pour qu'un utilisateur qui n'a jamais touché le sélecteur se retrouve dans le même état que quelqu'un qui a choisi "Libre". Une ligne à changer.
+
+À noter dans ta dette technique.
+
+Voici le résultat complet de la recherche sur le paramètre `max_tokens` et le sélecteur de longueur de réponse :
+
+**Backend (`main.py`, lignes 784-791)** :
+- Route GET `/api/settings/length` → retourne `{"value": int(get_setting('max_tokens', '1024'))}`
+- Route POST `/api/settings/length` → sauvegarde la valeur dans le setting `max_tokens`
+- Valeur par défaut si rien en base : **1024**
+
+**Frontend (`index.html`, lignes 331-339)** :
+```html
+<select id="length-select">
+    <option value="300">Concis</option>
+    <option value="600">Normal</option>
+    <option value="1200">Détaillé</option>
+    <option value="2500" selected>Libre</option>
+</select>
+```
+
+**Tableau des valeurs numériques associées à chaque option :**
+
+| Option | Valeur `max_tokens` |
+|--------|:-------------------:|
+| Concis | 300 |
+| Normal | 600 |
+| Détaillé | 1200 |
+| Libre (défaut) | 2500 |
+
+Le chargement se fait dans `loadSettingsIntoUI()` (ligne 3055-3056) et la sauvegarde via l'event listener ligne 3519-3526 qui envoie `parseInt(e.target.value)` au backend.
+
+Les valeurs actuelles :
+OptionValeurConcis300Normal600Détaillé1200Libre2500
+300, 600, 1200 sont cohérentes — bien calibrées pour des échanges quotidiens.
+2500 pour "Libre" est un peu juste. Une réponse longue et structurée (analyse, comparatif, explication technique) peut facilement approcher ou dépasser 2500 tokens. Je monterais "Libre" à 4000, ce qui laisse une vraie marge sans risquer le bug DeepSeek qu'on vient de corriger — puisqu'on sait maintenant que 4096 pose problème, 4000 donne de l'air tout en restant en dessous du seuil problématique.
+Ou plus proprement : 3500 comme valeur safe et confortable.
+À noter pour la prochaine session : deux choses à aligner en même temps —
+
+"Libre" : 2500 → 3500
+Défaut hub.py : 4096 → 3500 (pour que les deux soient cohérents)

@@ -82,8 +82,38 @@ document.getElementById('search-web-btn')?.addEventListener('click', () => {
 });
 
 function _splitSentences(text) {
-    const parts = text.match(/[^.!?…]+[.!?…]+/g) || [text];
-    return parts.map(s => s.trim()).filter(s => s.length > 1);
+    // 1. Convertir les \n littéraux en vrais sauts de ligne
+    let t = text.replace(/\\n/g, '\n');
+
+    // 2. Nettoyer
+    t = t.replace(/<hr\s*\/?>/gi, '\n');
+    t = t.replace(/<br\s*\/?>/gi, '\n');
+    t = t.replace(/<li[^>]*>(.*?)<\/li>/gis, (_, c) => c.trim().replace(/[.,;:]*$/, '') + '.\n');
+    t = t.replace(/<[^>]{1,80}>/g, ' ');
+    t = t.replace(/^---+$/gm, '\n');
+    t = t.replace(/^[•\-\*]\s+(.*)$/gm, (_, c) => c.trim().replace(/[.,;:]*$/, '') + '.');
+    t = t.replace(/^\d+[\.\)]\s+(.*)$/gm, (_, c) => c.trim().replace(/[.,;:]*$/, '') + '.');
+    t = t.replace(/\*+/g, '');
+    t = t.replace(/#{1,6}\s/g, '');
+    t = t.replace(/\s*—\s*/g, ', ');
+    // Espace manquant après ponctuation
+    t = t.replace(/([.!?])([A-ZÀ-Ÿa-zà-ÿ])/g, '$1 $2');
+
+    // 3. Découper sur fins de phrases ET sauts de ligne
+    const raw = t.split(/(?<=[.!?…])\s+|\n+/);
+
+    // 4. Regrouper les fragments trop courts avec le suivant
+    const parts = [];
+    let buf = '';
+    for (const chunk of raw) {
+        const c = chunk.trim();
+        if (!c) continue;
+        buf = buf ? buf + ' ' + c : c;
+        if (buf.length >= 20) { parts.push(buf); buf = ''; }
+    }
+    if (buf) parts.push(buf);
+
+    return parts.filter(s => s.length > 1);
 }
 
 async function _fetchAudio(sentence) {
@@ -5583,6 +5613,200 @@ document.getElementById('btn-update').addEventListener('click', async () => {
 document.addEventListener('click', () => {
     document.querySelectorAll('.thread-dropdown.open').forEach(d => d.classList.remove('open'));
 });
+
+// ══════════════════════════════════════════
+
+document.addEventListener('click', () => {
+    document.querySelectorAll('.thread-dropdown.open').forEach(d => d.classList.remove('open'));
+});
+
+// ══════════════════════════════════════════
+// ENRICHISSEMENT WEB (ingestion → zone de référence)
+// ══════════════════════════════════════════
+(function () {
+    var mode = 'url'; // 'url' | 'text' | 'file'
+
+    function setMode(m) {
+        mode = m;
+        var ids = { url: 'enrich-mode-url', text: 'enrich-mode-text', file: 'enrich-mode-file' };
+        Object.keys(ids).forEach(function (k) {
+            var b = document.getElementById(ids[k]);
+            if (b) b.setAttribute('aria-checked', k === m ? 'true' : 'false');
+        });
+        var titleRow = document.getElementById('enrich-title-row');
+        var fileRow = document.getElementById('enrich-file-row');
+        var input = document.getElementById('enrich-input');
+        if (titleRow) titleRow.classList.toggle('hidden', m !== 'text');
+        if (fileRow) fileRow.classList.toggle('hidden', m !== 'file');
+        if (input) {
+            input.classList.toggle('hidden', m === 'file');
+            input.placeholder = m === 'url'
+                ? 'https://exemple.org/article\nhttps://autre.org/page'
+                : "Colle ici le texte de l'article…";
+        }
+    }
+
+    function esc(s) {
+        return (s || '').replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    async function loadEnrich() {
+        var list = document.getElementById('enrich-list');
+        if (!list) return;
+        list.textContent = 'Chargement…';
+        try {
+            var refs = await fetch('/api/enrich/list').then(function (r) { return r.json(); });
+            if (!refs.length) { list.textContent = 'Aucun contenu pour le moment.'; return; }
+            list.innerHTML = '';
+            refs.forEach(function (r) {
+                var item = document.createElement('div');
+                item.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);';
+                var src = (r.source && r.source !== 'recherche')
+                    ? (r.source.indexOf('http') === 0 ? 'URL' : r.source)
+                    : 'recherche';
+                var meta = esc(src) + (r.expiration ? ' · expire le ' + esc((r.expiration || '').slice(0, 10)) : ' · permanent');
+                var info = document.createElement('div');
+                info.innerHTML = '<div style="font-weight:500;">' + esc(r.titre || '(sans titre)') + '</div>' +
+                                 '<div style="font-size:0.8rem;color:var(--text-muted);">' + meta + '</div>';
+                var del = document.createElement('button');
+                del.textContent = '🗑️';
+                del.setAttribute('aria-label', 'Supprimer ' + (r.titre || 'ce contenu'));
+                del.style.cssText = 'background:transparent;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;';
+                del.addEventListener('click', async function () {
+                    await fetch('/api/enrich/' + r.id, { method: 'DELETE' });
+                    loadEnrich();
+                });
+                item.appendChild(info);
+                item.appendChild(del);
+                list.appendChild(item);
+            });
+        } catch (e) {
+            list.textContent = 'Erreur de chargement.';
+        }
+    }
+
+    async function submitEnrich() {
+        var input = document.getElementById('enrich-input');
+        var status = document.getElementById('enrich-status');
+        status.textContent = 'Ingestion en cours…';
+        try {
+            if (mode === 'file') {
+                var fileEl = document.getElementById('enrich-file');
+                var f = fileEl && fileEl.files && fileEl.files[0];
+                if (!f) { status.textContent = 'Aucun fichier sélectionné.'; return; }
+                var fd = new FormData();
+                fd.append('file', f, f.name);
+                var forceOcr = document.getElementById('enrich-force-ocr');
+                fd.append('force_ocr', (forceOcr && forceOcr.checked) ? 'true' : 'false');
+                var resF = await fetch('/api/enrich/file', { method: 'POST', body: fd })
+                    .then(function (r) { return r.json(); });
+                status.textContent = resF.ok
+                    ? ('Fichier ajouté : ' + (resF.titre || f.name) + (resF.passages ? ' (' + resF.passages + ' passages)' : ''))
+                    : ('Échec : ' + (resF.erreur || ''));
+                fileEl.value = '';
+            } else if (mode === 'url') {
+                var raw = (input.value || '').trim();
+                if (!raw) { status.textContent = 'Rien à ingérer.'; return; }
+                var urls = raw.split('\n').map(function (u) { return u.trim(); }).filter(Boolean);
+                var ok = 0, fail = 0, last = '';
+                for (var i = 0; i < urls.length; i++) {
+                    var res = await fetch('/api/enrich/url', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: urls[i] })
+                    }).then(function (r) { return r.json(); });
+                    if (res.ok) { ok++; } else { fail++; last = res.erreur || ''; }
+                }
+                status.textContent = ok + ' page(s) ajoutée(s)' + (fail ? ', ' + fail + ' échec(s). ' + last : '.');
+                input.value = '';
+            } else {
+                var raw2 = (input.value || '').trim();
+                if (!raw2) { status.textContent = 'Rien à ingérer.'; return; }
+                var titre = (document.getElementById('enrich-title').value || '').trim();
+                var res2 = await fetch('/api/enrich/text', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ titre: titre, texte: raw2 })
+                }).then(function (r) { return r.json(); });
+                status.textContent = res2.ok
+                    ? ('Texte ajouté' + (res2.passages ? ' (' + res2.passages + ' passages)' : '') + '.')
+                    : ('Échec : ' + (res2.erreur || ''));
+                input.value = '';
+            }
+            loadEnrich();
+        } catch (e) {
+            status.textContent = 'Erreur réseau.';
+        }
+    }
+
+    var enrichModal = document.getElementById('enrich-modal');
+    var enrichTrigger = null;
+    if (enrichModal) {
+        // Restaure le focus sur le déclencheur à la fermeture — quel que soit le chemin
+        // (bouton ✕, clic sur le fond, Échap), tous basculant la classe 'hidden'.
+        new MutationObserver(function () {
+            if (enrichModal.classList.contains('hidden') && enrichTrigger) {
+                var t = enrichTrigger; enrichTrigger = null;
+                setTimeout(function () { try { t.focus(); } catch (e) {} }, 0);
+            }
+        }).observe(enrichModal, { attributes: true, attributeFilter: ['class'] });
+    }
+    document.getElementById('toggle-enrich')?.addEventListener('click', function () {
+        enrichTrigger = this;            // pour rendre le focus à la fermeture
+        setMode('url');                  // état neutre à chaque ouverture
+        var st = document.getElementById('enrich-status'); if (st) st.textContent = '';
+        enrichModal.classList.remove('hidden');
+        loadEnrich();
+        setTimeout(function () { document.getElementById('enrich-input')?.focus(); }, 50);
+    });
+    // Fermeture (bouton ✕ .close-modal, clic sur le fond, Échap) : assurée par le
+    // câblage générique des modales de l'application — pas de doublon ici.
+    document.getElementById('enrich-mode-url')?.addEventListener('click', function () { setMode('url'); });
+    document.getElementById('enrich-mode-text')?.addEventListener('click', function () { setMode('text'); });
+    document.getElementById('enrich-mode-file')?.addEventListener('click', function () { setMode('file'); });
+    document.getElementById('enrich-submit')?.addEventListener('click', submitEnrich);
+})();
+
+// ══════════════════════════════════════════
+// RACCOURCIS CLAVIER GLOBAUX (Alt+Maj+lettre)
+// ══════════════════════════════════════════
+(function () {
+    var SHORTCUTS = {
+        'c': 'toggle-history',    // Conversations
+        'a': 'toggle-agenda',     // Agenda
+        'm': 'toggle-memory',     // Mémoire
+        'g': 'toggle-galerie',    // Galerie d'images
+        'e': 'toggle-enrich',     // Enrichissement web
+        'p': 'toggle-settings'    // Paramètres
+    };
+    var LABELS = {
+        'toggle-history': 'Alt+Shift+C', 'toggle-agenda': 'Alt+Shift+A',
+        'toggle-memory': 'Alt+Shift+M', 'toggle-galerie': 'Alt+Shift+G',
+        'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P'
+    };
+    // Annonce les raccourcis aux lecteurs d'écran.
+    Object.keys(LABELS).forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.setAttribute('aria-keyshortcuts', LABELS[id]);
+    });
+    var input = document.getElementById('user-input');
+    if (input) input.setAttribute('aria-keyshortcuts', 'Alt+Shift+S');
+
+    document.addEventListener('keydown', function (e) {
+        if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
+        var k = (e.key || '').toLowerCase();
+        if (k === 's') {  // focus zone de saisie
+            e.preventDefault();
+            document.getElementById('user-input')?.focus();
+            return;
+        }
+        var id = SHORTCUTS[k];
+        if (id) {
+            var btn = document.getElementById(id);
+            if (btn) { e.preventDefault(); btn.click(); }
+        }
+    });
+})();
 
 setupSettingsTabs();
 init();

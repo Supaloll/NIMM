@@ -42,6 +42,25 @@ ENRICH_MAX_BYTES  = 2_000_000  # taille maxi de page analysée
 ENRICH_VERIFY_TLS = False  # comme le module scrap4me : tolère les certificats
                            # imparfaits pour joindre davantage de sites.
 
+# --- Cache des recherches (références web) ---
+# Réutilise un résultat déjà obtenu pour une requête proche, tant qu'il n'est pas
+# périmé : gain de temps + mémoire des recherches passées. Zone séparée de la
+# mémoire personnelle (table web_reference). Chaque entrée porte une expiration
+# fonction de la périssabilité de l'information.
+WEBCACHE_ENABLED      = True
+WEBCACHE_SIM_MIN      = 0.85  # similarité de requête mini pour réutiliser (mode vecteurs)
+WEBCACHE_TTL_DEFAULT  = 30    # jours — information « normale »
+WEBCACHE_TTL_EPHEMERE = 1     # jour  — information éphémère (météo, cours, actualité…)
+
+# Marqueurs d'information éphémère (comparés sans accents, en minuscules).
+_MOTS_EPHEMERES = {
+    "meteo", "temperature", "pluie", "neige", "vent", "cours", "bourse",
+    "action", "cotation", "prix", "tarif", "promo", "solde", "score", "match",
+    "resultat", "actualite", "news", "aujourd", "demain", "hier", "ce soir",
+    "cette semaine", "maintenant", "horaire", "trafic", "taux", "change",
+    "classement", "live", "direct",
+}
+
 # En-tête de navigateur : beaucoup de sites refusent les requêtes anonymes.
 _BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -107,7 +126,7 @@ def _compact(s: str, max_len: int = ENRICH_MAX_LEN) -> str:
         return ""
     s = re.sub(r"\s+", " ", str(s)).strip()
     if len(s) > max_len:
-        return s[: max_len - 1].rstrip() + "\u2026"
+        return s[: max_len - 1].rstrip() + "…"
     return s
 
 
@@ -162,7 +181,7 @@ def _check_url(url: str) -> str:
                              allow_redirects=True)
         if resp.status_code in (403, 405, 501):
             resp = requests.get(url, headers=headers, timeout=VERIFY_TIMEOUT,
-                                allow_redirects=True, stream=True)
+                                 allow_redirects=True, stream=True)
             resp.close()
     except requests.exceptions.RequestException:
         return "unknown"
@@ -359,157 +378,6 @@ def _brave_search(query: str, max_results: int, api_key: str, timeout: int,
     return True, "\n\n".join(results)
 
 
-# ================================================================
-# CACHE DES RECHERCHES (references web)
-# ================================================================
-
-WEBCACHE_ENABLED      = True
-WEBCACHE_SIM_MIN      = 0.85  # similarite de requete mini pour reutiliser (mode vecteurs)
-WEBCACHE_TTL_DEFAULT  = 30    # jours -- information « normale »
-WEBCACHE_TTL_EPHEMERE = 1     # jour  -- information ephemere (meteo, cours, actualite...)
-
-# Marqueurs d'information ephemere (comparés sans accents, en minuscules).
-_MOTS_EPHEMERES = {
-    "meteo", "temperature", "pluie", "neige", "vent", "cours", "bourse",
-    "action", "cotation", "prix", "tarif", "promo", "solde", "score", "match",
-    "resultat", "actualite", "news", "aujourd", "demain", "hier", "ce soir",
-    "cette semaine", "maintenant", "horaire", "trafic", "taux", "change",
-    "classement", "live", "direct",
-}
-
-
-def _strip_accents_lower(s: str) -> str:
-    import unicodedata
-    s = (s or "").lower()
-    return "".join(c for c in unicodedata.normalize("NFD", s)
-                   if unicodedata.category(c) != "Mn")
-
-def _norm_query(q: str) -> str:
-    return " ".join(_strip_accents_lower(q).split())
-
-def _ttl_jours(query: str) -> int:
-    """Duree de vie (jours) selon la perissabilite estimee de la requete."""
-    n = _norm_query(query)
-    if any(mot in n for mot in _MOTS_EPHEMERES):
-        return WEBCACHE_TTL_EPHEMERE
-    return WEBCACHE_TTL_DEFAULT
-
-def _query_vector(query: str):
-    """Embedding de la requete via le modele memoire, ou None si indisponible."""
-    try:
-        from modules.memory import _embed
-        return _embed(query)
-    except Exception:
-        return None
-
-def _cache_lookup(norm: str, qvec):
-    """Retourne le contenu memorise d'une recherche proche et non perimee, sinon None."""
-    from core.database import get_active_web_references
-    try:
-        refs = get_active_web_references()
-    except Exception:
-        return None
-    if qvec is not None:
-        from modules.memory import _parse_embedding, _cosine
-        best, best_s = None, 0.0
-        for r in refs:
-            rv, _m = _parse_embedding(r.get('embedding'))
-            if rv is None:
-                continue
-            s = _cosine(qvec, rv)
-            if s > best_s:
-                best_s, best = s, r
-        if best is not None and best_s >= WEBCACHE_SIM_MIN:
-            return best['content']
-        return None
-    # Repli sans embeddings : correspondance exacte de requete normalisee.
-    for r in refs:
-        if r.get('query_norm') == norm:
-            return r['content']
-    return None
-
-def _save_reference(query: str, norm: str, content: str, qvec, expiration):
-    """Ecrit une reference en base (expiration = ISO ou None pour permanent)."""
-    from core.database import save_web_reference
-    emb = None
-    if qvec is not None:
-        try:
-            from modules.memory import _serialize_embedding
-            emb = _serialize_embedding(qvec)
-        except Exception:
-            emb = None
-    try:
-        save_web_reference(query, norm, content, emb, expiration)
-    except Exception as e:
-        print(f"[WEBCACHE] Stockage impossible : {e}")
-
-# Taches de fond (stockage + classification), gardees pour eviter le GC premature.
-_bg_tasks = set()
-
-def _schedule_store(coro):
-    import asyncio
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    t = loop.create_task(coro)
-    _bg_tasks.add(t)
-    t.add_done_callback(_bg_tasks.discard)
-
-async def _store_task(query: str, norm: str, content: str, qvec, classify):
-    """Classe la perissabilite (LLM via `classify`, repli heuristique) puis stocke.
-    Executee en arriere-plan : n'ajoute aucune latence a la recherche."""
-    import asyncio
-    from datetime import datetime, timedelta
-    ttl = None
-    if classify is not None:
-        try:
-            ttl = await asyncio.wait_for(classify(query, content), timeout=10)
-        except Exception:
-            ttl = None
-    if ttl is None:
-        ttl = _ttl_jours(query)  # repli : heuristique par mots-cles
-    # ttl == 0 -> information permanente, pas d'expiration.
-    expiration = None if ttl == 0 else (datetime.now() + timedelta(days=ttl)).isoformat()
-    _save_reference(query, norm, content, qvec, expiration)
-
-async def search_with_cache(query: str, max_results: int = 5, classify=None) -> str:
-    """
-    Comme `search()`, mais :
-      - reutilise un resultat deja obtenu pour une requete proche et NON perimee
-        (gain de temps, memoire des recherches passees) ;
-      - memorise les nouveaux resultats EN ARRIERE-PLAN (zero latence ajoutee),
-        avec une expiration fonction de la perissabilite estimee.
-
-    `classify` (optionnel) : coroutine `classify(query, content) -> jours | 0 | None`.
-      jours > 0 = duree de vie ; 0 = permanent ; None = indetermine (repli
-      heuristique ephemere/normale). Fournie par hub (classement LLM, qui peut
-      s'appuyer sur un extrait du contenu) ; appelee uniquement en defaut de cache.
-
-    Si les embeddings sont indisponibles, repli sur une correspondance exacte de
-    requete. Tout echec du cache laisse la recherche normale se poursuivre.
-    """
-    if not WEBCACHE_ENABLED:
-        return await search(query, max_results)
-
-    norm = _norm_query(query)
-    qvec = _query_vector(query)
-
-    cached = _cache_lookup(norm, qvec)
-    if cached is not None:
-        print("[WEBCACHE] Reutilisation d'une recherche memorisee.")
-        return cached
-
-    result = await search(query, max_results)
-
-    # On ne memorise que les vraies reponses (ni erreur, ni absence de resultat),
-    # et on le fait en arriere-plan pour ne pas retarder la reponse.
-    indesirable = result.startswith("\u26a0") or result.startswith("Aucun resultat")
-    if result and not indesirable:
-        _schedule_store(_store_task(query, norm, result, qvec, classify))
-    return result
-
-
 async def search(query: str, max_results: int = 5, lang: str = None,
                  verify: bool = None, enrich: bool = None) -> str:
     """
@@ -568,4 +436,140 @@ async def search(query: str, max_results: int = 5, lang: str = None,
         except Exception:
             pass
 
+    return result
+
+
+# ════════════════════════════════════════════════════════════════════
+# CACHE DES RECHERCHES (références web)
+# ════════════════════════════════════════════════════════════════════
+
+def _strip_accents_lower(s: str) -> str:
+    import unicodedata
+    s = (s or "").lower()
+    return "".join(c for c in unicodedata.normalize("NFD", s)
+                   if unicodedata.category(c) != "Mn")
+
+def _norm_query(q: str) -> str:
+    return " ".join(_strip_accents_lower(q).split())
+
+def _ttl_jours(query: str) -> int:
+    """Durée de vie (jours) selon la périssabilité estimée de la requête."""
+    n = _norm_query(query)
+    if any(mot in n for mot in _MOTS_EPHEMERES):
+        return WEBCACHE_TTL_EPHEMERE
+    return WEBCACHE_TTL_DEFAULT
+
+def _query_vector(query: str):
+    """Embedding de la requête via le modèle mémoire, ou None si indisponible."""
+    try:
+        from modules.memory import _embed
+        return _embed(query)
+    except Exception:
+        return None
+
+def _cache_lookup(norm: str, qvec):
+    """Retourne le contenu mémorisé d'une recherche proche et non périmée, sinon None."""
+    from core.database import get_active_web_references
+    try:
+        refs = get_active_web_references()
+    except Exception:
+        return None
+    if qvec is not None:
+        from modules.memory import _parse_embedding, _cosine
+        best, best_s = None, 0.0
+        for r in refs:
+            rv, _m = _parse_embedding(r.get('embedding'))
+            if rv is None:
+                continue
+            s = _cosine(qvec, rv)
+            if s > best_s:
+                best_s, best = s, r
+        if best is not None and best_s >= WEBCACHE_SIM_MIN:
+            return best['content']
+        return None
+    # Repli sans embeddings : correspondance exacte de requête normalisée.
+    for r in refs:
+        if r.get('query_norm') == norm:
+            return r['content']
+    return None
+
+def _save_reference(query: str, norm: str, content: str, qvec, expiration):
+    """Écrit une référence en base (expiration = ISO ou None pour permanent)."""
+    from core.database import save_web_reference
+    emb = None
+    if qvec is not None:
+        try:
+            from modules.memory import _serialize_embedding
+            emb = _serialize_embedding(qvec)
+        except Exception:
+            emb = None
+    try:
+        save_web_reference(query, norm, content, emb, expiration, source="recherche")
+    except Exception as e:
+        print(f"[WEBCACHE] Stockage impossible : {e}")
+
+# Tâches de fond (stockage + classification), gardées pour éviter le GC prématuré.
+_bg_tasks = set()
+
+def _schedule_store(coro):
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    t = loop.create_task(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+
+async def _store_task(query: str, norm: str, content: str, qvec, classify):
+    """Classe la périssabilité (LLM via `classify`, repli heuristique) puis stocke.
+    Exécutée en arrière-plan : n'ajoute aucune latence à la recherche."""
+    import asyncio
+    from datetime import datetime, timedelta
+    ttl = None
+    if classify is not None:
+        try:
+            ttl = await asyncio.wait_for(classify(query, content), timeout=10)
+        except Exception:
+            ttl = None
+    if ttl is None:
+        ttl = _ttl_jours(query)  # repli : heuristique par mots-clés
+    # ttl == 0 → information permanente, pas d'expiration.
+    expiration = None if ttl == 0 else (datetime.now() + timedelta(days=ttl)).isoformat()
+    _save_reference(query, norm, content, qvec, expiration)
+
+async def search_with_cache(query: str, max_results: int = 5, classify=None) -> str:
+    """
+    Comme `search()`, mais :
+      - réutilise un résultat déjà obtenu pour une requête proche et NON périmée
+        (gain de temps, mémoire des recherches passées) ;
+      - mémorise les nouveaux résultats EN ARRIÈRE-PLAN (zéro latence ajoutée),
+        avec une expiration fonction de la périssabilité estimée.
+
+    `classify` (optionnel) : coroutine `classify(query, content) -> jours | 0 | None`.
+      jours > 0 = durée de vie ; 0 = permanent ; None = indéterminé (repli
+      heuristique éphémère/normale). Fournie par hub (classement LLM, qui peut
+      s'appuyer sur un extrait du contenu) ; appelée uniquement en défaut de cache.
+
+    Si les embeddings sont indisponibles, repli sur une correspondance exacte de
+    requête. Tout échec du cache laisse la recherche normale se poursuivre.
+    """
+    if not WEBCACHE_ENABLED:
+        return await search(query, max_results)
+
+    norm = _norm_query(query)
+    qvec = _query_vector(query)
+
+    cached = _cache_lookup(norm, qvec)
+    if cached is not None:
+        print("[WEBCACHE] ♻️ Réutilisation d'une recherche mémorisée.")
+        return cached
+
+    result = await search(query, max_results)
+
+    # On ne mémorise que les vraies réponses (ni erreur, ni absence de résultat),
+    # et on le fait en arrière-plan pour ne pas retarder la réponse.
+    indesirable = result.startswith("⚠️") or result.startswith("Aucun résultat")
+    if result and not indesirable:
+        _schedule_store(_store_task(query, norm, result, qvec, classify))
     return result

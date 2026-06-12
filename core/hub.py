@@ -129,9 +129,12 @@ def load_settings(thread_id: str = None) -> dict:
                     effective_mask_id = global_mask_id
                     print(f"[HUB] 🎭 Masque '{global_mask_id}' verrouillé — fil {thread_id[:8]}…")
 
+    local_mode = get_setting('local_mode', 'false').lower() == 'true'
     return {
-        'provider':          routing['chat'],
-        'model':             get_setting('chat_model', None) or None,
+        'provider':          'ollama' if local_mode else routing['chat'],
+        'model':             (get_setting('ollama_model', 'llama3.1:8b') or 'llama3.1:8b')
+                             if local_mode else (get_setting('chat_model', None) or None),
+        'local_mode':        local_mode,
         'mask_id':           effective_mask_id,
         'max_tokens':        int(get_setting('max_tokens', str(MAX_TOKENS_CHAT))),
         'temperature':       float(get_setting('temperature', '0.7')),

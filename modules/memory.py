@@ -649,6 +649,35 @@ def _is_prenom(s: str) -> bool:
         return False
     return True
 
+# ── Identité de l'utilisateur et genre (défini par la personne elle-même) ──
+_SELF_TOKENS = {'moi', 'je', 'utilisateur', 'user', 'soi', 'moi-meme', 'moi meme'}
+
+def _est_utilisateur(nom: str) -> bool:
+    """True si `nom` désigne l'utilisateur (jeton de soi, ou prénom déclaré)."""
+    n = (nom or '').strip().lower()
+    if n in _SELF_TOKENS:
+        return True
+    try:
+        from core.database import get_setting
+        un = (get_setting('user_name', '') or '').strip().lower()
+        return bool(un) and un != 'utilisateur' and n == un
+    except Exception:
+        return False
+
+def _genrer_fratrie(predicat_neutre: str) -> str:
+    """Genre la réciproque de fratrie selon le genre que la personne a défini
+    elle-même (réglage `user_genre`). Non défini → neutre conservé."""
+    try:
+        from core.database import get_setting
+        g = (get_setting('user_genre', '') or '').strip().lower()
+    except Exception:
+        g = ''
+    if g == 'masculin':
+        return 'frere'
+    if g == 'feminin':
+        return 'soeur'
+    return predicat_neutre
+
 def _save_symmetric(record: dict, existing: list):
     """Crée le souvenir symétrique d'une relation si applicable."""
     predicat = record.get('predicat', '')
@@ -663,11 +692,15 @@ def _save_symmetric(record: dict, existing: list):
         print(f"[MEMORY] ⏭️ Symétrique ignorée : '{objet}' n'est pas un prénom")
         return
 
+    pred_sym = normalize_predicat(PREDICATS_INVERSES[predicat])
+    # Réciproque de fratrie concernant l'utilisateur → genrer selon le genre défini par la personne.
+    if pred_sym == 'frere_ou_soeur' and _est_utilisateur(objet):
+        pred_sym = _genrer_fratrie(pred_sym)
     sym = {
         'key':             f"mem_{uuid.uuid4().hex[:8]}",
         'type':            'relation',
         'sujet':           _resolve_alias(objet),
-        'predicat':        normalize_predicat(PREDICATS_INVERSES[predicat]),
+        'predicat':        pred_sym,
         'objet':           sujet,
         'valeur':          sujet,
         'confiance':       record.get('confiance', 0.9),

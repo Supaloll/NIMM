@@ -15,15 +15,16 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260611-1">
+<link rel="stylesheet" href="/static/styles.css?v=20260611-4">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 </head>
 <body>
 
 <div id="app">
+    <h1 class="sr-only">NIMM</h1>
 
     <!-- BARRE SUPÉRIEURE -->
-    <header id="top-bar">
+    <header id="top-bar"><h2 class="sr-only">Barre d'outils</h2>
         <button id="toggle-history" title="Conversations" aria-label="Ouvrir ou fermer le panneau des conversations">
             <svg viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
                 <line x1="0" y1="2" x2="20" y2="2"/>
@@ -53,6 +54,7 @@
                     <line x1="5.5" y1="10" x2="7" y2="11.5"/><line x1="7" y1="11.5" x2="10.5" y2="9"/>
                 </svg>
             </button>
+            <button id="toggle-enrich" title="Enrichissement web" aria-label="Ouvrir l'enrichissement web"><span aria-hidden="true">🌐</span></button>
             <button id="toggle-memory" title="Mémoire" aria-label="Ouvrir la mémoire"><span aria-hidden="true">🧠</span></button>
             <button id="toggle-settings" title="Paramètres" aria-label="Ouvrir les paramètres"><span aria-hidden="true">⚙️</span></button>
         </div>
@@ -92,12 +94,12 @@
 
         <div id="sidebar-backdrop"></div>
         <!-- PANNEAU HISTORIQUE -->
-        <aside id="history-panel">
+        <aside id="history-panel"><h2 class="sr-only">Conversations</h2>
             <div id="thread-list"></div>
         </aside>
 
         <!-- ZONE CHAT -->
-        <main id="chat-area">
+        <main id="chat-area"><h2 class="sr-only">Conversation</h2>
             <div id="messages-wrap">
                 <!-- Bouton TTS flottant — dans messages-wrap, pas dans #messages (qui est vide par renderMessages) -->
                 <button id="float-tts-btn" class="float-tts-btn hidden" title="Ecouter la reponse" aria-label="Écouter la dernière réponse">
@@ -107,7 +109,7 @@
                 </div>
             </div>
 
-            <div id="input-area">
+            <div id="input-area"><h2 class="sr-only">Message</h2>
                 <div id="file-chip" style="display:none" role="status" aria-live="polite">
                     <div id="file-chip-preview"></div>
                 </div>
@@ -796,6 +798,47 @@
 <div id="drop-overlay" aria-hidden="true">
     <span>📎 Déposer le fichier ici</span>
 </div>
-<script src="/static/app.js?v=20260611-1"></script>
+<!-- MODALE ENRICHISSEMENT WEB -->
+<div id="enrich-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="enrich-modal-title" style="max-width:620px;">
+        <div class="modal-header">
+            <h3 id="enrich-modal-title"><span aria-hidden="true">🌐 </span>Enrichissement web</h3>
+            <button class="close-modal" id="enrich-close" aria-label="Fermer">✕</button>
+        </div>
+        <p style="color:var(--text-muted);font-size:0.88rem;margin:4px 0 12px;">
+            Ajoute du contenu à la zone de référence : indique des URL (une par ligne) ou colle un texte.
+            Ce contenu reste séparé de la mémoire personnelle.
+        </p>
+        <div style="display:flex;gap:8px;margin-bottom:10px;" role="radiogroup" aria-label="Type de source">
+            <button id="enrich-mode-url" class="btn-secondary" role="radio" aria-checked="true">URL (une par ligne)</button>
+            <button id="enrich-mode-text" class="btn-secondary" role="radio" aria-checked="false">Texte collé</button>
+            <button id="enrich-mode-file" class="btn-secondary" role="radio" aria-checked="false">Fichier</button>
+        </div>
+        <div id="enrich-title-row" class="hidden" style="margin-bottom:8px;">
+            <label for="enrich-title" class="sr-only">Titre du contenu collé</label>
+            <input type="text" id="enrich-title" placeholder="Titre (facultatif)"
+                   style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
+        </div>
+        <div id="enrich-file-row" class="hidden" style="margin-bottom:8px;">
+            <label for="enrich-file" class="sr-only">Fichier à ingérer</label>
+            <input type="file" id="enrich-file" accept=".pdf,.docx,.rtf,.odt,.epub,.html,.htm,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"
+                   style="width:100%;color:var(--text);">
+            <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:0.88rem;color:var(--text-muted);">
+                <input type="checkbox" id="enrich-force-ocr"> Forcer l'OCR (PDF scanné ou mixte)
+            </label>
+        </div>
+        <label for="enrich-input" class="sr-only">Contenu à ingérer</label>
+        <textarea id="enrich-input" rows="4" placeholder="https://exemple.org/article&#10;https://autre.org/page"
+                  style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;"></textarea>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+            <button id="enrich-submit" class="btn-primary" style="flex:1;">Ingérer</button>
+        </div>
+        <p id="enrich-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:8px 0;"></p>
+        <h4 style="margin:14px 0 6px;">Contenus en mémoire</h4>
+        <div id="enrich-list" aria-live="polite"></div>
+    </div>
+</div>
+
+<script src="/static/app.js?v=20260611-4"></script>
 </body>
 </html>

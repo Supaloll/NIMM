@@ -676,17 +676,20 @@ async def enrich_list():
 
 @app.post("/api/enrich/text")
 async def enrich_text(req: EnrichText):
-    import asyncio, functools
+    import asyncio, functools, contextvars
     from modules.enrichissement import ingest_text
     fn = functools.partial(ingest_text, req.titre, req.texte, source="texte")
-    return await asyncio.get_running_loop().run_in_executor(None, fn)
+    ctx = contextvars.copy_context()  # propage le contexte utilisateur au thread
+    return await asyncio.get_running_loop().run_in_executor(None, lambda: ctx.run(fn))
 
 @app.post("/api/enrich/url")
 async def enrich_url(req: EnrichUrl):
     """Scrape + ingère une URL. Le réseau est bloquant → exécuté dans un thread."""
-    import asyncio
+    import asyncio, functools, contextvars
     from modules.enrichissement import ingest_url
-    return await asyncio.get_running_loop().run_in_executor(None, ingest_url, req.url)
+    fn = functools.partial(ingest_url, req.url)
+    ctx = contextvars.copy_context()  # propage le contexte utilisateur au thread
+    return await asyncio.get_running_loop().run_in_executor(None, lambda: ctx.run(fn))
 
 @app.delete("/api/enrich/{ref_id}")
 async def enrich_delete(ref_id: int):
@@ -698,11 +701,13 @@ async def enrich_file(file: UploadFile = File(...), force_ocr: bool = Form(False
     """Ingère un fichier joint (PDF, .docx, .rtf, .odt, .epub, .html, image, texte).
     PDF image / image → OCR. `force_ocr` court-circuite l'extraction de texte des PDF.
     Traitement bloquant (lecture, OCR) → exécuté dans un thread."""
-    import os, tempfile, asyncio, functools
+    import os, tempfile, asyncio, functools, contextvars
     from modules.enrichissement import ingest_file
     from core.hub import load_settings
     data = await file.read()
-    mistral_key = (load_settings().get('api_keys') or {}).get('mistral')
+    settings = load_settings()
+    # En mode local, on force l'OCR local (Tesseract) : on n'envoie pas la clé Mistral.
+    mistral_key = None if settings.get('local_mode') else (settings.get('api_keys') or {}).get('mistral')
     suffix = os.path.splitext(file.filename or '')[1]
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(data)
@@ -710,7 +715,8 @@ async def enrich_file(file: UploadFile = File(...), force_ocr: bool = Form(False
     try:
         fn = functools.partial(ingest_file, tmp.name, file.filename,
                                mistral_key=mistral_key, force_ocr=force_ocr)
-        return await asyncio.get_running_loop().run_in_executor(None, fn)
+        ctx = contextvars.copy_context()  # propage le contexte utilisateur au thread
+        return await asyncio.get_running_loop().run_in_executor(None, lambda: ctx.run(fn))
     finally:
         try:
             os.unlink(tmp.name)
@@ -798,6 +804,33 @@ async def get_embeddings():
 async def set_embeddings(req: dict):
     val = 'true' if req.get('enabled') else 'false'
     set_setting('embeddings_enabled', val)
+    return {"status": "ok"}
+
+@app.get("/api/settings/local-mode")
+async def get_local_mode():
+    return {
+        "enabled": get_setting('local_mode', 'false') == 'true',
+        "ollama_model": get_setting('ollama_model', 'llama3.1:8b'),
+    }
+
+@app.post("/api/settings/local-mode")
+async def set_local_mode(req: dict):
+    if 'enabled' in req:
+        set_setting('local_mode', 'true' if req.get('enabled') else 'false')
+    if req.get('ollama_model'):
+        set_setting('ollama_model', str(req['ollama_model']).strip())
+    return {"status": "ok"}
+
+@app.get("/api/settings/user-genre")
+async def get_user_genre():
+    return {"genre": get_setting('user_genre', '')}
+
+@app.post("/api/settings/user-genre")
+async def set_user_genre(req: dict):
+    g = (req.get('genre') or '').strip().lower()
+    if g not in ('masculin', 'feminin', ''):
+        g = ''
+    set_setting('user_genre', g)
     return {"status": "ok"}
 
 @app.get("/api/settings/presence")

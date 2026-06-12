@@ -11,7 +11,7 @@ import threading
 import time
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Body
+from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -239,9 +239,10 @@ async def warmup_embeddings():
     def _load():
         from modules.memory import _get_model
         _get_model()
-    # run_in_executor renvoie un Future : inutile de l'envelopper dans create_task
-    # (qui attend une coroutine — l'ancien appel levait une TypeError silencieuse).
-    # Pool de threads par défaut — pas de ThreadPoolExecutor jetable jamais fermé.
+    # run_in_executor renvoie déjà un futur : inutile de l'envelopper dans
+    # create_task (qui attend une coroutine, pas un Future — l'ancien appel
+    # levait une TypeError), et on n'instancie plus un ThreadPoolExecutor
+    # jetable jamais fermé. Pool de threads par défaut.
     loop = asyncio.get_running_loop()
     loop.run_in_executor(None, _load)
     return {"status": "loading"}
@@ -659,6 +660,65 @@ async def clear_all_memory_route():
 
 
 # ══════════════════════════════════════════
+# ENRICHISSEMENT WEB (ingestion → zone de référence)
+# ══════════════════════════════════════════
+class EnrichText(BaseModel):
+    titre: str = ""
+    texte: str
+
+class EnrichUrl(BaseModel):
+    url: str
+
+@app.get("/api/enrich/list")
+async def enrich_list():
+    from modules.enrichissement import list_references
+    return list_references()
+
+@app.post("/api/enrich/text")
+async def enrich_text(req: EnrichText):
+    import asyncio, functools
+    from modules.enrichissement import ingest_text
+    fn = functools.partial(ingest_text, req.titre, req.texte, source="texte")
+    return await asyncio.get_running_loop().run_in_executor(None, fn)
+
+@app.post("/api/enrich/url")
+async def enrich_url(req: EnrichUrl):
+    """Scrape + ingère une URL. Le réseau est bloquant → exécuté dans un thread."""
+    import asyncio
+    from modules.enrichissement import ingest_url
+    return await asyncio.get_running_loop().run_in_executor(None, ingest_url, req.url)
+
+@app.delete("/api/enrich/{ref_id}")
+async def enrich_delete(ref_id: int):
+    from core.database import delete_web_reference
+    return {"ok": delete_web_reference(ref_id)}
+
+@app.post("/api/enrich/file")
+async def enrich_file(file: UploadFile = File(...), force_ocr: bool = Form(False)):
+    """Ingère un fichier joint (PDF, .docx, .rtf, .odt, .epub, .html, image, texte).
+    PDF image / image → OCR. `force_ocr` court-circuite l'extraction de texte des PDF.
+    Traitement bloquant (lecture, OCR) → exécuté dans un thread."""
+    import os, tempfile, asyncio, functools
+    from modules.enrichissement import ingest_file
+    from core.hub import load_settings
+    data = await file.read()
+    mistral_key = (load_settings().get('api_keys') or {}).get('mistral')
+    suffix = os.path.splitext(file.filename or '')[1]
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(data)
+    tmp.close()
+    try:
+        fn = functools.partial(ingest_file, tmp.name, file.filename,
+                               mistral_key=mistral_key, force_ocr=force_ocr)
+        return await asyncio.get_running_loop().run_in_executor(None, fn)
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════
 # SETTINGS
 # ══════════════════════════════════════════
 
@@ -809,8 +869,8 @@ async def save_global_keys(req: ApiKeysSetting):
             with open(_gpath, 'r', encoding='utf-8') as _f:
                 existing = json.loads(_f.read())
         except Exception as _e:
-            # Fichier présent mais illisible : refus d'écrire pour ne pas
-            # écraser un contenu existant potentiellement récupérable.
+            # Fichier présent mais illisible : on refuse d'écrire, pour ne pas
+            # écraser un contenu existant (potentiellement récupérable).
             print(f"[GLOBAL-KEYS] Lecture impossible avant écriture ({_gpath}) : {_e}")
             raise HTTPException(500, detail="Fichier de clés globales illisible — écriture annulée pour éviter une perte de données.")
     current_keys = existing.get('api_keys', {})

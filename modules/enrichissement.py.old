@@ -69,8 +69,7 @@ def ingest_text(titre, texte, source="texte", expiration=None):
     try:
         ref_id = save_web_reference(titre, _norm(titre).lower(), texte, emb, expiration, source=source)
     except Exception as e:
-        print(f"[ENRICH] Échec d'enregistrement : {e}")
-        return {"ok": False, "erreur": "Échec de l'enregistrement du document."}
+        return {"ok": False, "erreur": f"Stockage impossible : {e}"}
     # Découpage + vectorisation des passages pour la recherche par sens.
     n_passages = 0
     try:
@@ -186,8 +185,7 @@ def ingest_url(url, expiration=None):
     try:
         titre, texte = extract_url(url)
     except Exception as e:
-        print(f"[ENRICH] Échec récupération URL : {e}")
-        return {"ok": False, "erreur": "Impossible de récupérer cette page."}
+        return {"ok": False, "erreur": str(e)}
     if not texte:
         return {"ok": False, "erreur": "Aucun texte exploitable extrait (page en JavaScript ?)."}
     res = ingest_text(titre, texte, source=url, expiration=expiration)
@@ -409,10 +407,6 @@ def ingest_file(path, filename, mistral_key=None, expiration=None, force_ocr=Fal
                 texte = f.read()
         else:
             return {"ok": False, "erreur": f"Format non pris en charge : .{ext}"}
-    except RuntimeError as e:
-        # Messages déjà clairs (clé OCR manquante, dépendance, Tesseract introuvable…).
-        return {"ok": False, "erreur": str(e)}
     except Exception as e:
-        print(f"[ENRICH] Échec lecture fichier : {e}")
-        return {"ok": False, "erreur": "Impossible de lire ce fichier."}
+        return {"ok": False, "erreur": str(e)}
     return ingest_text(filename, texte, source="fichier:" + filename, expiration=expiration)

@@ -916,6 +916,10 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               répondre à une question stable, traduire ou expliquer un concept.\n'
         '                               Si des [Résultats de recherche web] apparaissent dans le message,\n'
         '                               les utiliser directement — ne pas appeler search_web à nouveau.\n'
+        '• search_documents(query)    → documents ingérés par l\'utilisateur (articles, pages, PDF, fichiers)\n'
+        '                               Appeler si l\'utilisateur évoque « mes documents », « les articles\n'
+        '                               que je t\'ai donnés », « ce que j\'ai ajouté », ou pose une question\n'
+        '                               portant sur ces contenus. Citer la source des passages utilisés.\n'
         'Appliquer la règle SONDE du lexique.\n'
     )
 
@@ -1284,33 +1288,57 @@ NIMM_TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": (
+                "Recherche dans les DOCUMENTS que l'utilisateur a lui-même ingérés "
+                "(articles, pages, PDF, fichiers) via l'enrichissement web. "
+                "Utilise cet outil quand l'utilisateur fait référence à « mes documents », "
+                "« les articles que je t'ai donnés », « ce que j'ai ajouté », ou pose une "
+                "question dont la réponse se trouve probablement dans ces contenus. "
+                "Retourne des passages pertinents avec leur source : cite la source dans ta réponse."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Mots-clés ou question pour retrouver les passages pertinents"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 
 
-# Perissabilite d'une information -> duree de vie en cache (jours ; 0 = permanent)
+# Périssabilité d'une information → durée de vie en cache (jours ; 0 = permanent)
 _PERISSABILITE_JOURS = {'ephemere': 1, 'normale': 30, 'durable': 365, 'permanente': 0}
 
-async def classify_perissabilite_jours(query: str, content: str = "") -> int | None:
-    """Estime la duree de validite de l'information repondant a `query`, via le LLM.
-    Si `content` est fourni (extrait des resultats trouves), il aide a trancher les
-    cas ou la requete seule est ambigue. Retourne un nombre de jours (0 = permanent)
-    ou None si indetermine (le cache se rabat alors sur son heuristique)."""
+async def classify_perissabilite_jours(query: str, content: str = ""):
+    """Estime la durée de validité de l'information répondant à `query`, via le LLM.
+    Si `content` est fourni (extrait des résultats trouvés), il aide à trancher les
+    cas où la requête seule est ambiguë. Retourne un nombre de jours (0 = permanent)
+    ou None si indéterminé (le cache se rabat alors sur son heuristique)."""
     try:
         settings = load_settings()
         extrait = " ".join((content or "").split())
         if len(extrait) > 800:
-            extrait = extrait[:800] + "..."
+            extrait = extrait[:800] + "…"
         prompt = (
-            "Classe la DUREE DE VALIDITE de l'information repondant a cette requete, "
+            "Classe la DURÉE DE VALIDITÉ de l'information répondant à cette requête, "
             "en UN SEUL mot parmi : ephemere, normale, durable, permanente.\n"
-            "- ephemere : quelques heures a un jour (meteo, cours de bourse, score, actualite immediate)\n"
+            "- ephemere : quelques heures à un jour (météo, cours de bourse, score, actualité immédiate)\n"
             "- normale : quelques semaines (prix, classements, tendances)\n"
-            "- durable : des mois a un an (faits recents, statistiques annuelles)\n"
-            "- permanente : intemporel (definitions, histoire, concepts, science etablie)\n"
-            "Reponds UNIQUEMENT par un de ces quatre mots.\n\n"
-            f"Requete : {query}\n"
-            + (f"Extrait des resultats trouves :\n{extrait}\n" if extrait else "")
+            "- durable : des mois à un an (faits récents, statistiques annuelles)\n"
+            "- permanente : intemporel (définitions, histoire, concepts, science établie)\n"
+            "Réponds UNIQUEMENT par un de ces quatre mots.\n\n"
+            f"Requête : {query}\n"
+            + (f"Extrait des résultats trouvés :\n{extrait}\n" if extrait else "")
         )
         reponse = await call_llm(
             messages    = [{'role': 'user', 'content': prompt}],
@@ -1326,15 +1354,15 @@ async def classify_perissabilite_jours(query: str, content: str = "") -> int | N
         mot = txt.split()[0] if txt.split() else ''
         return _PERISSABILITE_JOURS.get(mot)  # None si non reconnu
     except Exception as e:
-        print(f"[WEBCACHE] Classification perissabilite impossible : {e}")
+        print(f"[WEBCACHE] Classification périssabilité impossible : {e}")
         return None
 
 
 async def _execute_tool(name: str, args: dict) -> str:
     """
-    Execute un outil demande par le LLM et retourne le resultat en texte.
-    Appele par process_message_stream() pendant la phase tool calling.
-    Retourne toujours une chaine -- jamais None.
+    Exécute un outil demandé par le LLM et retourne le résultat en texte.
+    Appelé par process_message_stream() pendant la phase tool calling.
+    Retourne toujours une chaîne — jamais None.
     """
     query = args.get('query', '').strip()
     if not query:
@@ -1390,6 +1418,23 @@ async def _execute_tool(name: str, args: dict) -> str:
         except Exception as e:
             print(f"[HUB] ⚠️ Erreur search_web : {e}")
             return '[Erreur lors de la recherche web]'
+
+    elif name == 'search_documents':
+        try:
+            from modules.enrichissement import search_documents
+            passages = search_documents(query, k=5)
+            if not passages:
+                return "[Aucun document ingéré ne correspond à cette requête.]"
+            blocs = []
+            for p in passages:
+                titre = p.get('titre') or '(sans titre)'
+                src = p.get('source') or ''
+                blocs.append(f"[{titre} — {src}]\n{p.get('passage', '')}")
+            print(f"[HUB] 📄 Tool search_documents({query!r}) → {len(passages)} passage(s)")
+            return "\n\n".join(blocs)
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur search_documents : {e}")
+            return '[Erreur lors de la recherche documentaire]'
 
     return f'[Outil inconnu : {name}]'
 
@@ -1763,14 +1808,15 @@ async def _worker_process_user(user_id: str):
     except Exception as e:
         print(f"[WORKER] ⚠️ [{user_id}] Rattrapage embeddings : {e}")
 
-    # Purge des references web expirees (peremption de l'information)
+    # Purge des références web expirées (péremption de l'information)
     try:
         from core.database import purge_web_references
         n = purge_web_references()
         if n:
-            print(f"[WORKER] 🧹 [{user_id}] {n} reference(s) web expiree(s) purgee(s).")
+            print(f"[WORKER] 🧹 [{user_id}] {n} référence(s) web expirée(s) purgée(s).")
     except Exception as e:
-        print(f"[WORKER] ⚠️ [{user_id}] Purge references web : {e}")
+        print(f"[WORKER] ⚠️ [{user_id}] Purge références web : {e}")
+
 
 _worker_running: bool = False
 

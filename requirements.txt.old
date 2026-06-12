@@ -19,15 +19,36 @@ edge-tts>=6.1.9
 
 # ── Fichiers ──
 pypdf>=4.0.0
+python-docx>=1.1.0
+
+# ── Enrichissement web (ingestion d'articles/pages) ──
+trafilatura>=1.8.0
+striprtf>=0.0.26          # .rtf
+# .odt et .epub : lus via zip + beautifulsoup4 (déjà présent), sans dépendance ajoutée
+
+# ── OCR ──
+# OCR cloud Mistral — qualité supérieure, nécessite une clé API Mistral
+# (renseignée dans les paramètres de NIMM) :
+mistralai>=1.0.0
+# OCR local de secours, SANS clé API (plan B, rien ne quitte la machine).
+# Nécessite EN PLUS les binaires système :
+#   - tesseract-ocr (+ langue française : tesseract-ocr-fra)
+#   - poppler-utils (pour rasteriser les PDF)
+pytesseract>=0.3.10
+pdf2image>=1.17.0
+pillow>=10.0.0
 
 # ── Web search ──
 # ddgs remplacé par Brave Search API (clé configurée dans les paramètres)
 
-# ── Tests ──
-python-dotenv>=1.0.0
-
 # ── Web scraping ──
 beautifulsoup4>=4.12.0
+# Repli « rendu navigateur » pour les pages en JavaScript (optionnel).
+# Après installation du paquet : python -m playwright install chromium
+playwright>=1.44.0
+
+# ── Tests ──
+python-dotenv>=1.0.0
 
 # ── Matching flou ──
 rapidfuzz>=3.0.0

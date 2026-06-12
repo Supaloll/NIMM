@@ -977,15 +977,16 @@ function renderSidebar() {
         div.setAttribute('role', 'button');
         div.setAttribute('tabindex', '0');
         div.setAttribute('aria-label', (t.name || 'Conversation') + (t.thread_id === currentThreadId ? ', conversation active' : ''));
-        div.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); div.click(); } });
+        const _ouvrir = () => { if (isMobile()) closeSidebar(); selectThread(t.thread_id); };
+        div.addEventListener('click', (e) => {
+            if (e.target.closest('.thread-menu-btn, .thread-dropdown')) return; // pas depuis le menu
+            _ouvrir();
+        });
+        div.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _ouvrir(); } });
 
         const name = document.createElement('span');
         name.className   = 'thread-name';
         name.textContent = t.name;
-        name.addEventListener('click', () => {
-            if (isMobile()) closeSidebar();
-            selectThread(t.thread_id);
-        });
 
         // Badge onglets (desktop) ou liste puce (mobile)
         const childTabs = threads.filter(x => x.mode === `tab:${t.thread_id}`);
@@ -5792,6 +5793,13 @@ document.addEventListener('click', () => {
     var input = document.getElementById('user-input');
     if (input) input.setAttribute('aria-keyshortcuts', 'Alt+Shift+S');
 
+    function focusModal(container) {
+        if (!container || container.classList.contains('hidden')) return;
+        // Cible l'élément de dialogue (ou le conteneur) pour que le lecteur d'écran y entre.
+        var dlg = container.querySelector('[role="dialog"]') || container;
+        dlg.setAttribute('tabindex', '-1');
+        dlg.focus();
+    }
     document.addEventListener('keydown', function (e) {
         if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
         var k = (e.key || '').toLowerCase();
@@ -5803,9 +5811,75 @@ document.addEventListener('click', () => {
         var id = SHORTCUTS[k];
         if (id) {
             var btn = document.getElementById(id);
-            if (btn) { e.preventDefault(); btn.click(); }
+            if (btn) {
+                e.preventDefault();
+                btn.click();
+                // Déplace le focus dans le panneau ouvert (sinon le lecteur d'écran reste en arrière).
+                var targetId = (id === 'toggle-history') ? 'history-panel' : id.replace('toggle-', '') + '-modal';
+                setTimeout(function () { focusModal(document.getElementById(targetId)); }, 90);
+            }
         }
     });
+})();
+
+// ══════════════════════════════════════════
+// MODE LOCAL (inférence Ollama + OCR Tesseract)
+// ══════════════════════════════════════════
+(function () {
+    var toggle = document.getElementById('local-mode-toggle');
+    var modelField = document.getElementById('local-mode-model');
+    var msg = document.getElementById('local-mode-msg');
+    if (!toggle) return;
+
+    function updateMsg() {
+        if (!msg) return;
+        msg.textContent = toggle.checked
+            ? 'Activé : inférence et OCR sur la machine (plus lent, sans clé). Web actif.'
+            : '';
+    }
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/local-mode').then(function (r) { return r.json(); });
+            toggle.checked = !!d.enabled;
+            if (modelField) modelField.value = d.ollama_model || '';
+            updateMsg();
+        } catch (e) {}
+    }
+    async function save() {
+        try {
+            await fetch('/api/settings/local-mode', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: toggle.checked,
+                    ollama_model: modelField ? modelField.value.trim() : undefined
+                })
+            });
+            updateMsg();
+        } catch (e) {}
+    }
+    toggle.addEventListener('change', save);
+    if (modelField) modelField.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+// ── Genre de l'utilisateur (formulations genrées des relations) ──
+(function () {
+    var sel = document.getElementById('user-genre-select');
+    if (!sel) return;
+    async function load() {
+        try { var d = await fetch('/api/settings/user-genre').then(function (r) { return r.json(); }); sel.value = d.genre || ''; } catch (e) {}
+    }
+    sel.addEventListener('change', async function () {
+        try {
+            await fetch('/api/settings/user-genre', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ genre: sel.value })
+            });
+        } catch (e) {}
+    });
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
 })();
 
 setupSettingsTabs();
