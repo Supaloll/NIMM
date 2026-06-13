@@ -55,15 +55,15 @@ async def call_llm(
     if provider == 'anthropic':
         return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images)
     elif provider == 'deepseek':
-        return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', 'https://api.deepseek.com/v1', images=images)
+        return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', 'https://api.deepseek.com/v1')
     elif provider == 'gemini':
         return await _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys)
     elif provider == 'openai':
-        return await _call_openai_compat(messages, model or 'gpt-4o', system_prompt, max_tokens, temperature, api_keys, 'openai', 'https://api.openai.com/v1', images=images)
+        return await _call_openai_compat(messages, model or 'gpt-4o', system_prompt, max_tokens, temperature, api_keys, 'openai', 'https://api.openai.com/v1')
     elif provider == 'openrouter':
-        return await _call_openai_compat(messages, model or 'mistralai/mistral-7b-instruct', system_prompt, max_tokens, temperature, api_keys, 'openrouter', 'https://openrouter.ai/api/v1', images=images)
+        return await _call_openai_compat(messages, model or 'mistralai/mistral-7b-instruct', system_prompt, max_tokens, temperature, api_keys, 'openrouter', 'https://openrouter.ai/api/v1')
     elif provider == 'mistral':
-        return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', 'https://api.mistral.ai/v1', images=images)
+        return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', 'https://api.mistral.ai/v1')
     elif provider == 'ollama':
         return await _call_ollama(messages, model or 'llama3', system_prompt, max_tokens, temperature)
     else:
@@ -137,7 +137,7 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
 # OPENAI-COMPATIBLE (DeepSeek / OpenAI / OpenRouter)
 # ══════════════════════════════════════════
 
-async def _call_openai_compat(messages, model, system_prompt, max_tokens, temperature, api_keys, provider_name, base_url, images=None):
+async def _call_openai_compat(messages, model, system_prompt, max_tokens, temperature, api_keys, provider_name, base_url):
     api_key = get_api_key(provider_name, api_keys)
     if not api_key:
         raise ValueError(f"Clé API {provider_name} manquante.")
@@ -149,20 +149,6 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
         if m.get('role') != 'system':
             # Passer le message complet — préserve tool_calls et tool_call_id
             oai_messages.append(m)
-
-    # Vision : injecter les images dans le dernier message utilisateur (format OpenAI image_url).
-    if images:
-        for msg in reversed(oai_messages):
-            if msg.get('role') == 'user':
-                txt = msg.get('content') if isinstance(msg.get('content'), str) else ''
-                content = [{'type': 'text', 'text': txt}] if txt else []
-                for img in images:
-                    content.append({
-                        'type': 'image_url',
-                        'image_url': {'url': f"data:{img['media_type']};base64,{img['data']}"}
-                    })
-                msg['content'] = content
-                break
 
     headers = {
         'Authorization': f'Bearer {api_key}',
@@ -329,7 +315,7 @@ async def call_vision(image_b64: str, media_type: str, prompt: str,
     if provider in ('gemini', 'auto', ''):
         return await call_gemini_vision(image_b64, media_type, prompt, api_keys)
 
-    elif provider in ('anthropic', 'openai', 'ollama', 'mistral'):
+    elif provider in ('anthropic', 'openai', 'ollama'):
         images = [{'data': image_b64, 'media_type': media_type}]
         return await call_llm(
             messages=[{'role': 'user', 'content': prompt}],

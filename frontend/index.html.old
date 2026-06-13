@@ -243,7 +243,6 @@
                     <option value="anthropic" data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                     <option value="gemini"    data-needs-key="gemini">🟡 Gemini</option>
                     <option value="openai"    data-needs-key="openai">🔴 OpenAI (GPT-4o)</option>
-                    <option value="mistral"   data-needs-key="mistral">🟠 Mistral (Pixtral)</option>
                     <option value="ollama">🟢 Ollama / LLava (local)</option>
                 </select>
                 <span class="routing-warning hidden" id="warn-vision" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
