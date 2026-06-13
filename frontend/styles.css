@@ -1212,6 +1212,29 @@ body {
 
 #save-api-keys-btn:hover { background: var(--accent); }
 
+.settings-section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 24px 0 12px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.settings-section-title::before,
+.settings-section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--accent);
+    opacity: 0.5;
+}
+.settings-section-title::before {
+    flex: 0 0 12px;
+}
+
 .settings-divider {
     border: none;
     border-top: 1px solid var(--border);
