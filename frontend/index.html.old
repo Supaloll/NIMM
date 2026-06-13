@@ -206,14 +206,6 @@
                 <input type="password" id="api-key-stability-ai" placeholder="sk-...">
                 <label for="api-key-brave">Brave Search</label>
                 <input type="password" id="api-key-brave" placeholder="BSA...">
-                <label for="api-key-tavily">Tavily</label>
-                <input type="password" id="api-key-tavily" placeholder="tvly-...">
-                <label for="search-provider-select">Moteur de recherche web</label>
-                <select id="search-provider-select" class="routing-select" aria-label="Moteur de recherche web">
-                    <option value="auto">Auto (Tavily si disponible, sinon Brave)</option>
-                    <option value="tavily">Tavily</option>
-                    <option value="brave">Brave</option>
-                </select>
             </div>
             <button id="save-api-keys-btn">💾 Enregistrer les clés</button>
         </div>

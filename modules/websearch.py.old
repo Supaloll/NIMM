@@ -18,25 +18,6 @@ from concurrent.futures import ThreadPoolExecutor
 BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_TIMEOUT = 8  # secondes
 
-# Tavily — moteur de recherche pensé pour les LLM (résultats déjà nettoyés).
-TAVILY_API_URL = "https://api.tavily.com/search"
-TAVILY_TIMEOUT = 12  # secondes
-
-
-def _choose_engine(pref: str, brave_key: str, tavily_key: str):
-    """Choisit le moteur : préférence explicite si sa clé existe, sinon repli.
-    'auto' privilégie Tavily (meilleur pour un LLM) s'il a une clé."""
-    pref = (pref or 'auto').lower()
-    if pref == 'tavily' and tavily_key:
-        return 'tavily'
-    if pref == 'brave' and brave_key:
-        return 'brave'
-    if tavily_key:
-        return 'tavily'
-    if brave_key:
-        return 'brave'
-    return None
-
 # Langue appliquée par défaut quand rien n'est précisé.
 DEFAULT_LANG = "fr"
 
@@ -397,40 +378,6 @@ def _brave_search(query: str, max_results: int, api_key: str, timeout: int,
     return True, "\n\n".join(results)
 
 
-def _tavily_search(query: str, max_results: int, api_key: str, timeout: int):
-    """Recherche via l'API Tavily. Retourne (ok, texte_formaté).
-    Tavily renvoie un contenu déjà extrait par résultat → pas de scraping."""
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-    payload = {
-        "query": query,
-        "max_results": max_results,
-        "search_depth": "basic",
-        "include_answer": True,
-    }
-    try:
-        resp = requests.post(TAVILY_API_URL, headers=headers, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[WEB] Erreur Tavily : {e}")
-        return False, "⚠️ Recherche Tavily indisponible pour le moment."
-
-    results = data.get("results", []) or []
-    if not results:
-        return True, "Aucun résultat."
-
-    blocs = []
-    answer = (data.get("answer") or "").strip()
-    if answer:
-        blocs.append(f"Synthèse Tavily : {answer}")
-    for r in results:
-        titre   = (r.get("title") or "").strip()
-        url     = (r.get("url") or "").strip()
-        contenu = _compact((r.get("content") or "").strip())
-        blocs.append(f"{titre}\n{url}\n{contenu}")
-    return True, "\n\n".join(blocs)
-
-
 async def search(query: str, max_results: int = 5, lang: str = None,
                  verify: bool = None, enrich: bool = None) -> str:
     """
@@ -448,20 +395,13 @@ async def search(query: str, max_results: int = 5, lang: str = None,
     """
     from core.database import get_setting
     try:
-        keys = json.loads(get_setting('api_keys', '{}'))
+        keys    = json.loads(get_setting('api_keys', '{}'))
+        api_key = keys.get('brave', '').strip()
     except Exception:
-        keys = {}
-    brave_key  = (keys.get('brave')  or '').strip()
-    tavily_key = (keys.get('tavily') or '').strip()
-    try:
-        pref = (get_setting('search_provider', 'auto') or 'auto').strip().lower()
-    except Exception:
-        pref = 'auto'
+        api_key = ''
 
-    engine = _choose_engine(pref, brave_key, tavily_key)
-    if engine is None:
-        return ("⚠️ Aucune clé de recherche configurée — ajoute une clé Brave ou Tavily "
-                "dans ⚙️ Paramètres (brave.com/search/api ou tavily.com).")
+    if not api_key:
+        return "⚠️ Clé API Brave non configurée — ajoute-la dans ⚙️ Paramètres (brave.com/search/api)."
 
     inline_lang, query_wo_lang = _extract_lang(query)
     effective_lang = lang or inline_lang or DEFAULT_LANG
@@ -477,29 +417,22 @@ async def search(query: str, max_results: int = 5, lang: str = None,
             pass
 
     if _LOG_QUERIES:
-        print(f"[WEB] Requête {engine} : «{clean}» (langue={effective_lang}, "
+        print(f"[WEB] Requête Brave : «{clean}» (langue={effective_lang}, "
               f"enrich={do_enrich}, vérif={do_verify}, original : «{query[:60]}»)")
     else:
-        print(f"[WEB] Requête {engine} envoyée ({len(clean)} caractères, "
+        print(f"[WEB] Requête Brave envoyée ({len(clean)} caractères, "
               f"langue={effective_lang}, enrich={do_enrich}, vérif={do_verify}).")
 
     loop = asyncio.get_running_loop()
-    if engine == 'tavily':
-        ok, result = await loop.run_in_executor(
-            None, _tavily_search, clean, max_results, tavily_key, TAVILY_TIMEOUT
-        )
-        cost_provider, cost_model = 'tavily', 'tavily-search'
-    else:
-        ok, result = await loop.run_in_executor(
-            None, _brave_search, clean, max_results, brave_key, BRAVE_TIMEOUT,
-            effective_lang, do_verify, do_enrich
-        )
-        cost_provider, cost_model = 'brave', 'brave-search'
+    ok, result = await loop.run_in_executor(
+        None, _brave_search, clean, max_results, api_key, BRAVE_TIMEOUT,
+        effective_lang, do_verify, do_enrich
+    )
 
     if ok:
         try:
             from core.database import log_cost
-            log_cost(cost_provider, cost_model, 0, 0)
+            log_cost('brave', 'brave-search', 0, 0)
         except Exception:
             pass
 

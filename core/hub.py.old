@@ -179,7 +179,6 @@ def _load_api_keys() -> dict:
         'mistral':      'MISTRAL_API_KEY',
         'stability_ai': 'STABILITY_AI_API_KEY',
         'brave':        'BRAVE_API_KEY',
-        'tavily':       'TAVILY_API_KEY',
     }
     merged = {}
     for _provider, _env in _env_map.items():

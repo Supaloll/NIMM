@@ -630,7 +630,7 @@ const isAdmin = me.admin;
         <h4>🔑 Clés API globales (serveur)</h4>
         <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">Utilisées par tous les profils sans clé personnelle.</p>
         <div class="api-keys-grid">`;
-        ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily'].forEach(p => {
+        ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave'].forEach(p => {
             const label = p.replace('_',' ');
             const id    = `global-key-${p.replace('_','-')}`;
             const ph    = globalKeys[p] ? '✅ Configurée' : '❌ Non configurée';
@@ -3067,7 +3067,7 @@ async function loadSettingsIntoUI() {
         if (memorySel && routing.memory) memorySel.value = routing.memory;
 
         // Indiquer si les clés sont configurées
-        ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily'].forEach(p => {
+        ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave'].forEach(p => {
             const el = document.getElementById(`api-key-${p.replace('_','-')}`);
             if (el) el.placeholder = keys[p] ? '✅ Configurée' : '❌ Non configurée';
         });
@@ -3138,7 +3138,7 @@ async function _checkProviderBanner() {
         ]);
         const provider = routing.chat || '';
         const LOCAL    = ['ollama'];
-        const KEY_MAP  = { anthropic:'anthropic', deepseek:'deepseek', openai:'openai', gemini:'gemini', openrouter:'openrouter', mistral:'mistral', tavily:'tavily' };
+        const KEY_MAP  = { anthropic:'anthropic', deepseek:'deepseek', openai:'openai', gemini:'gemini', openrouter:'openrouter', mistral:'mistral' };
         const keyName  = KEY_MAP[provider];
         const missing  = !provider || (!LOCAL.includes(provider) && keyName && !keys[keyName]);
         document.getElementById('no-provider-banner').classList.toggle('hidden', !missing);
@@ -3662,7 +3662,7 @@ document.getElementById('memoire-mode-select')?.addEventListener('change', async
 
 // ── Clés API — bouton dédié (saisie manuelle, on ne sauvegarde pas pendant la frappe) ──
 async function _saveApiKeys() {
-    const providers = ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily'];
+    const providers = ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave'];
     const keys = {};
     providers.forEach(p => {
         const val = document.getElementById(`api-key-${p.replace('_','-')}`)?.value.trim();
@@ -3791,7 +3791,7 @@ document.getElementById('image-edit-ok')?.addEventListener('click', async () => 
 document.getElementById('save-api-keys-btn').addEventListener('click', _saveApiKeys);
 
 // Entree ou perte de focus sur un champ cle -> sauvegarde automatique
-['anthropic','deepseek','gemini','openai','openrouter','mistral','stability-ai','brave','tavily'].forEach(p => {
+['anthropic','deepseek','gemini','openai','openrouter','mistral','stability-ai','brave'].forEach(p => {
     const el = document.getElementById(`api-key-${p}`);
     if (!el) return;
     el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); _saveApiKeys(); } });
@@ -5923,25 +5923,6 @@ document.addEventListener('click', () => {
 
     toggle.addEventListener('change', save);
     if (modelSel) modelSel.addEventListener('change', save);
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-// ── Moteur de recherche web (Brave / Tavily) ──
-(function () {
-    var sel = document.getElementById('search-provider-select');
-    if (!sel) return;
-    async function load() {
-        try { var d = await fetch('/api/settings/search-provider').then(function (r) { return r.json(); }); sel.value = d.provider || 'auto'; } catch (e) {}
-    }
-    sel.addEventListener('change', async function () {
-        try {
-            await fetch('/api/settings/search-provider', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: sel.value })
-            });
-        } catch (e) {}
-    });
     document.getElementById('toggle-settings')?.addEventListener('click', load);
     load();
 })();

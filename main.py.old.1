@@ -318,7 +318,6 @@ class ApiKeysSetting(BaseModel):
     mistral:       Optional[str] = None
     stability_ai:  Optional[str] = None
     brave:         Optional[str] = None
-    tavily:        Optional[str] = None
 
 class VisionProviderSetting(BaseModel):
     provider: str
@@ -834,18 +833,6 @@ async def set_user_genre(req: dict):
     set_setting('user_genre', g)
     return {"status": "ok"}
 
-@app.get("/api/settings/search-provider")
-async def get_search_provider():
-    return {"provider": get_setting('search_provider', 'auto')}
-
-@app.post("/api/settings/search-provider")
-async def set_search_provider(req: dict):
-    p = (req.get('provider') or 'auto').strip().lower()
-    if p not in ('auto', 'brave', 'tavily'):
-        p = 'auto'
-    set_setting('search_provider', p)
-    return {"status": "ok"}
-
 @app.get("/api/settings/stt")
 async def get_stt_settings():
     return {
@@ -889,7 +876,7 @@ async def get_api_keys():
     except Exception:
         keys = {}
     # Retourner seulement si présente (booléen) — jamais la clé elle-même
-    return {p: bool(keys.get(p)) for p in ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily']}
+    return {p: bool(keys.get(p)) for p in ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave']}
 
 @app.post("/api/settings/api-keys")
 async def save_api_keys(req: ApiKeysSetting):
@@ -916,7 +903,7 @@ async def get_global_keys():
                 global_keys = json.loads(_f.read()).get('api_keys', {})
         except Exception as _e:
             print(f"[GLOBAL-KEYS] Lecture impossible ({_gpath}) : {_e}")
-    providers = ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily']
+    providers = ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave']
     return {p: bool(global_keys.get(p)) for p in providers}
 
 @app.post("/api/settings/global-keys")

@@ -28,7 +28,6 @@ def get_api_key(provider: str, db_keys: dict = None) -> Optional[str]:
         'openai':     'OPENAI_API_KEY',
         'openrouter': 'OPENROUTER_API_KEY',
         'mistral':    'MISTRAL_API_KEY',
-        'tavily':     'TAVILY_API_KEY',
     }
     return os.getenv(env_map.get(provider, ''))
 
@@ -236,36 +235,13 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
 # OLLAMA (local)
 # ══════════════════════════════════════════
 
-def _oai_msgs_to_ollama(messages):
-    """Convertit des messages au format OpenAI (y compris tool_calls d'assistant et
-    messages 'tool') vers le format Ollama (arguments en objet, pas d'id)."""
-    out = []
-    for m in messages:
-        role = m.get('role')
-        if role == 'system':
-            continue
-        if role == 'assistant' and m.get('tool_calls'):
-            tcs = []
-            for tc in m['tool_calls']:
-                fn = tc.get('function', {})
-                args = fn.get('arguments', {})
-                if isinstance(args, str):
-                    try: args = json.loads(args)
-                    except Exception: args = {}
-                tcs.append({'function': {'name': fn.get('name', ''), 'arguments': args}})
-            out.append({'role': 'assistant', 'content': m.get('content') or '', 'tool_calls': tcs})
-        elif role == 'tool':
-            out.append({'role': 'tool', 'content': m.get('content', '')})
-        else:
-            out.append({'role': role, 'content': m.get('content', '')})
-    return out
-
-
 async def _call_ollama(messages, model, system_prompt, max_tokens, temperature):
     ollama_messages = []
     if system_prompt:
         ollama_messages.append({'role': 'system', 'content': system_prompt})
-    ollama_messages.extend(_oai_msgs_to_ollama(messages))
+    for m in messages:
+        if m['role'] != 'system':
+            ollama_messages.append({'role': m['role'], 'content': m['content']})
 
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
@@ -284,52 +260,6 @@ async def _call_ollama(messages, model, system_prompt, max_tokens, temperature):
         data = r.json()
         _log('ollama', model or 'llama3', data.get('prompt_eval_count', 0), data.get('eval_count', 0))
         return data['message']['content']
-
-
-async def _ollama_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature):
-    """Phase 1 Ollama : un appel avec outils. Émet soit un événement tool_calls,
-    soit le texte en tokens. Ollama accepte le format d'outils OpenAI tel quel."""
-    ollama_messages = []
-    if system_prompt:
-        ollama_messages.append({'role': 'system', 'content': system_prompt})
-    ollama_messages.extend(_oai_msgs_to_ollama(messages))
-
-    async with httpx.AsyncClient(timeout=180) as client:
-        r = await client.post(
-            'http://localhost:11434/api/chat',
-            json={
-                'model':    model or 'llama3.1',
-                'messages': ollama_messages,
-                'tools':    tools,
-                'stream':   False,
-                'options':  {'num_predict': max_tokens, 'temperature': temperature},
-            }
-        )
-        r.raise_for_status()
-        data = r.json()
-
-    msg = data.get('message', {}) or {}
-    _log('ollama', model or 'llama3.1', data.get('prompt_eval_count', 0), data.get('eval_count', 0))
-    tcs = msg.get('tool_calls') or []
-    if tcs:
-        calls, oai_tcs = [], []
-        for i, tc in enumerate(tcs):
-            fn   = tc.get('function', {})
-            name = fn.get('name', '')
-            args = fn.get('arguments', {})
-            if isinstance(args, str):
-                try: args = json.loads(args)
-                except Exception: args = {}
-            cid = f"ollama_{i}_{name}"
-            calls.append({'name': name, 'args': args, 'id': cid})
-            oai_tcs.append({
-                'id': cid, 'type': 'function',
-                'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)}
-            })
-        assistant_msg = {'role': 'assistant', 'content': msg.get('content') or '', 'tool_calls': oai_tcs}
-        yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
-    else:
-        yield {'type': 'token', 'text': msg.get('content', '')}
 
 
 # ══════════════════════════════════════════
@@ -610,19 +540,14 @@ async def call_llm_stream_with_tools(
       {"type": "tool_calls", "calls": [...],
        "assistant_msg": {...}}                  → outil demandé, arrêter le stream
 
-    Pour les providers encore non supportés (Anthropic, Gemini) :
+    Pour les providers non supportés (Anthropic, Gemini, Ollama) :
     → fallback silencieux : yield uniquement des tokens normaux (pas de tool calling).
     """
     provider = provider.lower()
 
-    if provider == 'ollama':
-        async for ev in _ollama_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature):
-            yield ev
-        return
-
     _SUPPORTED = {'deepseek', 'openai', 'openrouter', 'mistral'}
     if provider not in _SUPPORTED:
-        # Fallback : stream normal sans tools (Anthropic, Gemini — à venir)
+        # Fallback : stream normal sans tools
         async for token in call_llm_stream(
             messages=messages,
             provider=provider,

@@ -1,0 +1,53 @@
+**NIMM — Session de tests mémoire du 13/06/2026**
+
+**Objectif**
+Mesurer ce que NIMM capture réellement en mémoire quand on lui parle de quelqu'un, selon 5 niveaux de précision croissante :
+- Niveau 1 : faits simples (âge, école)
+- Niveau 2 : faits chiffrés (6 ans de pratique, 4 compétitions)
+- Niveau 3 : traits de caractère (douce, émotive, manque d'agressivité)
+- Niveau 4 : nuances techniques (gagne aux points plutôt que par ippon)
+- Niveau 5 : anecdotes narratives (finale perdue d'un point, fair-play)
+
+---
+
+**Résultats par provider**
+
+| Provider | Score | Observations |
+|---|---|---|
+| DeepSeek Chat | 50% | Capture bien les faits simples. Invente des prédicats libres au lieu des canoniques. Perd les nuances. |
+| Anthropic Haiku | 50% | Même score mais meilleure qualité : chiffres mieux isolés, **une anecdote capturée** (la finale). |
+| Mistral Small | 21% | Un peu moins bon que Deepseek sur la précision. Peut être le modèle est trop léger pour ce type de tâches. |
+
+---
+
+**Ce qui passe bien chez tous les providers**
+- Faits d'identité simples : âge, école, sport pratiqué
+- Relations familiales
+- Événements concrets nommés explicitement
+
+**Ce qui résiste à l'extraction**
+- Les qualités positives (`douce`) — le prompt guide mal cette catégorie
+- Les durées de pratique (`6 ans de judo`) — pas de prédicat canonique prévu
+- Les nuances comparatives (`ippon vs décision`) — rejetées par la règle d'autonomie du triplet
+- Les émotions du narrateur (`fier`) — filtrées car registre "émotionnel"
+
+**Bonne surprise**
+Haiku a produit une anecdote complète sur la finale perdue — exactement le bon endroit pour les informations narratives que les triplets ne peuvent pas capturer.
+
+---
+
+**Conclusions techniques**
+
+1. **L'architecture triplets est la bonne** — comparée aux approches vectorielles pures, elle reste lisible, corrigeable et dédupliquable. Les vecteurs servent à la *recherche*, pas au *stockage*.
+
+2. **Le problème n'est pas le format, c'est le prompt** — le prompt d'extraction ne guide pas assez le LLM sur les traits positifs, les durées, et les nuances narratives.
+
+3. **Les anecdotes sont sous-exploitées** — le mécanisme existe, fonctionne, mais le prompt ne pousse pas assez le LLM à les utiliser pour les informations qui débordent des triplets.
+
+4. **Mistral Small n'est pas adapté** à la tâche d'extraction structurée dans NIMM.
+
+---
+
+**Prochaine étape envisagée**
+Améliorer le prompt d'extraction dans `hub.py` pour combler les trous identifiés — sans toucher à l'architecture.
+
