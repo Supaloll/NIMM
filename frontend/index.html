@@ -15,7 +15,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260612-2">
+<link rel="stylesheet" href="/static/styles.css?v=20260613-1">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 </head>
 <body>
@@ -403,6 +403,33 @@
                 <option value="masculin">Masculin</option>
                 <option value="feminin">Féminin</option>
             </select>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <!-- ── DICTÉE VOCALE ── -->
+        <div class="setting-group">
+            <label>🎙️ Dictée vocale (Whisper)</label>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="stt-enabled-toggle" aria-label="Activer la dictée vocale Whisper">
+                    <span class="toggle-slider"></span>
+                </label>
+                <span style="font-size:0.78rem;color:var(--text-muted);">
+                    Active le bouton micro et charge Whisper au démarrage.<br>
+                    <em>Désactiver libère la RAM si vous n'utilisez pas la dictée.</em>
+                </span>
+            </div>
+            <div id="stt-model-row" style="margin-top:8px;">
+                <label for="stt-model-select" style="display:block;font-size:0.78rem;color:var(--text-muted);margin-bottom:4px;">Modèle Whisper</label>
+                <select id="stt-model-select" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
+                    <option value="tiny">tiny — 390 Mo</option>
+                    <option value="base">base — 1 Go</option>
+                    <option value="small">small — 2 Go</option>
+                    <option value="medium">medium — 5 Go</option>
+                    <option value="large">large — 10 Go</option>
+                </select>
+            </div>
         </div>
 
         <div class="settings-divider"></div>
@@ -875,6 +902,6 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260612-2"></script>
+<script src="/static/app.js?v=20260613-1"></script>
 </body>
 </html>

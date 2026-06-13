@@ -27,12 +27,20 @@ except ImportError:
 
 
 class STTModule:
-    MODEL_SIZE = "base"
+    MODEL_SIZE = "base"  # fallback si DB inaccessible
 
     def __init__(self, hub):
         self.hub         = hub
         self.module_name = "stt"
         self._model      = None
+        # Lire le modele configure depuis la DB
+        try:
+            from core.database import get_setting
+            configured = get_setting('stt_model', self.MODEL_SIZE)
+            if configured in ('tiny', 'base', 'small', 'medium', 'large'):
+                self.MODEL_SIZE = configured
+        except Exception:
+            pass  # fallback sur base
 
     def _get_model(self):
         if self._model is None:

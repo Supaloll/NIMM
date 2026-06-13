@@ -5882,5 +5882,50 @@ document.addEventListener('click', () => {
     load();
 })();
 
+// -- Dictee vocale (STT Whisper) --
+(function () {
+    var toggle    = document.getElementById('stt-enabled-toggle');
+    var modelSel  = document.getElementById('stt-model-select');
+    var modelRow  = document.getElementById('stt-model-row');
+    if (!toggle) return;
+
+    function applyVisibility(enabled) {
+        // Bouton micro desktop
+        if (micBtn) micBtn.style.display = enabled ? '' : 'none';
+        // Bouton micro mobile
+        var mobileBtn = document.getElementById('mobile-mic-btn');
+        if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
+        // Afficher/masquer le selecteur de modele
+        if (modelRow) modelRow.style.display = enabled ? '' : 'none';
+    }
+
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/stt').then(function (r) { return r.json(); });
+            toggle.checked = !!d.enabled;
+            if (modelSel) modelSel.value = d.model || 'base';
+            applyVisibility(!!d.enabled);
+        } catch (e) {}
+    }
+
+    async function save() {
+        try {
+            await fetch('/api/settings/stt', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: toggle.checked,
+                    model:   modelSel ? modelSel.value : 'base'
+                })
+            });
+            applyVisibility(toggle.checked);
+        } catch (e) {}
+    }
+
+    toggle.addEventListener('change', save);
+    if (modelSel) modelSel.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
 setupSettingsTabs();
 init();

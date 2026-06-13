@@ -833,6 +833,21 @@ async def set_user_genre(req: dict):
     set_setting('user_genre', g)
     return {"status": "ok"}
 
+@app.get("/api/settings/stt")
+async def get_stt_settings():
+    return {
+        "enabled": get_setting('stt_enabled', 'true').lower() == 'true',
+        "model":   get_setting('stt_model', 'base'),
+    }
+
+@app.post("/api/settings/stt")
+async def set_stt_settings(req: dict):
+    if 'enabled' in req:
+        set_setting('stt_enabled', 'true' if req.get('enabled') else 'false')
+    if req.get('model') in ('tiny', 'base', 'small', 'medium', 'large'):
+        set_setting('stt_model', req['model'])
+    return {"status": "ok"}
+
 @app.get("/api/settings/presence")
 async def get_presence():
     return {"value": int(get_setting('presence', '5'))}
@@ -1362,9 +1377,15 @@ def get_stt():
 def _warmup_stt():
     """Préchauffage Whisper en arrière-plan au démarrage.
     _stt_ready n'est True que lorsque le modèle Whisper est effectivement chargé.
+    Respecte le réglage stt_enabled : si False, skip le chargement.
     """
     global _stt_ready
     try:
+        from core.database import get_setting
+        stt_enabled = get_setting('stt_enabled', 'true').lower() == 'true'
+        if not stt_enabled:
+            print("[NIMM] STT désactivé dans les réglages -- Whisper non chargé.")
+            return
         stt = get_stt()
         stt._get_model()       # charge le modèle Whisper maintenant, dans ce thread
         _stt_ready = True
