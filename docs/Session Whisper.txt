@@ -1,0 +1,35 @@
+Le message est suffisamment clair pour Cline — il a le contexte, les valeurs exactes, et la logique.
+
+Mais pour une session "projet" propre, voilà une version plus structurée à coller directement :
+
+---
+
+**NIMM — Dictée vocale optionnelle et configurable**
+
+**Objectif :** Rendre Whisper optionnel via les réglages utilisateur, avec choix du modèle et affichage de la RAM consommée.
+
+**Comportement attendu :**
+
+- Dans la page des réglages, ajouter un toggle ON/OFF **"Dictée vocale"**
+- Si OFF → Whisper ne se charge pas au démarrage, bouton micro absent de l'interface
+- Si ON → Whisper se charge au démarrage du serveur (comportement actuel), bouton micro présent
+
+**En face du toggle, un sélecteur de modèle :**
+- `tiny` — 390 Mo
+- `base` — 1 Go
+- `small` — 2 Go
+- `medium` — 5 Go
+- `large` — 10 Go
+
+La RAM affichée est indicative, visible directement dans l'interface pour guider le choix.
+
+**Ce qui change dans le code :**
+- Ajouter `STT_ENABLED` et `STT_MODEL` dans la config
+- `modules/stt.py` lit ces deux valeurs au démarrage
+- Frontend masque/affiche le bouton micro selon `STT_ENABLED`
+
+**Ce qui ne change pas :** toute la logique de transcription existante reste identique.
+
+---
+
+Ça suffira pour que Cline s'y retrouve sans ambiguïté.
