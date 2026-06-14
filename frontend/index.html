@@ -105,8 +105,9 @@
                 <button id="float-tts-btn" class="float-tts-btn hidden" title="Ecouter la reponse" aria-label="Écouter la dernière réponse">
                     <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.5h2.5l4-3v11l-4-3H2z"/><path d="M10.5 5.5a3.5 3.5 0 0 1 0 5"/><path d="M12.5 3.5a6 6 0 0 1 0 9"/></svg>
                 </button>
-                <div id="messages" role="log" aria-live="polite" aria-label="Zone de conversation">
+                <div id="messages" role="log" aria-live="off" aria-label="Zone de conversation">
                 </div>
+                <div id="sr-stream-status" class="sr-only" role="status" aria-live="polite"></div>
             </div>
 
             <div id="input-area"><h2 class="sr-only">Message</h2>

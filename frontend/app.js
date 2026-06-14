@@ -2125,6 +2125,15 @@ function _startBretzelAnim(svg, loader) {
     loader._cancelAnim = () => cancelAnimationFrame(rafId);
 }
 
+// ── Annonce lecteur d'écran (zone live discrète, hors flux affiché) ──
+function _srAnnounce(text) {
+    const el = document.getElementById('sr-stream-status');
+    if (!el) return;
+    el.textContent = '';
+    // Forcer la ré-annonce même si le texte est identique au précédent
+    requestAnimationFrame(() => { el.textContent = text; });
+}
+
 function showLoader() {
     const loader = document.createElement('div');
     loader.id        = 'thinking-loader';
@@ -2156,6 +2165,8 @@ function showLoader() {
 
     // Démarrer l'animation après insertion dans le DOM (getTotalLength() requiert le DOM)
     requestAnimationFrame(() => _startBretzelAnim(svg, loader));
+
+    _srAnnounce('NIMM réfléchit…');
 }
 
 function removeLoader() {
@@ -2649,6 +2660,7 @@ async function _triggerStream(content, conversationId) {
         if (!_userScrolledUp) messagesDiv.scrollTop = messagesDiv.scrollHeight;
         const finalContent = bubble.textContent;
         _updateFloatTTS(finalContent, div);
+        _srAnnounce('NIMM t\'a répondu.');
 
         // Brancher le bouton TTS individuel de cette bulle
         streamTtsBtn.addEventListener('click', (e) => {
@@ -2712,6 +2724,7 @@ async function _triggerStream(content, conversationId) {
     } catch(e) {
         removeLoader();
         appendAssistantMessage('❌ Erreur de connexion au serveur.', 'neutre', false);
+        _srAnnounce('Erreur de connexion au serveur.');
         console.error('[NIMM] Erreur stream :', e);
     }
 }
