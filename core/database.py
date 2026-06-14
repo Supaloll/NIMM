@@ -469,6 +469,14 @@ def init_db(user_id: str = None):
     except Exception:
         pass  # Colonne déjà présente — normal au redémarrage
 
+    # Migration douce — embedding pour la recherche dans les conversations
+    try:
+        c.execute('ALTER TABLE messages ADD COLUMN embedding TEXT')
+        conn.commit()
+        print("[DB] Colonne embedding (messages) ajoutée.")
+    except Exception:
+        pass  # Colonne déjà présente — normal au redémarrage
+
     # ── Résumé OS (Operating Summary) — table conservée pour rétrocompat, plus écrite ──
     c.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
@@ -1262,6 +1270,41 @@ def count_messages(thread_id: str) -> int:
     ).fetchone()[0]
     conn.close()
     return n
+
+
+# ══════════════════════════════════════════
+# RECHERCHE DANS LES CONVERSATIONS (embeddings)
+# ══════════════════════════════════════════
+
+def save_message_embedding(message_id: int, embedding: str) -> None:
+    """Enregistre l'embedding (sérialisé) d'un message existant."""
+    conn = get_conn()
+    conn.execute('UPDATE messages SET embedding = ? WHERE id = ?', (embedding, message_id))
+    conn.commit()
+    conn.close()
+
+def get_messages_missing_embedding(limit: int = 50) -> list:
+    """Messages sans embedding (texte non vide), pour rattrapage progressif."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, content FROM messages "
+        "WHERE (embedding IS NULL OR embedding = '') AND content IS NOT NULL AND content != '' "
+        "ORDER BY id DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_all_message_embeddings() -> list:
+    """Tous les messages disposant d'un embedding, avec le nom de leur fil."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT m.id, m.thread_id, m.role, m.content, m.created_at, m.embedding, t.name AS thread_name "
+        "FROM messages m JOIN threads t ON t.thread_id = m.thread_id "
+        "WHERE m.embedding IS NOT NULL AND m.embedding != ''"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 def count_memories() -> int:
     """Retourne le nombre total de souvenirs — pour le radar uniquement."""

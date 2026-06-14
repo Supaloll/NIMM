@@ -754,6 +754,28 @@
     </div>
 </div>
 
+<!-- MODALE RECHERCHE DANS LES CONVERSATIONS -->
+<div id="search-conversations-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="search-conversations-title" style="max-width:620px;">
+        <div class="modal-header">
+            <h3 id="search-conversations-title">🔎 Recherche dans les conversations</h3>
+            <button class="close-modal" aria-label="Fermer la recherche">✕</button>
+        </div>
+
+        <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 12px;">
+            Recherche par sens dans l'historique de tous vos fils.
+        </p>
+
+        <label for="search-conversations-input" class="sr-only">Rechercher dans les conversations</label>
+        <input id="search-conversations-input" type="search" placeholder="Rechercher dans vos conversations…"
+               style="width:100%;margin-bottom:14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+
+        <div id="search-conversations-results">
+            <p style="color:var(--text-muted);font-size:0.85rem;">Tapez quelques mots pour chercher dans vos conversations.</p>
+        </div>
+    </div>
+</div>
+
 <!-- ── Modal création de fil ── -->
 <div id="new-thread-modal" class="modal-overlay hidden">
     <div class="modal-box" role="dialog" aria-modal="true" style="max-width:340px;">

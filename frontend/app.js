@@ -1171,6 +1171,14 @@ function renderSidebar() {
     promptBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque de prompts');
     promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Prompts';
     threadList.appendChild(promptBtn);
+
+    const searchBtn = document.createElement('button');
+    searchBtn.id        = 'toggle-search-conversations';
+    searchBtn.className = 'sidebar-section-btn';
+    searchBtn.title     = 'Recherche dans les conversations';
+    searchBtn.setAttribute('aria-label', 'Ouvrir la recherche dans les conversations');
+    searchBtn.innerHTML = '<span aria-hidden="true">🔎</span> Recherche';
+    threadList.appendChild(searchBtn);
 }
 
 async function selectThread(threadId) {
@@ -4449,6 +4457,10 @@ document.addEventListener('click', (e) => {
         loadPromptLibrary();
         setTimeout(() => { if (!_isMobile()) document.getElementById('prompt-save-current-btn')?.focus(); }, 50);
     }
+    if (e.target.closest('#toggle-search-conversations')) {
+        document.getElementById('search-conversations-modal').classList.remove('hidden');
+        setTimeout(() => { if (!_isMobile()) document.getElementById('search-conversations-input')?.focus(); }, 50);
+    }
 });
 
 // Recherche dans la bibliothèque
@@ -4799,6 +4811,81 @@ document.getElementById('prompt-save-current-btn').addEventListener('click', asy
         console.error('[PROMPTS] Erreur enregistrement :', err);
         alert('❌ Erreur lors de l\'enregistrement : ' + err.message);
     }
+});
+
+// ══════════════════════════════════════════
+// RECHERCHE DANS LES CONVERSATIONS (par sens)
+// ══════════════════════════════════════════
+
+const ROLE_LABELS = { user: 'Vous', assistant: 'NIMM' };
+
+async function runConversationSearch(query) {
+    const list = document.getElementById('search-conversations-results');
+    query = (query || '').trim();
+    if (!query) {
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Tapez quelques mots pour chercher dans vos conversations.</p>';
+        return;
+    }
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Recherche…</p>';
+    try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&k=8`);
+        if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
+        const { resultats } = await res.json();
+        if (!resultats || resultats.length === 0) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun résultat.</p>';
+            return;
+        }
+        list.innerHTML = '';
+        resultats.forEach(r => list.appendChild(renderSearchResult(r)));
+    } catch (err) {
+        console.error('[RECHERCHE] Erreur recherche :', err);
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur lors de la recherche.</p>';
+    }
+}
+
+function renderSearchResult(r) {
+    const div = document.createElement('button');
+    div.className = 'biblio-entry';
+    div.style.display = 'block';
+    div.style.width = '100%';
+    div.style.textAlign = 'left';
+    div.style.padding = '10px 14px';
+    div.style.background = 'none';
+    div.style.border = '1px solid var(--border)';
+    div.style.borderRadius = '8px';
+    div.style.marginBottom = '8px';
+    div.style.cursor = 'pointer';
+    div.style.color = 'var(--text)';
+
+    const titre = document.createElement('div');
+    titre.style.fontWeight = '600';
+    titre.style.fontSize = '0.9rem';
+    titre.style.marginBottom = '4px';
+    const role = ROLE_LABELS[r.role] || r.role || '';
+    titre.textContent = `${r.thread_name || '(fil sans nom)'} — ${role}`;
+
+    const extrait = document.createElement('div');
+    extrait.style.color = 'var(--text-muted)';
+    extrait.style.fontSize = '0.82rem';
+    extrait.style.whiteSpace = 'pre-wrap';
+    extrait.textContent = r.content || '';
+
+    div.appendChild(titre);
+    div.appendChild(extrait);
+
+    div.addEventListener('click', async () => {
+        document.getElementById('search-conversations-modal').classList.add('hidden');
+        await selectThread(r.thread_id);
+    });
+
+    return div;
+}
+
+let _searchConversationsTimer = null;
+document.getElementById('search-conversations-input').addEventListener('input', (e) => {
+    clearTimeout(_searchConversationsTimer);
+    const valeur = e.target.value;
+    _searchConversationsTimer = setTimeout(() => runConversationSearch(valeur), 400);
 });
 
 

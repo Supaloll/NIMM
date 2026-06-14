@@ -883,6 +883,12 @@ async def delete_prompt_route(prompt_id: str):
     delete_prompt(prompt_id)
     return {"status": "ok"}
 
+@app.get("/api/search")
+async def search_conversations_route(q: str = "", k: int = 8):
+    """Recherche par sens dans l'historique des conversations (embeddings)."""
+    from modules.recherche import search_conversations
+    return {"resultats": search_conversations(q, k)}
+
 @app.get("/api/settings/length")
 async def get_length():
     return {"value": int(get_setting('max_tokens', '3500'))}
