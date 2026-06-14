@@ -185,7 +185,36 @@
         <!-- ── CONTENU ONGLET PARAMÈTRES ── -->
         <div id="settings-tab-params" class="settings-tab-content" role="tabpanel" aria-labelledby="tab-btn-params">
 
-        <div class="settings-section-title">🔑 Connexions</div>
+        <!-- ── PRÉRÉGLAGES ── -->
+        <details class="settings-section-details" open>
+        <summary class="settings-section-title">🧩 Préréglages</summary>
+        <div class="settings-section">
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <label for="preset-select" style="font-size:0.82rem;color:var(--text-muted);">Préréglage :</label>
+                <select id="preset-select" class="routing-select" aria-label="Préréglage enregistré" style="flex:1;min-width:160px;">
+                    <option value="">— aucun préréglage enregistré —</option>
+                </select>
+                <button id="preset-apply-btn" type="button">▶ Appliquer</button>
+                <button id="preset-delete-btn" type="button">🗑️ Supprimer</button>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+                <label for="preset-name-input" style="font-size:0.82rem;color:var(--text-muted);">Nouveau nom :</label>
+                <input type="text" id="preset-name-input" placeholder="ex : Confidentiel (Mistral local)"
+                       aria-label="Nom du préréglage à créer à partir des réglages actuels"
+                       style="flex:1;min-width:160px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-main);font-size:0.85rem;">
+                <button id="preset-save-btn" type="button">💾 Enregistrer la config actuelle</button>
+            </div>
+            <div id="preset-status" role="status" aria-live="polite" style="font-size:0.78rem;color:var(--text-muted);margin-top:6px;"></div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                Un préréglage retient : fournisseur/modèle de chat, routage par tâche, masque, mode local, niveau de mémorisation, longueur des réponses, moteur de recherche.
+            </div>
+        </div>
+        </details>
+
+        <div class="settings-divider"></div>
+
+        <details class="settings-section-details" open>
+        <summary class="settings-section-title">🔑 Connexions</summary>
 
         <!-- ── CLÉS API ── -->
         <div class="settings-section">
@@ -311,9 +340,12 @@
             </div>
         </div>
 
+        </details>
+
         <div class="settings-divider"></div>
 
-        <div class="settings-section-title">🎭 Personnalité</div>
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🎭 Personnalité</summary>
 
         <!-- ── PERSONNALITÉ ── -->
         <div class="setting-group">
@@ -369,9 +401,12 @@
             </div>
         </div>
 
+        </details>
+
         <div class="settings-divider"></div>
 
-        <div class="settings-section-title">🎙️ Voix</div>
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🎙️ Voix</summary>
 
         <div class="setting-group">
             <label>🔊 Voix TTS</label>
@@ -381,9 +416,12 @@
             </div>
         </div>
 
+        </details>
+
         <div class="settings-divider"></div>
 
-        <div class="settings-section-title">⚙️ Avancé</div>
+        <details class="settings-section-details">
+        <summary class="settings-section-title">⚙️ Avancé</summary>
 
         <div class="setting-group">
             <label>📏 Longueur des réponses</label>
@@ -504,9 +542,12 @@
             </div>
         </div>
 
+        </details>
+
         <div class="settings-divider"></div>
 
-        <div class="settings-section-title">🎨 Apparence</div>
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🎨 Apparence</summary>
 
         <!-- ── POLICE ── -->
         <div class="setting-group">
@@ -557,6 +598,8 @@
             </button>
             <div id="update-status" style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);"></div>
         </div>
+
+        </details>
 
         </div><!-- /settings-tab-params -->
 

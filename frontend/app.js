@@ -3158,6 +3158,88 @@ async function loadSettingsIntoUI() {
     }
 }
 
+// ══════════════════════════════════════════
+// PRÉRÉGLAGES (presets de configuration)
+// ══════════════════════════════════════════
+
+async function loadPresetsIntoUI() {
+    const sel = document.getElementById('preset-select');
+    if (!sel) return;
+    try {
+        const data = await fetch('/api/presets').then(r => r.json());
+        const names = Object.keys(data.presets || {}).sort((a, b) => a.localeCompare(b, 'fr'));
+        const previous = sel.value;
+        sel.innerHTML = names.length
+            ? names.map(n => `<option value="${n}">${n}</option>`).join('')
+            : '<option value="">— aucun préréglage enregistré —</option>';
+        if (names.includes(previous)) sel.value = previous;
+    } catch(e) {
+        console.error('[NIMM] Erreur chargement préréglages :', e);
+    }
+}
+
+document.getElementById('preset-save-btn')?.addEventListener('click', async () => {
+    const input  = document.getElementById('preset-name-input');
+    const status = document.getElementById('preset-status');
+    const name   = (input?.value || '').trim();
+    if (!name) {
+        if (status) status.textContent = 'Indique un nom pour le préréglage.';
+        return;
+    }
+    try {
+        await fetch('/api/presets', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+        if (input) input.value = '';
+        await loadPresetsIntoUI();
+        const sel = document.getElementById('preset-select');
+        if (sel) sel.value = name;
+        if (status) status.textContent = `Préréglage « ${name} » enregistré à partir des réglages actuels.`;
+    } catch(e) {
+        if (status) status.textContent = "Erreur lors de l'enregistrement du préréglage.";
+    }
+});
+
+document.getElementById('preset-apply-btn')?.addEventListener('click', async () => {
+    const sel    = document.getElementById('preset-select');
+    const status = document.getElementById('preset-status');
+    const name   = sel?.value;
+    if (!name) {
+        if (status) status.textContent = 'Choisis un préréglage à appliquer.';
+        return;
+    }
+    try {
+        const res = await fetch(`/api/presets/${encodeURIComponent(name)}/apply`, { method: 'POST' });
+        if (!res.ok) throw new Error('apply failed');
+        if (status) status.textContent = `Préréglage « ${name} » appliqué. Mise à jour des réglages…`;
+        // Recharge tous les panneaux de réglages (routage, masque, mode local,
+        // moteur de recherche, etc.) en redéclenchant les chargeurs liés à
+        // l'ouverture de la fenêtre Paramètres.
+        document.getElementById('toggle-settings')?.dispatchEvent(new Event('click'));
+        if (status) status.textContent = `Préréglage « ${name} » appliqué.`;
+    } catch(e) {
+        if (status) status.textContent = "Erreur lors de l'application du préréglage.";
+    }
+});
+
+document.getElementById('preset-delete-btn')?.addEventListener('click', async () => {
+    const sel    = document.getElementById('preset-select');
+    const status = document.getElementById('preset-status');
+    const name   = sel?.value;
+    if (!name) {
+        if (status) status.textContent = 'Choisis un préréglage à supprimer.';
+        return;
+    }
+    try {
+        await fetch(`/api/presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        await loadPresetsIntoUI();
+        if (status) status.textContent = `Préréglage « ${name} » supprimé.`;
+    } catch(e) {
+        if (status) status.textContent = 'Erreur lors de la suppression du préréglage.';
+    }
+});
+
 async function _checkProviderBanner() {
     try {
         const [keys, routing] = await Promise.all([
@@ -3191,6 +3273,7 @@ document.getElementById('toggle-settings').addEventListener('click', async () =>
     document.getElementById('settings-modal').classList.remove('hidden');
     setTimeout(() => { document.querySelector('#settings-modal .close-modal')?.focus(); }, 50);
     loadSettingsIntoUI();
+    loadPresetsIntoUI();
     loadVoices();
     // Charger l'état embeddings
     try {

@@ -31,7 +31,8 @@ from core.database import (
     check_auto_resets,
     set_user_context, get_current_user,
     get_all_users, create_user, delete_user, update_user,
-    save_image, get_images, rename_image, delete_image
+    save_image, get_images, rename_image, delete_image,
+    list_presets, save_preset, delete_preset, apply_preset
 )
 from core.hub import process_message, memory_worker
 
@@ -795,6 +796,36 @@ async def save_routing(req: RoutingSetting):
     if 'vision' in updates: set_setting('vision_provider', updates['vision'])
     if 'image'  in updates: set_setting('image_provider',  updates['image'])
     return {"status": "ok", "routing": current}
+
+class PresetSaveRequest(BaseModel):
+    name: str
+
+@app.get("/api/presets")
+async def get_presets():
+    """Liste les préréglages enregistrés (nom -> config + date)."""
+    return {"presets": list_presets()}
+
+@app.post("/api/presets")
+async def post_preset(req: PresetSaveRequest):
+    """Enregistre (ou remplace) un preset à partir des réglages actuels."""
+    name = (req.name or '').strip()
+    if not name:
+        raise HTTPException(400, "Nom de préréglage requis.")
+    config = save_preset(name)
+    return {"status": "ok", "name": name, "config": config}
+
+@app.delete("/api/presets/{name}")
+async def delete_preset_route(name: str):
+    delete_preset(name)
+    return {"status": "ok"}
+
+@app.post("/api/presets/{name}/apply")
+async def apply_preset_route(name: str):
+    """Réapplique un preset enregistré aux réglages courants."""
+    config = apply_preset(name)
+    if config is None:
+        raise HTTPException(404, "Préréglage introuvable.")
+    return {"status": "ok", "config": config}
 
 @app.get("/api/settings/length")
 async def get_length():

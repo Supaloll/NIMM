@@ -1561,6 +1561,60 @@ def set_setting(key: str, value: str):
 
 
 # ══════════════════════════════════════════
+# PRÉRÉGLAGES (presets de configuration)
+# ══════════════════════════════════════════
+
+# Clés de `settings` qui composent un preset (provider/modèle, routage par
+# tâche, masque, mode local, niveau de mémorisation, longueur des réponses…).
+PRESET_KEYS = [
+    'provider', 'chat_model', 'vision_provider', 'image_provider',
+    'provider_routing', 'mask_id', 'local_mode', 'ollama_model',
+    'memoire_mode', 'max_tokens', 'search_provider', 'presence',
+]
+
+def list_presets() -> dict:
+    """Retourne {nom: {config: {...}, created_at: ...}} pour tous les presets."""
+    raw = get_setting('presets', '{}')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_preset(name: str) -> dict:
+    """Enregistre (ou remplace) un preset à partir des réglages actuels.
+    Retourne la config enregistrée."""
+    presets = list_presets()
+    config = {}
+    for k in PRESET_KEYS:
+        v = get_setting(k)
+        if v is not None:
+            config[k] = v
+    presets[name] = {
+        'config': config,
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+    }
+    set_setting('presets', json.dumps(presets, ensure_ascii=False))
+    return config
+
+def delete_preset(name: str) -> None:
+    presets = list_presets()
+    if name in presets:
+        del presets[name]
+        set_setting('presets', json.dumps(presets, ensure_ascii=False))
+
+def apply_preset(name: str):
+    """Réapplique un preset enregistré. Retourne sa config, ou None si absent."""
+    presets = list_presets()
+    entry = presets.get(name)
+    if not entry:
+        return None
+    for k, v in entry.get('config', {}).items():
+        set_setting(k, v)
+    return entry.get('config', {})
+
+
+# ══════════════════════════════════════════
 # MÉMOIRE
 # ══════════════════════════════════════════
 
