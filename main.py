@@ -6,6 +6,7 @@
 import uuid
 import json
 import os
+import re
 import asyncio
 import threading
 import time
@@ -288,6 +289,10 @@ class ProviderSetting(BaseModel):
 
 class MaskSetting(BaseModel):
     mask_id: str
+
+class MaskSaveRequest(BaseModel):
+    name:  str
+    emoji: Optional[str] = None
 
 class LengthSetting(BaseModel):
     value: int
@@ -1165,6 +1170,49 @@ async def list_masks():
     except Exception as e:
         return []
     return result
+
+
+@app.post("/api/masks/save")
+async def save_mask_from_potards(req: MaskSaveRequest):
+    """Crée un masque personnalisé (fichier JSON) à partir de l'état actuel
+    des curseurs (potards), pour pouvoir le réutiliser ensuite tel quel."""
+    from core.hub import load_potards, build_potards_prompt
+
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Nom manquant.")
+    emoji = (req.emoji or '🎛️').strip() or '🎛️'
+
+    import unicodedata
+    mask_id = unicodedata.normalize('NFD', name.lower())
+    mask_id = ''.join(c for c in mask_id if unicodedata.category(c) != 'Mn')
+    mask_id = re.sub(r'\s+', '_', mask_id)
+    mask_id = re.sub(r'[^a-z0-9_]', '', mask_id) or 'masque_perso'
+
+    masks_dir = os.path.join(os.path.dirname(__file__), 'modules', 'masks')
+    os.makedirs(masks_dir, exist_ok=True)
+
+    # Éviter d'écraser un masque existant sous le même id
+    base_id = mask_id
+    n = 2
+    while os.path.exists(os.path.join(masks_dir, f'{mask_id}.json')):
+        mask_id = f'{base_id}_{n}'
+        n += 1
+
+    potards = load_potards()
+    system_prompt = build_potards_prompt(potards)
+
+    data = {
+        'name':          name,
+        'emoji':         emoji,
+        'id':            mask_id,
+        'nom':           name,
+        'system_prompt': system_prompt,
+    }
+    with open(os.path.join(masks_dir, f'{mask_id}.json'), 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return {'id': mask_id, 'label': f"{name} {emoji}".strip()}
 
 
 # ══════════════════════════════════════════

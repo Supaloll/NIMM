@@ -326,6 +326,19 @@
                 <div id="potards-wtf" class="hidden">
                 </div>
 
+                <!-- Sauvegarder l'état actuel des curseurs comme masque -->
+                <div style="margin-top:14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                    <label for="potards-save-name" style="font-size:0.8rem;color:var(--text-muted);">Nom du masque :</label>
+                    <input type="text" id="potards-save-name" placeholder="ex : Mon réglage du soir"
+                           aria-label="Nom du masque à créer à partir des curseurs actuels"
+                           style="flex:1;min-width:140px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-main);font-size:0.85rem;">
+                    <button id="potards-save-btn" type="button"
+                            style="padding:6px 12px;border-radius:6px;background:var(--accent);color:#000;border:none;cursor:pointer;font-size:0.8rem;font-weight:600;">
+                        💾 Enregistrer comme masque
+                    </button>
+                </div>
+                <div id="potards-save-status" role="status" aria-live="polite" style="font-size:0.78rem;color:var(--text-muted);margin-top:4px;"></div>
+
             </div>
         </div>
 

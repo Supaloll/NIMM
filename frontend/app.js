@@ -3513,6 +3513,36 @@ async function _initPotards() {
         });
     }
 
+    // Sauvegarder l'état actuel des curseurs comme masque personnalisé
+    const saveBtn    = document.getElementById('potards-save-btn');
+    const saveInput  = document.getElementById('potards-save-name');
+    const saveStatus = document.getElementById('potards-save-status');
+    if (saveBtn && !saveBtn.dataset.bound) {
+        saveBtn.dataset.bound = '1';
+        saveBtn.addEventListener('click', async () => {
+            const name = (saveInput?.value || '').trim();
+            if (!name) {
+                if (saveStatus) saveStatus.textContent = '⚠️ Donne un nom au masque avant d\'enregistrer.';
+                saveInput?.focus();
+                return;
+            }
+            if (saveStatus) saveStatus.textContent = 'Enregistrement…';
+            try {
+                const r = await fetch('/api/masks/save', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                if (!r.ok) throw new Error('Échec');
+                const mask = await r.json();
+                if (saveStatus) saveStatus.textContent = `✅ Masque « ${name} » enregistré (utilisable depuis le mode Masque).`;
+                if (saveInput) saveInput.value = '';
+                _maskCache[mask.id] = mask.label;
+            } catch (e) {
+                if (saveStatus) saveStatus.textContent = '❌ Erreur lors de l\'enregistrement du masque.';
+            }
+        });
+    }
+
     // Appliquer le mode actuel
     _applyModeUI(mode);
 }
