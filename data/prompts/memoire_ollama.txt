@@ -1,0 +1,28 @@
+Conversation entre {{USER_NAME}} et un assistant :
+
+{{CONV_TEXT}}
+
+Tâche : repérer les faits importants sur {{USER_NAME}} (ou sur un proche nommé avec son lien, ex: "ma femme Nadia").
+
+Règles simples :
+- Ignore tout ce qui parle d'une personne publique, d'un personnage, ou d'un sujet sans lien avec {{USER_NAME}}.
+- Si rien d'important : réponds [].
+- Sinon, réponds avec une liste JSON. Un objet par fait.
+
+Chaque objet a CES champs, et uniquement ceux-là :
+{"registre": "neutre", "type": "trait", "sujet": "...", "predicat": "...", "objet": "...", "memoire_type": "autre", "profondeur": 2, "type_temporal": "persistant", "contexte": ""}
+
+- "registre" : presque toujours "neutre". Mets "emotionnel" seulement si le message est écrit avec colère ou en majuscules.
+- "sujet" : le prénom ({{USER_NAME}} ou le prénom du proche), jamais "je".
+- "predicat" : un seul mot simple, par exemple : domicile, metier, age, conjoint, enfant, aime, n_aime_pas, sport, loisir, probleme_sante, projet, qualite.
+- "objet" : la réponse courte, qui se comprend seule.
+- "memoire_type" : un mot parmi identite, famille, preference, loisir, sante, travail, autre.
+- "profondeur" : un nombre entre 1 et 5.
+- "type_temporal" : permanent, persistant, episodique ou engagement.
+- "contexte" : laisse "" si tu ne sais pas quoi mettre.
+
+Exemple :
+Phrase : "J'habite à Lyon et j'aime le foot."
+Réponse : [{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"domicile","objet":"Lyon","memoire_type":"identite","profondeur":2,"type_temporal":"permanent","contexte":""},{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"aime","objet":"le foot","memoire_type":"preference","profondeur":1,"type_temporal":"persistant","contexte":""}]
+
+Réponds UNIQUEMENT avec la liste JSON. Pas de texte avant, pas de texte après, pas de ```.

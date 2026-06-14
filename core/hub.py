@@ -1659,17 +1659,31 @@ _MEMOIRE_PROMPT_FALLBACK = (
     "Réponds UNIQUEMENT avec le tableau JSON."
 )
 
-def _load_memoire_prompt_template(provider: str) -> str:
+def _model_slug(model: str) -> str:
+    """Normalise un nom de modèle pour un nom de fichier
+    (ex: 'mistral-small-latest' -> 'mistral_small_latest', 'llama3.1:8b' -> 'llama3_1_8b')."""
+    return re.sub(r'[^a-z0-9]+', '_', (model or '').lower()).strip('_')
+
+
+def _load_memoire_prompt_template(provider: str, model: str = None) -> str:
     """
-    Charge le gabarit de prompt d'extraction mémoire, avec variante par fournisseur
-    (data/prompts/memoire_<provider>.txt), repli sur memoire_default.txt, puis sur
+    Charge le gabarit de prompt d'extraction mémoire, avec variante par sous-modèle
+    (data/prompts/memoire_<provider>_<modele>.txt), repli sur la variante par
+    fournisseur (memoire_<provider>.txt), puis sur memoire_default.txt, puis sur
     un gabarit minimal en dur si aucun fichier n'est trouvé.
     """
-    cache_key = provider or 'default'
+    slug = _model_slug(model)
+    cache_key = f"{provider or 'default'}:{slug}"
     if cache_key in _memoire_prompt_cache:
         return _memoire_prompt_cache[cache_key]
 
-    for fname in (f'memoire_{provider}.txt', 'memoire_default.txt'):
+    candidates = []
+    if slug:
+        candidates.append(f'memoire_{provider}_{slug}.txt')
+    candidates.append(f'memoire_{provider}.txt')
+    candidates.append('memoire_default.txt')
+
+    for fname in candidates:
         path = _os_prompts.path.join(_PROMPTS_DIR, fname)
         if _os_prompts.path.exists(path):
             try:
@@ -1710,7 +1724,8 @@ async def extract_memories_from_window(messages: list, settings: dict) -> int:
     )
 
     provider_mem, model_mem = get_task_provider_model('memoire', settings)
-    template = _load_memoire_prompt_template(provider_mem)
+    from core.engine import _resolve_model
+    template = _load_memoire_prompt_template(provider_mem, _resolve_model(provider_mem, model_mem))
     prompt = template.replace('{{USER_NAME}}', user_name).replace('{{CONV_TEXT}}', conv_text)
 
     try:
