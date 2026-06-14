@@ -37,6 +37,42 @@ def get_api_key(provider: str, db_keys: dict = None) -> Optional[str]:
 # APPEL LLM PRINCIPAL
 # ══════════════════════════════════════════
 
+_PROVIDER_DEFAULT_MODEL = {
+    'anthropic':  'claude-opus-4-5',
+    'deepseek':   'deepseek-chat',
+    'openai':     'gpt-4o-mini',
+    'openrouter': 'openai/gpt-4o-mini',
+    'mistral':    'mistral-small-latest',
+    'gemini':     'gemini-1.5-flash',
+    'ollama':     'llama3.1:8b',
+}
+
+# Préfixe de nom de modèle → fournisseur propriétaire (détection d'incohérence)
+_MODEL_OWNER = {
+    'claude': 'anthropic', 'deepseek': 'deepseek', 'gpt': 'openai',
+    'o1': 'openai', 'o3': 'openai', 'o4': 'openai',
+    'mistral': 'mistral', 'ministral': 'mistral', 'pixtral': 'mistral', 'codestral': 'mistral',
+    'gemini': 'gemini',
+}
+
+
+def _resolve_model(provider, model):
+    """Évite les 400 « modèle invalide » au changement de fournisseur : si le modèle
+    sélectionné appartient visiblement à un autre fournisseur, on retombe sur le
+    modèle par défaut du fournisseur courant. Les modèles inconnus (tags Ollama,
+    modèles OpenRouter en vendor/x) sont laissés intacts."""
+    provider = (provider or '').lower()
+    if not model:
+        return _PROVIDER_DEFAULT_MODEL.get(provider)
+    if provider == 'openrouter':
+        return model
+    ml = model.lower()
+    for prefix, owner in _MODEL_OWNER.items():
+        if ml.startswith(prefix):
+            return model if owner == provider else _PROVIDER_DEFAULT_MODEL.get(provider, model)
+    return model
+
+
 async def call_llm(
     messages: list,
     provider: str = 'anthropic',
@@ -52,6 +88,7 @@ async def call_llm(
     Retourne le texte de la réponse.
     """
     provider = provider.lower()
+    model = _resolve_model(provider, model)
 
     if provider == 'anthropic':
         return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images)
@@ -75,6 +112,53 @@ async def call_llm(
 # ANTHROPIC
 # ══════════════════════════════════════════
 
+def _oai_tools_to_anthropic(tools):
+    """Schéma d'outils OpenAI → Anthropic (input_schema = parameters)."""
+    out = []
+    for t in tools or []:
+        fn = t.get('function', t)
+        out.append({
+            'name':         fn.get('name', ''),
+            'description':  fn.get('description', ''),
+            'input_schema': fn.get('parameters', {'type': 'object', 'properties': {}}),
+        })
+    return out
+
+
+def _oai_msgs_to_anthropic(messages):
+    """Messages OpenAI (tool_calls d'assistant, messages 'tool') → format Anthropic :
+    blocs tool_use dans l'assistant, tool_result regroupés dans un message user."""
+    out = []
+    for m in messages:
+        role = m.get('role')
+        if role == 'system':
+            continue
+        if role == 'assistant' and m.get('tool_calls'):
+            blocks = []
+            if m.get('content'):
+                blocks.append({'type': 'text', 'text': m['content']})
+            for tc in m['tool_calls']:
+                fn = tc.get('function', {})
+                args = fn.get('arguments', {})
+                if isinstance(args, str):
+                    try: args = json.loads(args)
+                    except Exception: args = {}
+                blocks.append({'type': 'tool_use', 'id': tc.get('id', ''),
+                               'name': fn.get('name', ''), 'input': args})
+            out.append({'role': 'assistant', 'content': blocks})
+        elif role == 'tool':
+            block = {'type': 'tool_result', 'tool_use_id': m.get('tool_call_id', ''),
+                     'content': m.get('content', '')}
+            if (out and out[-1]['role'] == 'user' and isinstance(out[-1]['content'], list)
+                    and out[-1]['content'] and out[-1]['content'][0].get('type') == 'tool_result'):
+                out[-1]['content'].append(block)
+            else:
+                out.append({'role': 'user', 'content': [block]})
+        else:
+            out.append({'role': role, 'content': m.get('content', '')})
+    return out
+
+
 async def _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images):
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
@@ -82,19 +166,13 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
 
     model = model or 'claude-opus-4-5'
 
-    # Construire les messages au format Anthropic
-    anthropic_messages = []
-    for m in messages:
-        role = m['role']
-        content = m['content']
-        if role == 'system':
-            continue  # géré via system_prompt
-        anthropic_messages.append({'role': role, 'content': content})
+    # Construire les messages au format Anthropic (gère tool_use / tool_result)
+    anthropic_messages = _oai_msgs_to_anthropic(messages)
 
     # Injecter les images dans le dernier message user si présentes
     if images and anthropic_messages:
         last = anthropic_messages[-1]
-        if last['role'] == 'user':
+        if last['role'] == 'user' and isinstance(last['content'], str):
             content_blocks = []
             for img in images:
                 content_blocks.append({
@@ -131,7 +209,55 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
         data = r.json()
         usage = data.get('usage', {})
         _log('anthropic', model, usage.get('input_tokens', 0), usage.get('output_tokens', 0))
-        return data['content'][0]['text']
+        return ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+
+
+async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
+    """Phase 1 Anthropic : un appel avec outils. Émet soit un événement tool_calls,
+    soit le texte en tokens."""
+    api_key = get_api_key('anthropic', api_keys)
+    if not api_key:
+        raise ValueError("Clé API Anthropic manquante.")
+    model = model or 'claude-opus-4-5'
+
+    payload = {
+        'model':       model,
+        'max_tokens':  max_tokens,
+        'temperature': temperature,
+        'messages':    _oai_msgs_to_anthropic(messages),
+        'tools':       _oai_tools_to_anthropic(tools),
+    }
+    if system_prompt:
+        payload['system'] = system_prompt
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
+            json=payload
+        )
+        r.raise_for_status()
+        data = r.json()
+
+    usage = data.get('usage', {})
+    _log('anthropic', model, usage.get('input_tokens', 0), usage.get('output_tokens', 0))
+    content = data.get('content', []) or []
+    tool_uses = [b for b in content if b.get('type') == 'tool_use']
+    if tool_uses:
+        calls, oai_tcs = [], []
+        for b in tool_uses:
+            calls.append({'name': b.get('name', ''), 'args': b.get('input', {}) or {}, 'id': b.get('id', '')})
+            oai_tcs.append({
+                'id': b.get('id', ''), 'type': 'function',
+                'function': {'name': b.get('name', ''),
+                             'arguments': json.dumps(b.get('input', {}) or {}, ensure_ascii=False)}
+            })
+        text = ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
+        assistant_msg = {'role': 'assistant', 'content': text, 'tool_calls': oai_tcs}
+        yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
+    else:
+        text = ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
+        yield {'type': 'token', 'text': text}
 
 
 # ══════════════════════════════════════════
@@ -195,6 +321,61 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
 # GEMINI
 # ══════════════════════════════════════════
 
+def _oai_tools_to_gemini(tools):
+    """Schéma d'outils OpenAI → Gemini (functionDeclarations).
+    Les schémas de paramètres NIMM (type/properties/required/description) sont
+    acceptés tels quels par Gemini."""
+    decls = []
+    for t in tools or []:
+        fn   = t.get('function', t)
+        decl = {'name': fn.get('name', ''), 'description': fn.get('description', '')}
+        params = fn.get('parameters')
+        if params and params.get('properties'):
+            decl['parameters'] = params
+        decls.append(decl)
+    return [{'functionDeclarations': decls}]
+
+
+def _oai_msgs_to_gemini(messages):
+    """Messages OpenAI (tool_calls d'assistant, messages 'tool') → contents Gemini.
+    Un tool_call devient un part functionCall dans un content 'model' ; un message
+    'tool' devient un part functionResponse dans un content 'user'. Gemini exige le
+    nom de la fonction dans functionResponse : on le retrouve via la carte id→nom
+    bâtie à partir des tool_calls de l'assistant."""
+    out = []
+    id_to_name = {}
+    for m in messages:
+        role = m.get('role')
+        if role == 'system':
+            continue
+        if role == 'assistant' and m.get('tool_calls'):
+            parts = []
+            if m.get('content'):
+                parts.append({'text': m['content']})
+            for tc in m['tool_calls']:
+                fn   = tc.get('function', {})
+                name = fn.get('name', '')
+                args = fn.get('arguments', {})
+                if isinstance(args, str):
+                    try: args = json.loads(args)
+                    except Exception: args = {}
+                id_to_name[tc.get('id', '')] = name
+                parts.append({'functionCall': {'name': name, 'args': args or {}}})
+            out.append({'role': 'model', 'parts': parts})
+        elif role == 'tool':
+            name = id_to_name.get(m.get('tool_call_id', ''), '')
+            out.append({'role': 'user', 'parts': [{
+                'functionResponse': {
+                    'name':     name,
+                    'response': {'result': m.get('content', '')},
+                }
+            }]})
+        else:
+            gem_role = 'user' if role == 'user' else 'model'
+            out.append({'role': gem_role, 'parts': [{'text': m.get('content', '') or ''}]})
+    return out
+
+
 async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys):
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
@@ -202,16 +383,8 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
 
     model = model or 'gemini-2.0-flash'
 
-    # Convertir au format Gemini
-    contents = []
-    for m in messages:
-        if m['role'] == 'system':
-            continue
-        role = 'user' if m['role'] == 'user' else 'model'
-        contents.append({'role': role, 'parts': [{'text': m['content']}]})
-
     payload = {
-        'contents': contents,
+        'contents': _oai_msgs_to_gemini(messages),
         'generationConfig': {
             'maxOutputTokens': max_tokens,
             'temperature':     temperature,
@@ -229,7 +402,58 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
         data = r.json()
         meta = data.get('usageMetadata', {})
         _log('gemini', model, meta.get('promptTokenCount', 0), meta.get('candidatesTokenCount', 0))
-        return data['candidates'][0]['content']['parts'][0]['text']
+        parts = (data.get('candidates') or [{}])[0].get('content', {}).get('parts', []) or []
+        return ''.join(p.get('text', '') for p in parts if 'text' in p)
+
+
+async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
+    """Phase 1 Gemini : un appel avec outils. Émet soit un événement tool_calls,
+    soit le texte en tokens."""
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        raise ValueError("Clé API Gemini manquante.")
+    model = model or 'gemini-2.0-flash'
+
+    payload = {
+        'contents': _oai_msgs_to_gemini(messages),
+        'tools':    _oai_tools_to_gemini(tools),
+        'generationConfig': {
+            'maxOutputTokens': max_tokens,
+            'temperature':     temperature,
+        }
+    }
+    if system_prompt:
+        payload['systemInstruction'] = {'parts': [{'text': system_prompt}]}
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(
+            f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}',
+            json=payload
+        )
+        r.raise_for_status()
+        data = r.json()
+
+    meta = data.get('usageMetadata', {})
+    _log('gemini', model, meta.get('promptTokenCount', 0), meta.get('candidatesTokenCount', 0))
+    parts  = (data.get('candidates') or [{}])[0].get('content', {}).get('parts', []) or []
+    fcalls = [p['functionCall'] for p in parts if 'functionCall' in p]
+    if fcalls:
+        calls, oai_tcs = [], []
+        for i, fc in enumerate(fcalls):
+            name = fc.get('name', '')
+            args = fc.get('args', {}) or {}
+            cid  = f"gemini_{i}_{name}"
+            calls.append({'name': name, 'args': args, 'id': cid})
+            oai_tcs.append({
+                'id': cid, 'type': 'function',
+                'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)}
+            })
+        text = ''.join(p.get('text', '') for p in parts if 'text' in p)
+        assistant_msg = {'role': 'assistant', 'content': text, 'tool_calls': oai_tcs}
+        yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
+    else:
+        text = ''.join(p.get('text', '') for p in parts if 'text' in p)
+        yield {'type': 'token', 'text': text}
 
 
 # ══════════════════════════════════════════
@@ -546,6 +770,7 @@ async def call_llm_stream(
 ):
     """Stream de tokens — génère les tokens un par un."""
     provider = provider.lower()
+    model = _resolve_model(provider, model)
     _accumulated = []
 
     try:
@@ -610,19 +835,30 @@ async def call_llm_stream_with_tools(
       {"type": "tool_calls", "calls": [...],
        "assistant_msg": {...}}                  → outil demandé, arrêter le stream
 
-    Pour les providers encore non supportés (Anthropic, Gemini) :
+    Pour le provider encore non supporté (Gemini) :
     → fallback silencieux : yield uniquement des tokens normaux (pas de tool calling).
     """
     provider = provider.lower()
+    model = _resolve_model(provider, model)
 
     if provider == 'ollama':
         async for ev in _ollama_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature):
             yield ev
         return
 
+    if provider == 'anthropic':
+        async for ev in _anthropic_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
+            yield ev
+        return
+
+    if provider == 'gemini':
+        async for ev in _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
+            yield ev
+        return
+
     _SUPPORTED = {'deepseek', 'openai', 'openrouter', 'mistral'}
     if provider not in _SUPPORTED:
-        # Fallback : stream normal sans tools (Anthropic, Gemini — à venir)
+        # Fallback : stream normal sans tools (providers sans tool-calling)
         async for token in call_llm_stream(
             messages=messages,
             provider=provider,
