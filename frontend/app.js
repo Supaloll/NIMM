@@ -1034,6 +1034,22 @@ function renderSidebar() {
             renderSidebar();
         });
 
+        // Exporter en Markdown
+        const expItem = document.createElement('button');
+        expItem.className = 'thread-dropdown-item';
+        expItem.setAttribute('role', 'menuitem');
+        expItem.textContent = 'Exporter en Markdown';
+        expItem.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdown.classList.remove('open');
+            const a = document.createElement('a');
+            a.href = `/api/threads/${t.thread_id}/export`;
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        });
+
         // Epingler
         const pinItem = document.createElement('button');
         pinItem.className = 'thread-dropdown-item';
@@ -1086,6 +1102,7 @@ function renderSidebar() {
         });
 
         dropdown.appendChild(renItem);
+        dropdown.appendChild(expItem);
         dropdown.appendChild(pinItem);
         dropdown.appendChild(delItem);
 
@@ -1146,6 +1163,14 @@ function renderSidebar() {
     biblBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque');
     biblBtn.innerHTML = '<span aria-hidden="true">📚</span> Bibliothèque';
     threadList.appendChild(biblBtn);
+
+    const promptBtn = document.createElement('button');
+    promptBtn.id        = 'toggle-prompt-library';
+    promptBtn.className = 'sidebar-section-btn';
+    promptBtn.title     = 'Bibliothèque de prompts';
+    promptBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque de prompts');
+    promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Prompts';
+    threadList.appendChild(promptBtn);
 }
 
 async function selectThread(threadId) {
@@ -4419,6 +4444,11 @@ document.addEventListener('click', (e) => {
         loadBibliotheque();
         setTimeout(() => { if (!_isMobile()) document.getElementById('biblio-search')?.focus(); }, 50);
     }
+    if (e.target.closest('#toggle-prompt-library')) {
+        document.getElementById('prompt-library-modal').classList.remove('hidden');
+        loadPromptLibrary();
+        setTimeout(() => { if (!_isMobile()) document.getElementById('prompt-save-current-btn')?.focus(); }, 50);
+    }
 });
 
 // Recherche dans la bibliothèque
@@ -4626,6 +4656,151 @@ function renderBiblioEntry(entry) {
 
     return div;
 }
+
+// ══════════════════════════════════════════
+// BIBLIOTHÈQUE DE PROMPTS
+// ══════════════════════════════════════════
+
+async function loadPromptLibrary() {
+    const list = document.getElementById('prompt-library-list');
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Chargement…</p>';
+    try {
+        const res = await fetch('/api/prompts');
+        if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
+        const { prompts } = await res.json();
+        const ids = Object.keys(prompts || {});
+        if (ids.length === 0) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun prompt enregistré pour le moment.</p>';
+            return;
+        }
+        ids.sort((a, b) => (prompts[a].label || '').localeCompare(prompts[b].label || ''));
+        list.innerHTML = '';
+        ids.forEach(id => list.appendChild(renderPromptEntry(id, prompts[id])));
+    } catch (err) {
+        console.error('[PROMPTS] Erreur chargement :', err);
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur de chargement.</p>';
+    }
+}
+
+function renderPromptEntry(id, entry) {
+    const div = document.createElement('div');
+    div.className = 'biblio-entry';
+    div.style.padding = '10px 14px';
+    div.style.display = 'flex';
+    div.style.justifyContent = 'space-between';
+    div.style.alignItems = 'flex-start';
+    div.style.gap = '8px';
+
+    const info = document.createElement('div');
+    info.style.flex = '1';
+    const titre = document.createElement('div');
+    titre.style.fontWeight = '600';
+    titre.style.fontSize = '0.95rem';
+    titre.style.marginBottom = '4px';
+    titre.textContent = entry.label || '(sans titre)';
+    const extrait = document.createElement('div');
+    extrait.style.color = 'var(--text-muted)';
+    extrait.style.fontSize = '0.82rem';
+    extrait.style.whiteSpace = 'pre-wrap';
+    const texte = entry.text || '';
+    extrait.textContent = texte.length > 160 ? texte.slice(0, 160) + '…' : texte;
+    info.appendChild(titre);
+    info.appendChild(extrait);
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.flexDirection = 'column';
+    actions.style.gap = '4px';
+
+    const useBtn = document.createElement('button');
+    useBtn.title = 'Utiliser ce prompt';
+    useBtn.setAttribute('aria-label', `Utiliser le prompt ${entry.label || ''}`);
+    useBtn.style.background = 'none';
+    useBtn.style.border = '1px solid var(--border)';
+    useBtn.style.borderRadius = '6px';
+    useBtn.style.cursor = 'pointer';
+    useBtn.style.fontSize = '0.78rem';
+    useBtn.style.padding = '3px 8px';
+    useBtn.style.color = 'var(--text-muted)';
+    useBtn.textContent = '▶ Utiliser';
+    useBtn.addEventListener('click', () => usePromptFromLibrary(entry.text || ''));
+
+    const delBtn = document.createElement('button');
+    delBtn.title = 'Supprimer';
+    delBtn.setAttribute('aria-label', `Supprimer le prompt ${entry.label || ''}`);
+    delBtn.style.background = 'none';
+    delBtn.style.border = 'none';
+    delBtn.style.cursor = 'pointer';
+    delBtn.style.fontSize = '1rem';
+    delBtn.style.opacity = '0.7';
+    delBtn.textContent = '🗑️';
+    delBtn.addEventListener('click', async () => {
+        if (!confirm(`Supprimer le prompt « ${entry.label || ''} » ?`)) return;
+        try {
+            const res = await fetch(`/api/prompts/${id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
+            div.remove();
+        } catch (err) {
+            console.error('[PROMPTS] Erreur suppression :', err);
+            alert('❌ Erreur lors de la suppression : ' + err.message);
+        }
+    });
+
+    actions.appendChild(useBtn);
+    actions.appendChild(delBtn);
+    div.appendChild(info);
+    div.appendChild(actions);
+    return div;
+}
+
+// Remplace les {{variable}} d'un prompt par des valeurs demandées à l'utilisateur,
+// insère le résultat dans la zone de saisie, et ferme la bibliothèque.
+function usePromptFromLibrary(text) {
+    const noms = [];
+    const vus = new Set();
+    text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, nom) => {
+        if (!vus.has(nom)) { vus.add(nom); noms.push(nom); }
+        return '';
+    });
+
+    let resultat = text;
+    for (const nom of noms) {
+        const valeur = window.prompt(`Valeur pour « ${nom} » :`, '');
+        if (valeur === null) return; // annulé
+        const motif = new RegExp(`\\{\\{\\s*${nom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}\\}`, 'g');
+        resultat = resultat.replace(motif, valeur);
+    }
+
+    const input = document.getElementById('user-input');
+    input.value = resultat;
+    input.dispatchEvent(new Event('input'));
+    document.getElementById('prompt-library-modal').classList.add('hidden');
+    if (!_isMobile()) input.focus();
+}
+
+document.getElementById('prompt-save-current-btn').addEventListener('click', async () => {
+    const input = document.getElementById('user-input');
+    const texte = (input.value || '').trim();
+    if (!texte) {
+        alert('La zone de saisie est vide : écrivez le message à enregistrer comme prompt.');
+        return;
+    }
+    const label = window.prompt('Nom de ce prompt :', '');
+    if (label === null || !label.trim()) return;
+    try {
+        const res = await fetch('/api/prompts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label: label.trim(), text: texte })
+        });
+        if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
+        await loadPromptLibrary();
+    } catch (err) {
+        console.error('[PROMPTS] Erreur enregistrement :', err);
+        alert('❌ Erreur lors de l\'enregistrement : ' + err.message);
+    }
+});
+
 
 // Modale suppression enrichie — retourne 'archive', 'delete', ou null
 function deleteThreadModal(threadName) {
