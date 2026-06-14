@@ -1188,24 +1188,27 @@ function renderSidebar() {
     const biblBtn = document.createElement('button');
     biblBtn.id        = 'toggle-bibliotheque';
     biblBtn.className = 'sidebar-section-btn';
-    biblBtn.title     = 'Bibliothèque';
+    biblBtn.title     = 'Bibliothèque (raccourci : Alt+B)';
     biblBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque');
+    biblBtn.setAttribute('accesskey', 'b');
     biblBtn.innerHTML = '<span aria-hidden="true">📚</span> Bibliothèque';
     threadList.appendChild(biblBtn);
 
     const promptBtn = document.createElement('button');
     promptBtn.id        = 'toggle-prompt-library';
     promptBtn.className = 'sidebar-section-btn';
-    promptBtn.title     = 'Bibliothèque de prompts';
-    promptBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque de prompts');
-    promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Prompts';
+    promptBtn.title     = 'Promptothèque (raccourci : Alt+P)';
+    promptBtn.setAttribute('aria-label', 'Ouvrir la promptothèque');
+    promptBtn.setAttribute('accesskey', 'p');
+    promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Promptothèque';
     threadList.appendChild(promptBtn);
 
     const searchBtn = document.createElement('button');
     searchBtn.id        = 'toggle-search-conversations';
     searchBtn.className = 'sidebar-section-btn';
-    searchBtn.title     = 'Recherche dans les conversations';
+    searchBtn.title     = 'Recherche dans les conversations (raccourci : Alt+R)';
     searchBtn.setAttribute('aria-label', 'Ouvrir la recherche dans les conversations');
+    searchBtn.setAttribute('accesskey', 'r');
     searchBtn.innerHTML = '<span aria-hidden="true">🔎</span> Recherche';
     threadList.appendChild(searchBtn);
 }
@@ -4468,7 +4471,7 @@ document.getElementById('agenda-form-save')?.addEventListener('click', async fun
 document.getElementById('toggle-memory').addEventListener('click', () => {
     document.getElementById('memory-modal').classList.remove('hidden');
     loadMemory();
-    setTimeout(() => { if (!_isMobile()) document.getElementById('memory-search')?.focus(); }, 50);
+    setTimeout(() => { if (!_isMobile) document.getElementById('memory-search')?.focus(); }, 50);
 });
 
 // ══════════════════════════════════════════
@@ -4479,16 +4482,16 @@ document.addEventListener('click', (e) => {
     if (e.target.closest('#toggle-bibliotheque')) {
         document.getElementById('bibliotheque-modal').classList.remove('hidden');
         loadBibliotheque();
-        setTimeout(() => { if (!_isMobile()) document.getElementById('biblio-search')?.focus(); }, 50);
+        setTimeout(() => { if (!_isMobile) document.getElementById('biblio-search')?.focus(); }, 50);
     }
     if (e.target.closest('#toggle-prompt-library')) {
         document.getElementById('prompt-library-modal').classList.remove('hidden');
         loadPromptLibrary();
-        setTimeout(() => { if (!_isMobile()) document.getElementById('prompt-save-current-btn')?.focus(); }, 50);
+        setTimeout(() => { if (!_isMobile) document.getElementById('prompt-save-current-btn')?.focus(); }, 50);
     }
     if (e.target.closest('#toggle-search-conversations')) {
         document.getElementById('search-conversations-modal').classList.remove('hidden');
-        setTimeout(() => { if (!_isMobile()) document.getElementById('search-conversations-input')?.focus(); }, 50);
+        setTimeout(() => { if (!_isMobile) document.getElementById('search-conversations-input')?.focus(); }, 50);
     }
 });
 
@@ -4816,7 +4819,7 @@ function usePromptFromLibrary(text) {
     input.value = resultat;
     input.dispatchEvent(new Event('input'));
     document.getElementById('prompt-library-modal').classList.add('hidden');
-    if (!_isMobile()) input.focus();
+    if (!_isMobile) input.focus();
 }
 
 document.getElementById('prompt-save-current-btn').addEventListener('click', async () => {
