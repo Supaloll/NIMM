@@ -278,6 +278,32 @@
                 </select>
                 <span class="routing-warning hidden" id="warn-memory" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
 
+                <span class="routing-label">🏷️ Titre des conversations</span>
+                <select id="routing-titre" class="routing-select" aria-label="Provider pour la génération du titre des conversations">
+                    <option value="same">↩ Même que le chat</option>
+                    <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
+                    <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                    <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
+                    <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
+                    <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
+                    <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                    <option value="ollama">🟢 Ollama (local)</option>
+                </select>
+                <span class="routing-warning hidden" id="warn-titre" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+
+                <span class="routing-label">📄 Synthèse</span>
+                <select id="routing-synthese" class="routing-select" aria-label="Provider pour la génération de synthèse">
+                    <option value="same">↩ Même que le chat</option>
+                    <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
+                    <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                    <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
+                    <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
+                    <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
+                    <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                    <option value="ollama">🟢 Ollama (local)</option>
+                </select>
+                <span class="routing-warning hidden" id="warn-synthese" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+
                 <span class="routing-label">🔠 PDF (texte sélectionnable)</span>
                 <span class="routing-fixed">Local gratuit (pypdf)</span>
 

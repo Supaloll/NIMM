@@ -2957,6 +2957,8 @@ function _applyProviderConstraints(keys) {
         { selId: 'routing-vision',  warnId: 'warn-vision'  },
         { selId: 'routing-image',   warnId: 'warn-image'   },
         { selId: 'routing-memory',  warnId: 'warn-memory'  },
+        { selId: 'routing-titre',   warnId: 'warn-titre'   },
+        { selId: 'routing-synthese', warnId: 'warn-synthese' },
     ];
     checks.forEach(({ selId, warnId }) => {
         const sel  = document.getElementById(selId);
@@ -3067,6 +3069,16 @@ async function loadSettingsIntoUI() {
         if (memorySel) {
             const memProvider = routing.memoire?.provider;
             memorySel.value = memProvider || 'same';
+        }
+
+        const titreSel = document.getElementById('routing-titre');
+        if (titreSel) {
+            titreSel.value = routing.titre?.provider || 'same';
+        }
+
+        const syntheseSel = document.getElementById('routing-synthese');
+        if (syntheseSel) {
+            syntheseSel.value = routing.synthese?.provider || 'same';
         }
 
         // Indiquer si les clés sont configurées
@@ -3339,6 +3351,18 @@ document.getElementById('routing-image')?.addEventListener('change', async (e) =
 document.getElementById('routing-memory')?.addEventListener('change', async (e) => {
     const val = e.target.value;
     await _saveRouting('memoire', val === 'same' ? {} : { provider: val });
+    _autoSaveFlash(e.target);
+});
+
+document.getElementById('routing-titre')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    await _saveRouting('titre', val === 'same' ? {} : { provider: val });
+    _autoSaveFlash(e.target);
+});
+
+document.getElementById('routing-synthese')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    await _saveRouting('synthese', val === 'same' ? {} : { provider: val });
     _autoSaveFlash(e.target);
 });
 
