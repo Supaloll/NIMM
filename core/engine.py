@@ -1208,3 +1208,71 @@ async def _generate_local(prompt: str) -> dict:
         data = r.json()
         b64  = data['images'][0]
         return {'url': '', 'b64': b64, 'provider': 'local'}
+
+
+# ══════════════════════════════════════════
+# CRÉDIT RESTANT — providers exposant un solde
+# ══════════════════════════════════════════
+
+# Providers pour lesquels l'API expose un solde/crédit restant interrogeable.
+PROVIDERS_WITH_CREDIT = ('openrouter', 'deepseek', 'stability-ai')
+
+
+async def get_provider_credit(provider: str, api_keys: dict) -> dict:
+    """
+    Interroge l'API du provider pour son solde/crédit restant, si l'API
+    l'expose. Retourne :
+      - {'available': True, 'balance': float, 'currency': str}
+      - {'available': False, 'reason': str}  (pas de clé, provider non
+        supporté, ou erreur réseau/API — `reason` reste court et sûr à
+        afficher)
+    """
+    key = (api_keys or {}).get(provider)
+    if not key:
+        return {'available': False, 'reason': 'no_key'}
+
+    if provider not in PROVIDERS_WITH_CREDIT:
+        return {'available': False, 'reason': 'unsupported_provider'}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            if provider == 'openrouter':
+                r = await client.get(
+                    'https://openrouter.ai/api/v1/credits',
+                    headers={'Authorization': f'Bearer {key}'},
+                )
+                r.raise_for_status()
+                data  = r.json().get('data', {})
+                total = data.get('total_credits', 0) or 0
+                used  = data.get('total_usage', 0) or 0
+                return {'available': True, 'balance': round(total - used, 4), 'currency': 'USD'}
+
+            if provider == 'deepseek':
+                r = await client.get(
+                    'https://api.deepseek.com/user/balance',
+                    headers={'Authorization': f'Bearer {key}'},
+                )
+                r.raise_for_status()
+                infos = r.json().get('balance_infos') or []
+                if not infos:
+                    return {'available': False, 'reason': 'empty_response'}
+                info = infos[0]
+                return {
+                    'available': True,
+                    'balance':   float(info.get('total_balance', 0)),
+                    'currency':  info.get('currency', 'USD'),
+                }
+
+            if provider == 'stability-ai':
+                r = await client.get(
+                    'https://api.stability.ai/v1/user/balance',
+                    headers={'Authorization': f'Bearer {key}'},
+                )
+                r.raise_for_status()
+                data = r.json()
+                return {'available': True, 'balance': float(data.get('credits', 0)), 'currency': 'crédits'}
+
+    except Exception as e:
+        return {'available': False, 'reason': str(e)[:120]}
+
+    return {'available': False, 'reason': 'unsupported_provider'}

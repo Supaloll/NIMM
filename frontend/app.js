@@ -5456,6 +5456,19 @@ async function loadCosts() {
         }
         grid.innerHTML = d.wallets.map(w => _renderWalletCard(w)).join('');
         _setupCostActions();
+
+        // Crédit restant en temps réel — chargement non bloquant, en plus
+        fetch('/api/costs/credits').then(r => r.json()).then(cd => {
+            const credits = cd.credits || {};
+            for (const [provider, info] of Object.entries(credits)) {
+                const card = grid.querySelector(`.cost-card[data-provider="${provider}"]`);
+                if (!card || !info.available) continue;
+                const detail = document.createElement('div');
+                detail.className = 'cost-detail';
+                detail.innerHTML = `Crédit restant : <strong>${info.balance} ${info.currency}</strong>`;
+                card.appendChild(detail);
+            }
+        }).catch(() => {});
     } catch(e) {
         if (loading) loading.textContent = 'Erreur de chargement.';
     }
@@ -5506,7 +5519,7 @@ function _renderWalletCard(w) {
     }
 
     return `
-        <div class="cost-card">
+        <div class="cost-card" data-provider="${w.provider}">
             <div class="cost-card-header">${icon} <strong>${w.display_name}</strong></div>
             ${content}
         </div>`;
@@ -5956,7 +5969,6 @@ document.addEventListener('click', () => {
     document.getElementById('toggle-settings')?.addEventListener('click', load);
     load();
 })();
-
 // ── Moteur de recherche web (Brave / Tavily) ──
 (function () {
     var sel = document.getElementById('search-provider-select');

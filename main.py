@@ -1559,6 +1559,23 @@ async def costs_rates_update(provider: str, req: RatesUpdate):
     update_wallet_rates(provider, req.rate_in, req.rate_out)
     return {"status": "ok", "provider": provider, "rate_in": req.rate_in, "rate_out": req.rate_out}
 
+@app.get("/api/costs/credits")
+async def costs_credits():
+    """
+    Interroge en temps réel le solde restant des providers dont l'API
+    l'expose (OpenRouter, DeepSeek, Stability AI). Les autres providers
+    renvoient {'available': False, 'reason': '...'}.
+    """
+    from core.engine import get_provider_credit, PROVIDERS_WITH_CREDIT
+    from core.hub import load_settings
+    settings = load_settings()
+    api_keys = settings.get('api_keys', {})
+
+    results = {}
+    for provider in PROVIDERS_WITH_CREDIT:
+        results[provider] = await get_provider_credit(provider, api_keys)
+    return {"credits": results}
+
 
 # ══════════════════════════════════════════
 # MISE À JOUR AUTOMATIQUE
