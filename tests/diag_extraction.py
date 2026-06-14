@@ -1,17 +1,18 @@
 # ============================================================
 # NIMM — tests/diag_extraction.py
-# Diagnostic isolé de l'extraction de triplets (DeepSeek)
+# Diagnostic isolé de l'extraction de triplets
+# Supporte : DeepSeek, Anthropic (Haiku/Sonnet/Opus)
 #
 # Ce script NE modifie PAS la base de données.
-# Il simule exactement ce que fait le worker NIMM et affiche
-# chaque étape : prompt envoyé → réponse brute → parsing → filtres.
 #
 # Usage (depuis le dossier racine de NIMM) :
 #   python tests/diag_extraction.py
+#   python tests/diag_extraction.py anthropic
+#   python tests/diag_extraction.py deepseek
 #
 # Prérequis :
 #   - NIMM n'a PAS besoin de tourner
-#   - Clé DeepSeek configurée dans data/nimm_laurent.db
+#   - Clé du provider configurée dans data/nimm_laurent.db
 # ============================================================
 
 import sqlite3
@@ -20,27 +21,21 @@ import re
 import os
 import sys
 import time
-import uuid
 import requests
 from datetime import datetime
 
 # ── Chemin vers la DB Laurent ──────────────────────────────
-_HERE    = os.path.dirname(os.path.abspath(__file__))
-DB_PATH  = os.path.join(_HERE, '..', 'data', 'nimm_laurent.db')
+_HERE   = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(_HERE, '..', 'data', 'nimm_laurent.db')
 
-# ── API DeepSeek ───────────────────────────────────────────
-DEEPSEEK_URL   = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
-MAX_TOKENS_EXTRACTION = 600   # valeur corrigée dans hub.py
-
-# ── Délai entre deux appels API (secondes) ─────────────────
+# ── Provider (argument CLI ou auto-détecté depuis DB) ──────
+MAX_TOKENS_EXTRACTION = 600
 DELAI = 3
 
 # ══════════════════════════════════════════════════════════
-# 10 MESSAGES DE TEST — du plus évident au plus subtil
+# 10 MESSAGES DE TEST
 # ══════════════════════════════════════════════════════════
 MESSAGES = [
-    # ── BLOC 1 : faits d'identité bruts ──────────────────
     {
         "id": 1,
         "label": "Prénom + âge + lycée",
@@ -59,8 +54,6 @@ MESSAGES = [
         "user": "Elle a gagné 2 de ces 4 compétitions. Elle s'est classée 3ème au tournoi départemental de mars.",
         "assistant": "Un bilan 2/4 et une 3ème place au départemental, c'est vraiment bien !",
     },
-
-    # ── BLOC 2 : traits de caractère ──────────────────────
     {
         "id": 4,
         "label": "Caractère général (positif)",
@@ -79,8 +72,6 @@ MESSAGES = [
         "user": "Elle gagne rarement par ippon. La plupart de ses victoires, c'est aux points, par décision des arbitres. Elle fait un judo très propre mais pas suffisamment tranchant.",
         "assistant": "Un judo propre c'est une excellente base — l'ippon finira par venir avec la confiance.",
     },
-
-    # ── BLOC 3 : émotionnel + anecdotique ─────────────────
     {
         "id": 7,
         "label": "Réaction émotionnelle (défaite)",
@@ -90,14 +81,12 @@ MESSAGES = [
     {
         "id": 8,
         "label": "Fair-play + fierté paternelle",
-        "user": "Malgré tout elle a serré la main de son adversaire sans rien dire, sans pleurer devant tout le monde. Je suis vraiment fier d'elle pour ça.",
+        "user": "Malgré tout elle a serré la main de son adversaire sans rien dire, sans pleurer devant tout le monde. Je suis vraiment fier d'elle.",
         "assistant": "Ce genre de tenue, ça forge le caractère autant que les victoires. Tu as raison d'être fier.",
     },
-
-    # ── BLOC 4 : informations mélangées / implicites ──────
     {
         "id": 9,
-        "label": "Deux sujets dans le même message (Laurent + Maïssane)",
+        "label": "Deux sujets (Laurent + Maïssane)",
         "user": "Je suis chauffeur poids lourd et j'ai du mal à suivre ses compétitions à cause des horaires. Mais Maïssane comprend, elle est très mature pour son âge.",
         "assistant": "Ce n'est pas toujours évident de concilier ton rythme de travail et son planning sportif.",
     },
@@ -121,32 +110,48 @@ def _titre(texte):
     print(f"  {texte}")
     _sep("═")
 
-def charger_cle_api() -> str:
-    """Lit la clé DeepSeek depuis nimm_laurent.db → settings."""
+def charger_config() -> tuple:
+    """
+    Lit provider + clé API + modèle depuis nimm_laurent.db.
+    Retourne (provider, api_key, model).
+    """
     if not os.path.exists(DB_PATH):
         print(f"❌ DB introuvable : {os.path.abspath(DB_PATH)}")
         sys.exit(1)
     conn = sqlite3.connect(DB_PATH)
     cur  = conn.cursor()
+
+    # Provider actif
+    cur.execute("SELECT value FROM settings WHERE key = 'provider' LIMIT 1")
+    row = cur.fetchone()
+    provider = row[0].strip().lower() if row else 'deepseek'
+
+    # Modèle configuré
+    cur.execute("SELECT value FROM settings WHERE key = 'chat_model' LIMIT 1")
+    row = cur.fetchone()
+    model = row[0].strip() if row and row[0] else None
+
+    # Clés API
     cur.execute("SELECT value FROM settings WHERE key = 'api_keys' LIMIT 1")
     row = cur.fetchone()
     conn.close()
+
     if not row:
         print("❌ Clé 'api_keys' absente dans settings.")
         sys.exit(1)
     try:
         keys = json.loads(row[0])
-        cle  = keys.get('deepseek', '')
-        if not cle:
-            print("❌ Clé DeepSeek vide dans api_keys.")
+        api_key = keys.get(provider, '')
+        if not api_key:
+            print(f"❌ Clé {provider} vide dans api_keys.")
             sys.exit(1)
-        return cle
+        return provider, api_key, model
     except Exception as e:
         print(f"❌ Impossible de parser api_keys : {e}")
         sys.exit(1)
 
 def build_prompt(user_msg: str, assistant_reply: str, user_name: str = "Laurent") -> str:
-    """Reconstruit exactement le prompt utilisé par NIMM après correction (hub.py)."""
+    """Prompt d'extraction — identique à hub.py après correction."""
     context_block = f"Utilisateur : {user_msg}\nAssistant : {assistant_reply[:400]}"
     name = user_name
     return (
@@ -159,9 +164,12 @@ def build_prompt(user_msg: str, assistant_reply: str, user_name: str = "Laurent"
         f"  → Si le fait concerne un proche, utilise SON prénom (ex: Maïssane), pas celui de {name}.\n"
         f"  → Si tu ne connais pas le prénom du proche, utilise le prénom de {name} avec prédicat 'enfant'/'conjoint'.\n"
         f"  → Jamais 'utilisateur', 'je', 'il', 'elle', 'fille', 'fils' comme sujet.\n"
-        f"- prédicat  : 1 mot canonique — age · metier · conjoint · enfant · domicile · "
-        f"vehicule · aime · n_aime_pas · sport · loisir · trait · competence · "
-        f"probleme_sante · traitement · allergie · objectif · diplome · ecole · permis\n"
+        f"- prédicat  : 1 mot canonique parmi les suivants :\n"
+        f"    age · metier · conjoint · enfant · domicile · vehicule · ecole · diplome · permis\n"
+        f"    aime · n_aime_pas · sport · loisir · competence · objectif\n"
+        f"    trait        — caractère, personnalité, force/faiblesse mentale ou comportementale\n"
+        f"    probleme_sante — maladie, douleur, handicap, traitement médical UNIQUEMENT — jamais un défaut de caractère\n"
+        f"    allergie · traitement\n"
         f"- objet     : valeur concrète du fait (prénom, chiffre, mot-clé) — jamais vide.\n"
         f"  → Pour les faits chiffrés (durée, score, classement) : mets le chiffre dans l'objet, pas dans le contexte.\n"
         f"- contexte  : circonstance courte en 5 mots max — vide si aucune\n"
@@ -186,38 +194,63 @@ def build_prompt(user_msg: str, assistant_reply: str, user_name: str = "Laurent"
         f"{context_block}\n"
     )
 
-def appel_deepseek(prompt: str, api_key: str, max_tokens: int) -> tuple:
-    """
-    Appelle l'API DeepSeek.
-    Retourne (texte_réponse, tokens_utilisés, tronqué).
-    """
+# ══════════════════════════════════════════════════════════
+# APPELS API
+# ══════════════════════════════════════════════════════════
+
+def appel_deepseek(prompt: str, api_key: str, model: str) -> tuple:
+    model = model or "deepseek-chat"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type":  "application/json",
     }
     body = {
-        "model":       DEEPSEEK_MODEL,
-        "max_tokens":  max_tokens,
+        "model":       model,
+        "max_tokens":  MAX_TOKENS_EXTRACTION,
         "temperature": 0.0,
         "messages": [
-            {
-                "role":    "system",
-                "content": "Tu es un extracteur de faits. Tu ne produis que des tags %%MEM%%, rien d'autre.",
-            },
-            {
-                "role":    "user",
-                "content": prompt,
-            },
+            {"role": "system", "content": "Tu es un extracteur de faits. Tu ne produis que des tags %%MEM%%, rien d'autre."},
+            {"role": "user",   "content": prompt},
         ],
     }
-    r = requests.post(DEEPSEEK_URL, headers=headers, json=body, timeout=30)
+    r = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=body, timeout=30)
     r.raise_for_status()
-    data      = r.json()
-    choice    = data["choices"][0]
-    texte     = choice["message"]["content"]
-    tokens    = data.get("usage", {}).get("completion_tokens", "?")
-    tronque   = choice.get("finish_reason") == "length"
+    data    = r.json()
+    choice  = data["choices"][0]
+    texte   = choice["message"]["content"]
+    tokens  = data.get("usage", {}).get("completion_tokens", "?")
+    tronque = choice.get("finish_reason") == "length"
     return texte, tokens, tronque
+
+def appel_anthropic(prompt: str, api_key: str, model: str) -> tuple:
+    model = model or "claude-haiku-4-5-20251001"
+    headers = {
+        "x-api-key":         api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type":      "application/json",
+    }
+    body = {
+        "model":       model,
+        "max_tokens":  MAX_TOKENS_EXTRACTION,
+        "temperature": 0.0,
+        "system":      "Tu es un extracteur de faits. Tu ne produis que des tags %%MEM%%, rien d'autre.",
+        "messages": [
+            {"role": "user", "content": prompt},
+        ],
+    }
+    r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body, timeout=30)
+    r.raise_for_status()
+    data    = r.json()
+    texte   = data["content"][0]["text"]
+    tokens  = data.get("usage", {}).get("output_tokens", "?")
+    tronque = data.get("stop_reason") == "max_tokens"
+    return texte, tokens, tronque
+
+def appel_api(provider: str, prompt: str, api_key: str, model: str) -> tuple:
+    if provider == "anthropic":
+        return appel_anthropic(prompt, api_key, model)
+    else:
+        return appel_deepseek(prompt, api_key, model)
 
 # ══════════════════════════════════════════════════════════
 # SIMULATION PIPELINE NIMM (sans écriture DB)
@@ -227,10 +260,15 @@ _ACCENTS = str.maketrans(
     'àâäéèêëîïôöùûüçæœÀÂÄÉÈÊËÎÏÔÖÙÛÜÇÆŒ',
     'aaaeeeeiioouuucaoAAAEEEEIIOOUUUCAO'
 )
-
-def _normaliser_predicat_simple(p: str) -> str:
-    """Version locale simplifiée de normalize_predicat — pour le diagnostic."""
-    return p.lower().strip().translate(_ACCENTS).replace("'", '_').replace('-', '_').replace(' ', '_')
+_SUJETS_BLOQUES = {
+    'nimm', 'assistant', 'ia', 'bot', 'pere', 'mere', 'fils', 'fille',
+    'enfant', 'collegue', 'voisin', 'medecin', 'ami', 'amie', 'chef', 'patron'
+}
+_VALEURS_CREUSES = {
+    '', 'oui', 'non', 'non specifie', 'non_specifie', 'inconnu',
+    'aucun', 'aucune', 'n/a', 'na', '?', 'vide', 'unknown',
+    'non precise', 'non_precise', 'pas precise',
+}
 
 def _is_prenom_local(s: str) -> bool:
     s = s.strip()
@@ -245,18 +283,7 @@ def _is_prenom_local(s: str) -> bool:
         return False
     return True
 
-_SUJETS_BLOQUES = {
-    'nimm', 'assistant', 'ia', 'bot', 'pere', 'mere', 'fils', 'fille',
-    'enfant', 'collegue', 'voisin', 'medecin', 'ami', 'amie', 'chef', 'patron'
-}
-_VALEURS_CREUSES = {
-    '', 'oui', 'non', 'non specifie', 'non_specifie', 'inconnu',
-    'aucun', 'aucune', 'n/a', 'na', '?', 'vide', 'unknown',
-    'non precise', 'non_precise', 'pas precise',
-}
-
 def parser_tags(texte: str) -> list:
-    """Parse les %%MEM%% — copie exacte du parser NIMM."""
     pattern = r'%%MEM:([^%]+)%%'
     matches = re.findall(pattern, texte)
     records = []
@@ -268,10 +295,7 @@ def parser_tags(texte: str) -> list:
             type_val, sujet, predicat, objet, memoire_type, profondeur_str, type_temporal = parts
             contexte = ''
         else:
-            records.append({
-                '_erreur': f"{len(parts)} champs (attendu 7 ou 8)",
-                '_raw':    raw,
-            })
+            records.append({'_erreur': f"{len(parts)} champs (attendu 7 ou 8)", '_raw': raw})
             continue
         records.append({
             'type':          type_val.strip(),
@@ -286,48 +310,55 @@ def parser_tags(texte: str) -> list:
     return records
 
 def simuler_filtres(record: dict) -> tuple:
-    """
-    Simule les filtres de save_inline_memory sans écrire en DB.
-    Retourne (accepté: bool, raison: str).
-    """
     if '_erreur' in record:
         return False, f"Format invalide : {record['_erreur']}"
-
-    sujet  = record.get('sujet', '').strip()
-    objet  = record.get('objet', '').strip().lower()
+    sujet    = record.get('sujet', '').strip()
+    objet    = record.get('objet', '').strip().lower()
     predicat = record.get('predicat', '')
-
-    # Filtre 1 : valeur creuse
     if objet in _VALEURS_CREUSES:
         return False, f"Valeur creuse : '{objet}'"
-
-    # Filtre 2 : sujet non-prénom
     if not _is_prenom_local(sujet) or sujet.lower() in _SUJETS_BLOQUES:
-        return False, f"Sujet rejeté (non-prénom ou bloqué) : '{sujet}'"
-
-    # Filtre 3 : prédicat vide
+        return False, f"Sujet rejeté : '{sujet}'"
     if not predicat.strip():
         return False, "Prédicat vide"
-
     return True, "✅ Accepté"
-
 
 # ══════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════
 
 def main():
-    _titre("NIMM — DIAGNOSTIC EXTRACTION TRIPLETS v2 (nouveau prompt)")
+    # Provider forcé en argument CLI, sinon lu depuis DB
+    provider_force = sys.argv[1].lower() if len(sys.argv) > 1 else None
+
+    provider, api_key, model = charger_config()
+    if provider_force:
+        provider = provider_force
+        # Recharger la clé pour le provider forcé
+        conn = sqlite3.connect(DB_PATH)
+        cur  = conn.cursor()
+        cur.execute("SELECT value FROM settings WHERE key = 'api_keys' LIMIT 1")
+        row = cur.fetchone()
+        conn.close()
+        keys = json.loads(row[0]) if row else {}
+        api_key = keys.get(provider, '')
+        if not api_key:
+            print(f"❌ Clé {provider} introuvable dans la DB.")
+            sys.exit(1)
+
+    # Modèle par défaut selon provider
+    if not model:
+        model = "claude-haiku-4-5-20251001" if provider == "anthropic" else "deepseek-chat"
+
+    _titre(f"NIMM — DIAGNOSTIC EXTRACTION TRIPLETS ({provider.upper()})")
     print(f"  DB      : {os.path.abspath(DB_PATH)}")
-    print(f"  Modèle  : {DEEPSEEK_MODEL}  |  max_tokens : {MAX_TOKENS_EXTRACTION}")
+    print(f"  Provider : {provider}  |  Modèle : {model}")
+    print(f"  max_tokens : {MAX_TOKENS_EXTRACTION}")
     print(f"  Messages : {len(MESSAGES)}")
     print(f"  Début   : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
 
-    # ── Charger la clé API ────────────────────────────────
     _sep()
-    print("🔑 Chargement de la clé API DeepSeek...")
-    api_key = charger_cle_api()
-    print(f"   Clé chargée : {api_key[:8]}{'*' * (len(api_key) - 8)}")
+    print(f"🔑 Clé chargée : {api_key[:8]}{'*' * (len(api_key) - 8)}")
 
     resultats = []
 
@@ -339,14 +370,13 @@ def main():
         prompt = build_prompt(msg['user'], msg['assistant'])
 
         try:
-            rep, tok, tronc = appel_deepseek(prompt, api_key, max_tokens=MAX_TOKENS_EXTRACTION)
+            rep, tok, tronc = appel_api(provider, prompt, api_key, model)
         except Exception as e:
             print(f"   ❌ Erreur API : {e}")
             rep, tok, tronc = "", "ERR", False
 
         time.sleep(DELAI)
 
-        # ── Réponse brute ─────────────────────────────────
         print(f"\n   ┌─ Réponse brute ──────────────────────────────")
         if rep.strip():
             for ligne in rep.strip().splitlines():
@@ -356,7 +386,6 @@ def main():
         tronc_label = "⚠️ TRONQUÉ" if tronc else "ok"
         print(f"   └─ tokens : {tok} | fin : {tronc_label}")
 
-        # ── Simulation pipeline NIMM ──────────────────────
         records  = parser_tags(rep)
         acceptes = []
         print(f"\n   ── Simulation pipeline ──")
@@ -380,26 +409,22 @@ def main():
             'vide':    not rep.strip(),
         })
 
-    # ══════════════════════════════════════════════════════
-    # RAPPORT FINAL
-    # ══════════════════════════════════════════════════════
+    # ── Rapport final ─────────────────────────────────────
     _titre("RAPPORT FINAL")
-
     col_w = 42
     print(f"  {'#':<3} {'Label':<{col_w}} {'Tags OK':>7}  {'Tronc':>5}")
     _sep("·", 65)
 
-    total_tags = 0
+    total = 0
     for r in resultats:
-        n    = len(r['tags'])
-        t    = "⚠️" if r['tronque'] else "—"
-        val  = "(vide)" if r['vide'] else f"{n} tag(s)"
-        total_tags += n
-        label_short = r['label'][:col_w]
-        print(f"  {r['id']:<3} {label_short:<{col_w}} {val:>9}  {t:>5}")
+        n   = len(r['tags'])
+        t   = "⚠️" if r['tronque'] else "—"
+        val = "(vide)" if r['vide'] else f"{n} tag(s)"
+        total += n
+        print(f"  {r['id']:<3} {r['label'][:col_w]:<{col_w}} {val:>9}  {t:>5}")
 
     _sep("═")
-    print(f"\n  Total triplets acceptés : {total_tags}")
+    print(f"\n  Total triplets acceptés : {total}")
     print(f"  Fin : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     print(f"  📝 Ce script n'a écrit aucune donnée en base.")
     print()

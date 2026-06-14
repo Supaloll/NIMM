@@ -27,6 +27,39 @@ from modules.quiz import wrap_bare_quiz as _wrap_bare_quiz
 
 
 # ══════════════════════════════════════════
+# ASSAINISSEUR D'HISTORIQUE (correctif 400 Mistral)
+# ══════════════════════════════════════════
+
+def _sanitize_history(messages: list) -> list:
+    """
+    Nettoie l'historique avant envoi à un fournisseur OpenAI-compat (Mistral
+    en particulier, le plus strict) :
+      - supprime les messages au contenu vide/None (sauf s'ils portent des
+        tool_calls, indispensables à la cohérence du fil) ;
+      - fusionne les messages consécutifs de même rôle (Mistral refuse deux
+        messages 'user' ou 'assistant' d'affilée) ;
+      - garantit que le premier message est bien 'user'.
+    """
+    cleaned = []
+    for m in messages:
+        content = m.get('content')
+        if not content and not m.get('tool_calls'):
+            continue
+        if cleaned and cleaned[-1]['role'] == m['role'] and not m.get('tool_calls') and not cleaned[-1].get('tool_calls'):
+            # Fusion avec le message précédent de même rôle
+            prev_content = cleaned[-1].get('content') or ''
+            cleaned[-1]['content'] = (prev_content + '\n\n' + (content or '')).strip()
+        else:
+            cleaned.append(dict(m))
+
+    # Le premier message doit être 'user' (sinon Mistral râle)
+    while cleaned and cleaned[0]['role'] != 'user':
+        cleaned.pop(0)
+
+    return cleaned
+
+
+# ══════════════════════════════════════════
 # TITRE ONGLET -- genere automatiquement
 # ══════════════════════════════════════════
 
@@ -1641,7 +1674,13 @@ async def extract_memories_from_window(messages: list, settings: dict) -> int:
         "  figure      : humour, ironie, métaphore, second degré ('Super, encore une panne…')\n"
         "  intention   : désir, projet, souhait réel ('Je voudrais apprendre la guitare')\n"
         "  hypothese   : irréel pur, fiction, condition impossible ('Si j'étais riche…')\n"
-        "Priorité si ambiguïté : figure > emotionnel > intention > neutre > hypothese\n\n"
+        "Priorité si ambiguïté : figure > emotionnel > intention > neutre > hypothese\n"
+        "ATTENTION : le registre note le TON de la phrase, pas la présence d'une émotion "
+        "dans le contenu. Une émotion rapportée calmement ('j'étais fier de...', "
+        "'ça m'a rendu triste sur le moment', 'j'étais content du résultat') reste "
+        "'neutre' — c'est un fait sur la personne. 'emotionnel' est réservé au ton "
+        "à vif au moment de l'écrire (majuscules, ponctuation excessive, "
+        "colère/frustration manifeste : 'J'EN PEUX PLUS !!!').\n\n"
         "AUTRES CHAMPS :\n"
         f"  sujet       : prénom réel uniquement — '{user_name}' pour l'utilisateur, ou le prénom "
         f"d'un proche dont le lien a été explicitement déclaré. "
@@ -1656,10 +1695,17 @@ async def extract_memories_from_window(messages: list, settings: dict) -> int:
         "        anciennete sera dérivée automatiquement — ne pas la calculer toi-même\n"
         "    santé    : probleme_sante · traitement · allergie\n"
         "    goûts    : aime · n_aime_pas · musique_preferee · serie_preferee\n"
-        "    loisirs  : sport · lecture · loisir · musique_instrument · apprentissage\n"
+        "    loisirs  : sport · lecture · loisir · musique_instrument · apprentissage · "
+        "anciennete_pratique\n"
+        "      → anciennete_pratique : durée déclarée d'une pratique ('je fais du judo "
+        "depuis 6 ans' / '6 ans de judo') — objet = durée brute (ex: '6 ans'), "
+        "contexte = l'activité concernée (ex: 'judo')\n"
         "    lieu     : domicile · vehicule\n"
         "    projets  : objectif · reve · intention · projet\n"
-        "    caractère: trait · valeur · stress\n"
+        "    caractère: trait · valeur · stress · qualite\n"
+        "      → qualite : trait de personnalité rapporté sur soi ou un proche "
+        "('douce', 'patient', 'têtu', 'courageuse') — objet = l'adjectif tel "
+        "qu'employé\n"
         "  memoire_type: identite | famille | preference | loisir | sante | travail | humeur | autre\n"
         "  profondeur  : entier 1 (existentiel) → 5 (anecdote)\n"
         "  type_temporal: permanent | persistant | episodique | engagement\n"
@@ -1671,6 +1717,19 @@ async def extract_memories_from_window(messages: list, settings: dict) -> int:
         "RÈGLE D'AUTONOMIE : le triplet doit se comprendre sans relire la conversation. "
         "Si l'objet a besoin du fil pour exister → ne pas extraire. "
         "Laisser le carnet de bord capturer ce contexte.\n"
+        "EXCEPTION — nuance comparative/qualitative : une précision qui ne tient pas "
+        "seule ('il gagne aux points plutôt que par ippon') mais qui complète un fait "
+        "déjà extractible par ailleurs (ici : pratique du judo) ne doit pas être "
+        "rejetée — rattache-la comme 'contexte' du triplet concerné "
+        "(ex: predicat='loisir', objet='judo', contexte='gagne aux points plutôt "
+        "que par ippon').\n\n"
+        "ANECDOTES / ÉVÉNEMENTS MARQUANTS : un moment narratif qui ne se résume pas "
+        "à un trait stable (une finale perdue, une réussite, une rencontre) ne doit "
+        "pas être perdu faute de prédicat canonique. Résume-le en objet (≤ 12 mots, "
+        "autonome) avec predicat='anecdote', memoire_type='autre', profondeur=5, "
+        "type_temporal='episodique' "
+        "(ex: sujet=utilisateur, predicat='anecdote', objet='a perdu la finale de "
+        "judo de peu', contexte='compétition régionale').\n\n"
         "Réponds UNIQUEMENT avec le tableau JSON. Aucun texte avant ou après."
     )
 
@@ -1949,125 +2008,6 @@ async def classify_topic(user_message: str) -> None:
         print(f"[TOPIC] Erreur classify_topic : {e}")
 
 
-async def extract_memories_background(
-    user_message: str,
-    assistant_reply: str,
-    user_name: str,
-    thread_id: str = '',
-) -> None:
-    """
-    Extraction mémoire en arrière-plan — tourne après chaque échange.
-    Provider dédié (routing['memory']) ou fallback sur le chat provider.
-    N'affecte jamais la réponse utilisateur.
-    """
-    try:
-        settings  = load_settings()
-        api_keys  = _load_api_keys()
-        routing   = settings.get('provider_routing', {})
-
-        # Résolution du provider mémoire
-        mem_provider = routing.get('memory', 'same')
-        if not mem_provider or mem_provider == 'same':
-            mem_provider = settings.get('provider', '')
-        if not mem_provider:
-            return
-        # Ollama ne supporte pas ce type d'extraction structurée — fallback chat
-        if mem_provider == 'ollama':
-            mem_provider = settings.get('provider', '')
-        if not mem_provider:
-            return
-        # Vérifier la clé API si provider cloud
-        _LOCAL = {'ollama'}
-        if mem_provider not in _LOCAL and not api_keys.get(mem_provider):
-            return
-
-        name = user_name if user_name and user_name not in ('', 'utilisateur') else '?'
-
-        # Fenêtre glissante — 5 derniers échanges pour résoudre pronoms et références implicites
-        context_lines = []
-        if thread_id:
-            recent = get_messages(thread_id, limit=10)
-            for m in recent:
-                role = 'Utilisateur' if m['role'] == 'user' else 'Assistant'
-                context_lines.append(f"{role} : {m['content'][:400]}")
-        if not context_lines:
-            context_lines = [
-                f"Utilisateur : {user_message[:800]}",
-                f"Assistant : {assistant_reply[:400]}",
-            ]
-        context_block = '\n'.join(context_lines)
-
-        prompt = (
-            f"Analyse les échanges suivants et émets des tags %%MEM%% pour chaque fait stable "
-            f"concernant l'utilisateur ({name}) OU ses proches (enfants, conjoint, amis, famille).\n\n"
-            f"Format strict :\n"
-            f"%%MEM:type|sujet|prédicat|objet|contexte|mem_type|profondeur|temporal%%\n"
-            f"- type      : trait / relation / activite\n"
-            f"- sujet     : prénom exact de la personne concernée par le fait.\n"
-            f"  → Si le fait concerne un proche, utilise SON prénom (ex: Maïssane), pas celui de {name}.\n"
-            f"  → Si tu ne connais pas le prénom du proche, utilise le prénom de {name} avec prédicat 'enfant'/'conjoint'.\n"
-            f"  → Jamais 'utilisateur', 'je', 'il', 'elle', 'fille', 'fils' comme sujet.\n"
-            f"- prédicat  : 1 mot canonique parmi les suivants :\n"
-            f"    age · metier · conjoint · enfant · domicile · vehicule · ecole · diplome · permis\n"
-            f"    aime · n_aime_pas · sport · loisir · competence · objectif\n"
-            f"    trait        — caractère, personnalité, force/faiblesse mentale ou comportementale\n"
-            f"    probleme_sante — maladie, douleur, handicap, traitement médical UNIQUEMENT — jamais un défaut de caractère\n"
-            f"    allergie · traitement\n"
-            f"- objet     : valeur concrète du fait (prénom, chiffre, mot-clé) — jamais vide.\n"
-            f"  → Pour les faits chiffrés (durée, score, classement) : mets le chiffre dans l'objet, pas dans le contexte.\n"
-            f"- contexte  : circonstance courte en 5 mots max — vide si aucune\n"
-            f"- mem_type  : identite / activite\n"
-            f"- profondeur: 1 (identité stable) à 5 (anecdotique)\n"
-            f"- temporal  : permanent (identité/caractère) / persistant (projet/habitude) / episodique (événement passé)\n\n"
-            f"RÈGLES :\n"
-            f"- Plusieurs faits dans un message → autant de tags indépendants, un par fait.\n"
-            f"- Un fait sur un proche → sujet = prénom du proche, pas {name}.\n"
-            f"- Ne pas mémoriser : questions posées · états purement temporaires · métaphores · fiction · "
-            f"conditionnels ('j\\'aimerais', 'peut-être', 'voudrait').\n"
-            f"- Aucun fait stable détecté → ne rien émettre.\n\n"
-            f"EXEMPLES :\n"
-            f"Utilisateur : 'Ma fille Léa a 16 ans et fait de la natation depuis 3 ans.'\n"
-            f"%%MEM:trait|Léa|age|16||identite|1|permanent%%\n"
-            f"%%MEM:activite|Léa|sport|natation||activite|2|persistant%%\n"
-            f"%%MEM:activite|Léa|sport|3 ans de natation||activite|3|persistant%%\n\n"
-            f"Utilisateur : 'Je suis mécanicien. Mon fils Tom manque de confiance en lui.'\n"
-            f"%%MEM:trait|{name}|metier|mécanicien||identite|1|permanent%%\n"
-            f"%%MEM:trait|Tom|trait|manque de confiance||identite|2|permanent%%\n\n"
-            f"Échanges récents :\n"
-            f"{context_block}\n"
-        )
-
-        result = await call_llm(
-            messages      = [{'role': 'user', 'content': prompt}],
-            provider      = mem_provider,
-            system_prompt = 'Tu es un extracteur de faits. Tu ne produis que des tags %%MEM%%, rien d\'autre.',
-            max_tokens    = 600,
-            temperature   = 0.0,
-            api_keys      = api_keys,
-        )
-
-        if not result or '%%MEM' not in result:
-            return
-
-        # Réutiliser le parser existant
-        _, _, extracted_memories, _, _, _, _ = extract_all_tags(result)
-        if not extracted_memories:
-            return
-
-        from modules.memory import save_inline_memory
-        from core.database import get_all_memory
-        existing = get_all_memory()
-        for mem in extracted_memories:
-            try:
-                save_inline_memory(mem, user_message, existing=existing)
-            except Exception as e:
-                print(f"[MEM-BG] Erreur sauvegarde : {e}")
-
-        print(f"[MEM-BG] ✅ {len(extracted_memories)} fait(s) extrait(s) via {mem_provider}")
-
-    except Exception as e:
-        print(f"[MEM-BG] Erreur extract_memories_background : {e}")
-
 
 async def process_message(
     thread_id: str,
@@ -2164,7 +2104,7 @@ async def process_message(
 
     # 7. Historique récent (60 derniers messages)
     history = get_messages(thread_id, limit=60)
-    messages = [{'role': m['role'], 'content': m['content']} for m in history]
+    messages = _sanitize_history([{'role': m['role'], 'content': m['content']} for m in history])
 
     # 8. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
@@ -2311,7 +2251,6 @@ async def process_message(
         set_setting(f'dominant_{thread_id}', dominant)
 
     # Path B désactivé — extraction inline %%MEM%% (Path A) est suffisant.
-    # extract_memories_background retiré : double extraction = source de doublons.
 
     # Classifier le topic + carnet en arrière-plan (timeout 20s)
     _create_bg_task(classify_topic(user_message))
@@ -2434,7 +2373,7 @@ async def process_message_stream(
 
     # 4. Historique
     history  = get_messages(thread_id, limit=60)
-    messages = [{'role': m['role'], 'content': m['content']} for m in history]
+    messages = _sanitize_history([{'role': m['role'], 'content': m['content']} for m in history])
 
     # 5. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
@@ -2616,7 +2555,6 @@ async def process_message_stream(
         set_setting(f'dominant_{thread_id}', dominant)
 
     # Path B désactivé — extraction inline %%MEM%% (Path A) est suffisant.
-    # extract_memories_background retiré : double extraction = source de doublons.
 
     # Classifier le topic + carnet en arrière-plan (timeout 20s)
     _create_bg_task(classify_topic(user_message))

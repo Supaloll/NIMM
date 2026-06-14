@@ -215,6 +215,33 @@ Le hub exécute.
 
 ---
 
+## Prompts d'extraction — variantes par provider
+
+Le prompt envoyé au LLM pour extraire les triplets mémoire (`extract_memories_background`) n'est
+pas universel. Chaque provider a sa façon de raisonner :
+
+- **DeepSeek** : suit bien les règles explicites et les exemples concrets. Respecte l'instruction
+  "sujet = prénom du proche" même quand le prénom n'est pas répété dans le message.
+- **Haiku (Anthropic)** : raisonne depuis le point de vue de l'utilisateur. Dès que le prénom
+  du proche disparaît du message, il bascule sur l'utilisateur comme sujet par défaut.
+  Nécessite un prompt reformulé différemment pour obtenir le même résultat.
+- **Gemini** : répond bien aux formes nominales/descriptives, mais tend à répéter littéralement
+  les exemples du prompt. Les exemples concrets sont contre-productifs avec lui.
+
+**Architecture cible (backlog) :** extraire les variantes de prompt dans un module dédié
+`modules/mem_prompts.py` exposant une fonction unique :
+
+```python
+def get_extraction_prompt(context_block: str, name: str, provider: str) -> str:
+    ...
+```
+
+`hub.py` l'appelle et récupère le prompt adapté au provider actif — sans connaître les détails
+de chaque variante. Ajouter un nouveau provider = toucher uniquement `mem_prompts.py`.
+Ce refactor sera fait lors de l'implémentation des variantes Gemini et Anthropic.
+
+---
+
 ## Ce que NIMM n'est pas
 
 NIMM n'est pas conçu pour être un assistant généraliste. Il ne cherche pas

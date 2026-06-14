@@ -297,6 +297,7 @@ PREDICATS_CANONIQUES = {
     # LOISIRS
     'sport', 'lecture', 'jeu_video', 'cuisine', 'bricolage', 'jardinage',
     'musique_instrument', 'danse', 'ecriture', 'photographie', 'art', 'loisir',
+    'anciennete_pratique',
     # POSSESSIONS
     'vehicule', 'domicile', 'logement', 'equipement', 'animal',
     # RELATIONS SOCIALES
@@ -308,7 +309,7 @@ PREDICATS_CANONIQUES = {
     # PROJETS & INTENTIONS
     'objectif', 'reve', 'intention', 'projet', 'envie', 'apprentissage',
     # ÉVÉNEMENTS MARQUANTS
-    'evenement_vie', 'deuil', 'accident', 'demenagement',
+    'evenement_vie', 'deuil', 'accident', 'demenagement', 'anecdote',
     # FINANCES
     'budget', 'salaire', 'patrimoine', 'credit', 'epargne',
     # TECHNOLOGIE
@@ -316,7 +317,7 @@ PREDICATS_CANONIQUES = {
     # LANGUE & CULTURE
     'langue_maternelle', 'langue_parlee', 'culture_origine',
     # CARACTÈRE
-    'trait', 'force', 'faiblesse', 'peur',
+    'trait', 'force', 'faiblesse', 'peur', 'qualite',
     # HABITUDES & RITUELS
     'habitude', 'rituel', 'sommeil', 'fumeur',
     # BIEN-ÊTRE
@@ -1463,5 +1464,3 @@ def run_inference_engine(user_id: str = None):
         import traceback
         print(f"[INFERENCE] ⚠️ Erreur : {e}")
         traceback.print_exc()
-
-

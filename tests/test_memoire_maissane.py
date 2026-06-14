@@ -173,6 +173,49 @@ def lire_memoire():
     conn.close()
     return rows
 
+def lire_memoire_suspecte():
+    """
+    Anti-régression — bug identifié par Laurent (14/06/2026) :
+    le LLM peut attribuer à tort un fait sur Maïssane au sujet 'Laurent'
+    (avec predicat='enfant'/'fille') au lieu de 'Maïssane', ou halluciner
+    un prénom proche ('Laurence'). Renvoie les triplets suspects.
+    """
+    if not os.path.exists(DB_PATH):
+        return []
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT sujet, predicat, objet, valeur, poids, type_temporal, timestamp
+        FROM memory
+        WHERE LOWER(sujet) LIKE '%laurent%'
+           OR LOWER(sujet) LIKE '%laurence%'
+        ORDER BY timestamp DESC
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    # Ne garder que les triplets dont la valeur évoque le contenu Maïssane
+    # (judo, bac, 18, Bartholdi, Colmar...) — un fait 'Laurent / metier' normal
+    # n'est pas suspect, mais 'Laurent / enfant = judo, 6 ans, Bartholdi...' l'est.
+    mots_maissane = ["judo", "bac", "18", "bartholdi", "colmar", "maissane", "maïssane"]
+    suspects = []
+    for t in rows:
+        if _norm_simple(t.get("sujet", "")) == "laurence":
+            suspects.append(t)
+            continue
+        valeur_txt = _norm_simple(f"{t.get('objet','')} {t.get('valeur','')} {t.get('contexte','')}")
+        if any(m in valeur_txt for m in mots_maissane):
+            suspects.append(t)
+    return suspects
+
+def _norm_simple(s):
+    if not s:
+        return ""
+    s = s.lower()
+    for a, b in [("é","e"),("è","e"),("ê","e"),("à","a"),("î","i"),("ô","o"),("û","u"),("ï","i")]:
+        s = s.replace(a, b)
+    return s
+
 def verifier_attendu(triplets, sujet_attendu, predicat_attendu, mot_cle):
     """
     Cherche si un triplet correspond à l'attendu.
@@ -283,6 +326,22 @@ def main():
 
     # ── 6. Rapport
     afficher_rapport(resultats_par_niveau, tous_triplets)
+
+    # ── 7. Anti-régression : mauvaise attribution à Laurent / "Laurence" hallucinée
+    _print_sep()
+    print("🔎 Vérification anti-régression (sujet Laurent/Laurence)...")
+    suspects = lire_memoire_suspecte()
+    if suspects:
+        print(f"  ⚠️  {len(suspects)} triplet(s) suspect(s) trouvé(s) :")
+        for t in suspects:
+            val = (t.get("objet") or t.get("valeur") or "?")
+            print(f"     [{t.get('sujet')}] [{t.get('predicat','?')}] = {str(val)[:60]}")
+        print("  → un fait concernant Maïssane semble attribué à Laurent,")
+        print("    ou un prénom halluciné 'Laurence' a été créé.")
+    else:
+        print("  ✅ Aucun triplet suspect (pas de 'Laurence', pas de fait")
+        print("     Maïssane attribué à Laurent).")
+    _print_sep("═")
 
     print(f"\n  Fin : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     print(f"  Fil de test conservé dans NIMM (ID : {thread_id})")
