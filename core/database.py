@@ -444,9 +444,18 @@ def init_db(user_id: str = None):
             name        TEXT NOT NULL,
             mode        TEXT DEFAULT 'chat',
             created_at  TEXT DEFAULT (datetime('now')),
-            updated_at  TEXT DEFAULT (datetime('now'))
+            updated_at  TEXT DEFAULT (datetime('now')),
+            tags        TEXT DEFAULT ''
         )
     ''')
+
+    # Migration douce — ajoute la colonne si la table existait avant
+    try:
+        c.execute("ALTER TABLE threads ADD COLUMN tags TEXT DEFAULT ''")
+        conn.commit()
+        print("[DB] Colonne tags (threads) ajoutée.")
+    except Exception:
+        pass  # Colonne déjà présente — normal au redémarrage
 
     # ── Messages ──
     c.execute('''
@@ -1225,6 +1234,16 @@ def update_thread_name(thread_id: str, name: str):
     conn.execute(
         'UPDATE threads SET name = ?, updated_at = ? WHERE thread_id = ?',
         (name, datetime.now().isoformat(), thread_id)
+    )
+    conn.commit()
+    conn.close()
+
+def update_thread_tags(thread_id: str, tags: str):
+    """Enregistre les étiquettes d'un fil (chaîne libre, ex: 'projet, urgent')."""
+    conn = get_conn()
+    conn.execute(
+        'UPDATE threads SET tags = ? WHERE thread_id = ?',
+        (tags or '', thread_id)
     )
     conn.commit()
     conn.close()

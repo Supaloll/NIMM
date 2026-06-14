@@ -24,7 +24,7 @@ import httpx as _httpx
 
 from core.database import (
     init_db, get_threads, get_thread, create_thread, delete_thread, set_thread_mask,
-    update_thread_name, get_messages, add_message, count_messages,
+    update_thread_name, update_thread_tags, get_messages, add_message, count_messages,
     get_setting, set_setting, get_all_memory, delete_memory,
     update_memory_value, save_memory,
     get_cost_summary, reset_wallet, update_wallet_rates, update_wallet_solde,
@@ -277,7 +277,8 @@ class ThreadCreate(BaseModel):
     personality_mode: Optional[str] = None
 
 class ThreadRename(BaseModel):
-    name: str
+    name: Optional[str] = None
+    tags: Optional[str] = None
 
 class MessageCreate(BaseModel):
     role:    str
@@ -454,7 +455,10 @@ def _remove_from_ghost_list(thread_id: str) -> str:
 
 @app.patch("/api/threads/{thread_id}")
 async def rename_thread(thread_id: str, req: ThreadRename):
-    update_thread_name(thread_id, req.name)
+    if req.name is not None:
+        update_thread_name(thread_id, req.name)
+    if req.tags is not None:
+        update_thread_tags(thread_id, req.tags)
     return {"status": "ok"}
 
 

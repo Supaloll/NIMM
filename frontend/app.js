@@ -999,6 +999,15 @@ function renderSidebar() {
             name.appendChild(badge);
         }
 
+        // Badge étiquettes
+        if (t.tags && t.tags.trim()) {
+            const tagBadge = document.createElement('span');
+            tagBadge.className   = 'thread-tag-badge';
+            tagBadge.textContent = `🏷️ ${t.tags.trim()}`;
+            tagBadge.title       = `Étiquettes : ${t.tags.trim()}`;
+            name.appendChild(tagBadge);
+        }
+
         // Menu ...
         const menuBtn = document.createElement('button');
         menuBtn.className = 'thread-menu-btn';
@@ -1063,6 +1072,25 @@ function renderSidebar() {
             renderSidebar();
         });
 
+        // Étiquettes
+        const tagItem = document.createElement('button');
+        tagItem.className = 'thread-dropdown-item';
+        tagItem.setAttribute('role', 'menuitem');
+        tagItem.textContent = 'Étiquettes';
+        tagItem.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            dropdown.classList.remove('open');
+            const newTags = await promptModal('Étiquettes (séparées par des virgules)', t.tags || '');
+            if (newTags === null) return;
+            await fetch(`/api/threads/${t.thread_id}`, {
+                method:  'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ tags: newTags.trim() })
+            });
+            t.tags = newTags.trim();
+            renderSidebar();
+        });
+
         // Supprimer
         const delItem = document.createElement('button');
         delItem.className = 'thread-dropdown-item thread-dropdown-danger';
@@ -1104,6 +1132,7 @@ function renderSidebar() {
         dropdown.appendChild(renItem);
         dropdown.appendChild(expItem);
         dropdown.appendChild(pinItem);
+        dropdown.appendChild(tagItem);
         dropdown.appendChild(delItem);
 
         div.appendChild(name);
