@@ -3064,7 +3064,10 @@ async function loadSettingsIntoUI() {
         if (imageSel && routing.image) imageSel.value = routing.image;
 
         const memorySel = document.getElementById('routing-memory');
-        if (memorySel && routing.memory) memorySel.value = routing.memory;
+        if (memorySel) {
+            const memProvider = routing.memoire?.provider;
+            memorySel.value = memProvider || 'same';
+        }
 
         // Indiquer si les clés sont configurées
         ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily'].forEach(p => {
@@ -3334,7 +3337,8 @@ document.getElementById('routing-image')?.addEventListener('change', async (e) =
 });
 
 document.getElementById('routing-memory')?.addEventListener('change', async (e) => {
-    await _saveRouting('memory', e.target.value);
+    const val = e.target.value;
+    await _saveRouting('memoire', val === 'same' ? {} : { provider: val });
     _autoSaveFlash(e.target);
 });
 
