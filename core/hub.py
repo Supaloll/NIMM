@@ -2029,7 +2029,11 @@ async def extract_memories_background(
             f"Format strict :\n"
             f"%%MEM:type|sujet|prédicat|objet|contexte|mem_type|profondeur|temporal%%\n"
             f"- type      : trait / relation / activite\n"
-            f"- sujet     : prénom réel (jamais 'utilisateur' ni 'je') — ici '{name}'\n"
+            f"- sujet     : prénom réel de la personne CONCERNÉE par le fait — jamais "
+            f"'utilisateur' ni 'je'. Par défaut '{name}', SAUF si le fait porte sur un proche "
+            f"nommé explicitement (ex: 'ma fille Maïssane fait du judo depuis 6 ans' → "
+            f"sujet='Maïssane', predicat='sport', et non sujet='{name}', predicat='enfant'). "
+            f"Ne jamais inventer un prénom absent du texte.\n"
             f"- prédicat  : 1 mot canonique — prenom · age · metier · conjoint · enfant · "
             f"domicile · vehicule · aime · n_aime_pas · sport · loisir · "
             f"probleme_sante · traitement · allergie · objectif · trait · "
@@ -2051,7 +2055,7 @@ async def extract_memories_background(
             messages      = [{'role': 'user', 'content': prompt}],
             provider      = mem_provider,
             system_prompt = 'Tu es un extracteur de faits. Tu ne produis que des tags %%MEM%%, rien d\'autre.',
-            max_tokens    = 300,
+            max_tokens    = 600,
             temperature   = 0.0,
             api_keys      = api_keys,
         )
