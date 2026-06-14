@@ -1998,25 +1998,41 @@ async def extract_memories_background(
         context_block = '\n'.join(context_lines)
 
         prompt = (
-            f"Lis les échanges suivants et émets UNIQUEMENT les tags %%MEM%% "
-            f"pour les faits STABLES déclarés sur l'utilisateur ou ses proches.\n\n"
+            f"Analyse les échanges suivants et émets des tags %%MEM%% pour chaque fait stable "
+            f"concernant l'utilisateur ({name}) OU ses proches (enfants, conjoint, amis, famille).\n\n"
             f"Format strict :\n"
             f"%%MEM:type|sujet|prédicat|objet|contexte|mem_type|profondeur|temporal%%\n"
             f"- type      : trait / relation / activite\n"
-            f"- sujet     : prénom réel (jamais 'utilisateur' ni 'je') — ici '{name}'\n"
-            f"- prédicat  : 1 mot canonique — prenom · age · metier · conjoint · enfant · "
-            f"domicile · vehicule · aime · n_aime_pas · sport · loisir · "
-            f"probleme_sante · traitement · allergie · objectif · trait · "
-            f"statut_relation · diplome · competence · permis\n"
-            f"- contexte  : circonstance courte en 5 mots max (quand/comment/où) — vide si aucune\n"
+            f"- sujet     : prénom exact de la personne concernée par le fait.\n"
+            f"  → Si le fait concerne un proche, utilise SON prénom (ex: Maïssane), pas celui de {name}.\n"
+            f"  → Si tu ne connais pas le prénom du proche, utilise le prénom de {name} avec prédicat 'enfant'/'conjoint'.\n"
+            f"  → Jamais 'utilisateur', 'je', 'il', 'elle', 'fille', 'fils' comme sujet.\n"
+            f"- prédicat  : 1 mot canonique parmi les suivants :\n"
+            f"    age · metier · conjoint · enfant · domicile · vehicule · ecole · diplome · permis\n"
+            f"    aime · n_aime_pas · sport · loisir · competence · objectif\n"
+            f"    trait        — caractère, personnalité, force/faiblesse mentale ou comportementale\n"
+            f"    probleme_sante — maladie, douleur, handicap, traitement médical UNIQUEMENT — jamais un défaut de caractère\n"
+            f"    allergie · traitement\n"
+            f"- objet     : valeur concrète du fait (prénom, chiffre, mot-clé) — jamais vide.\n"
+            f"  → Pour les faits chiffrés (durée, score, classement) : mets le chiffre dans l'objet, pas dans le contexte.\n"
+            f"- contexte  : circonstance courte en 5 mots max — vide si aucune\n"
             f"- mem_type  : identite / activite\n"
             f"- profondeur: 1 (identité stable) à 5 (anecdotique)\n"
-            f"- temporal  : permanent (identité) / persistant (projet) / episodique (état du moment)\n\n"
+            f"- temporal  : permanent (identité/caractère) / persistant (projet/habitude) / episodique (événement passé)\n\n"
             f"RÈGLES :\n"
-            f"- Ne pas mémoriser : requêtes · états temporaires · métaphores · fiction · "
-            f"conditionnels ('j\\'aimerais', 'peut-être').\n"
-            f"- Plusieurs faits → autant de tags indépendants.\n"
-            f"- Aucun fait stable détecté → ne rien émettre du tout.\n\n"
+            f"- Plusieurs faits dans un message → autant de tags indépendants, un par fait.\n"
+            f"- Un fait sur un proche → sujet = prénom du proche, pas {name}.\n"
+            f"- Ne pas mémoriser : questions posées · états purement temporaires · métaphores · fiction · "
+            f"conditionnels ('j\\'aimerais', 'peut-être', 'voudrait').\n"
+            f"- Aucun fait stable détecté → ne rien émettre.\n\n"
+            f"EXEMPLES :\n"
+            f"Utilisateur : 'Ma fille Léa a 16 ans et fait de la natation depuis 3 ans.'\n"
+            f"%%MEM:trait|Léa|age|16||identite|1|permanent%%\n"
+            f"%%MEM:activite|Léa|sport|natation||activite|2|persistant%%\n"
+            f"%%MEM:activite|Léa|sport|3 ans de natation||activite|3|persistant%%\n\n"
+            f"Utilisateur : 'Je suis mécanicien. Mon fils Tom manque de confiance en lui.'\n"
+            f"%%MEM:trait|{name}|metier|mécanicien||identite|1|permanent%%\n"
+            f"%%MEM:trait|Tom|trait|manque de confiance||identite|2|permanent%%\n\n"
             f"Échanges récents :\n"
             f"{context_block}\n"
         )
@@ -2025,7 +2041,7 @@ async def extract_memories_background(
             messages      = [{'role': 'user', 'content': prompt}],
             provider      = mem_provider,
             system_prompt = 'Tu es un extracteur de faits. Tu ne produis que des tags %%MEM%%, rien d\'autre.',
-            max_tokens    = 300,
+            max_tokens    = 600,
             temperature   = 0.0,
             api_keys      = api_keys,
         )
