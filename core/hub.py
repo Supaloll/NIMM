@@ -1975,113 +1975,6 @@ async def classify_topic(user_message: str) -> None:
         print(f"[TOPIC] Erreur classify_topic : {e}")
 
 
-async def extract_memories_background(
-    user_message: str,
-    assistant_reply: str,
-    user_name: str,
-    thread_id: str = '',
-) -> None:
-    """
-    Extraction mémoire en arrière-plan — tourne après chaque échange.
-    Provider dédié (routing['memory']) ou fallback sur le chat provider.
-    N'affecte jamais la réponse utilisateur.
-    """
-    try:
-        settings  = load_settings()
-        api_keys  = _load_api_keys()
-        routing   = settings.get('provider_routing', {})
-
-        # Résolution du provider mémoire
-        mem_provider = routing.get('memory', 'same')
-        if not mem_provider or mem_provider == 'same':
-            mem_provider = settings.get('provider', '')
-        if not mem_provider:
-            return
-        # Ollama ne supporte pas ce type d'extraction structurée — fallback chat
-        if mem_provider == 'ollama':
-            mem_provider = settings.get('provider', '')
-        if not mem_provider:
-            return
-        # Vérifier la clé API si provider cloud
-        _LOCAL = {'ollama'}
-        if mem_provider not in _LOCAL and not api_keys.get(mem_provider):
-            return
-
-        name = user_name if user_name and user_name not in ('', 'utilisateur') else '?'
-
-        # Fenêtre glissante — 5 derniers échanges pour résoudre pronoms et références implicites
-        context_lines = []
-        if thread_id:
-            recent = get_messages(thread_id, limit=10)
-            for m in recent:
-                role = 'Utilisateur' if m['role'] == 'user' else 'Assistant'
-                context_lines.append(f"{role} : {m['content'][:400]}")
-        if not context_lines:
-            context_lines = [
-                f"Utilisateur : {user_message[:800]}",
-                f"Assistant : {assistant_reply[:400]}",
-            ]
-        context_block = '\n'.join(context_lines)
-
-        prompt = (
-            f"Lis les échanges suivants et émets UNIQUEMENT les tags %%MEM%% "
-            f"pour les faits STABLES déclarés sur l'utilisateur ou ses proches.\n\n"
-            f"Format strict :\n"
-            f"%%MEM:type|sujet|prédicat|objet|contexte|mem_type|profondeur|temporal%%\n"
-            f"- type      : trait / relation / activite\n"
-            f"- sujet     : prénom réel de la personne CONCERNÉE par le fait — jamais "
-            f"'utilisateur' ni 'je'. Par défaut '{name}', SAUF si le fait porte sur un proche "
-            f"nommé explicitement (ex: 'ma fille Maïssane fait du judo depuis 6 ans' → "
-            f"sujet='Maïssane', predicat='sport', et non sujet='{name}', predicat='enfant'). "
-            f"Ne jamais inventer un prénom absent du texte.\n"
-            f"- prédicat  : 1 mot canonique — prenom · age · metier · conjoint · enfant · "
-            f"domicile · vehicule · aime · n_aime_pas · sport · loisir · "
-            f"probleme_sante · traitement · allergie · objectif · trait · "
-            f"statut_relation · diplome · competence · permis\n"
-            f"- contexte  : circonstance courte en 5 mots max (quand/comment/où) — vide si aucune\n"
-            f"- mem_type  : identite / activite\n"
-            f"- profondeur: 1 (identité stable) à 5 (anecdotique)\n"
-            f"- temporal  : permanent (identité) / persistant (projet) / episodique (état du moment)\n\n"
-            f"RÈGLES :\n"
-            f"- Ne pas mémoriser : requêtes · états temporaires · métaphores · fiction · "
-            f"conditionnels ('j\\'aimerais', 'peut-être').\n"
-            f"- Plusieurs faits → autant de tags indépendants.\n"
-            f"- Aucun fait stable détecté → ne rien émettre du tout.\n\n"
-            f"Échanges récents :\n"
-            f"{context_block}\n"
-        )
-
-        result = await call_llm(
-            messages      = [{'role': 'user', 'content': prompt}],
-            provider      = mem_provider,
-            system_prompt = 'Tu es un extracteur de faits. Tu ne produis que des tags %%MEM%%, rien d\'autre.',
-            max_tokens    = 600,
-            temperature   = 0.0,
-            api_keys      = api_keys,
-        )
-
-        if not result or '%%MEM' not in result:
-            return
-
-        # Réutiliser le parser existant
-        _, _, extracted_memories, _, _, _, _ = extract_all_tags(result)
-        if not extracted_memories:
-            return
-
-        from modules.memory import save_inline_memory
-        from core.database import get_all_memory
-        existing = get_all_memory()
-        for mem in extracted_memories:
-            try:
-                save_inline_memory(mem, user_message, existing=existing)
-            except Exception as e:
-                print(f"[MEM-BG] Erreur sauvegarde : {e}")
-
-        print(f"[MEM-BG] ✅ {len(extracted_memories)} fait(s) extrait(s) via {mem_provider}")
-
-    except Exception as e:
-        print(f"[MEM-BG] Erreur extract_memories_background : {e}")
-
 
 async def process_message(
     thread_id: str,
@@ -2325,7 +2218,6 @@ async def process_message(
         set_setting(f'dominant_{thread_id}', dominant)
 
     # Path B désactivé — extraction inline %%MEM%% (Path A) est suffisant.
-    # extract_memories_background retiré : double extraction = source de doublons.
 
     # Classifier le topic + carnet en arrière-plan (timeout 20s)
     _create_bg_task(classify_topic(user_message))
@@ -2630,7 +2522,6 @@ async def process_message_stream(
         set_setting(f'dominant_{thread_id}', dominant)
 
     # Path B désactivé — extraction inline %%MEM%% (Path A) est suffisant.
-    # extract_memories_background retiré : double extraction = source de doublons.
 
     # Classifier le topic + carnet en arrière-plan (timeout 20s)
     _create_bg_task(classify_topic(user_message))
