@@ -1172,23 +1172,55 @@ function _updateMaskIndicator(thread) {
 }
 
 async function promptNewThreadModal() {
-    // Charger les masques disponibles
-    const masks = await fetch('/api/masks').then(r => r.json()).catch(() => []);
+    // Charger les masques disponibles + la configuration en cours
+    const [masks, routing, prov, modelData, keys] = await Promise.all([
+        fetch('/api/masks').then(r => r.json()).catch(() => []),
+        fetch('/api/settings/routing').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/provider').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/model').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/api-keys').then(r => r.json()).catch(() => ({})),
+    ]);
     const sel = document.getElementById('new-thread-mask-select');
     sel.innerHTML = masks.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
     const activeMask = document.getElementById('mask-select')?.value;
     if (activeMask) sel.value = activeMask;
 
-    // Remettre à zéro
-    document.getElementById('new-thread-mask-row').style.display = '';
+    // Pré-déterminer le mode personnalité d'après le fil courant
+    const curThread = threads.find(t => t.thread_id === currentThreadId);
+    const curMode = curThread?.personality_mode === 'potards' ? 'potards' : 'mask';
+
     document.querySelectorAll('.new-thread-mode-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('new-thread-mode-mask').classList.add('active');
+    (document.querySelector(`.new-thread-mode-btn[data-mode="${curMode}"]`)
+        || document.getElementById('new-thread-mode-mask')).classList.add('active');
+    document.getElementById('new-thread-mask-row').style.display = curMode === 'mask' ? '' : 'none';
+
+    // Pré-remplir le routage et le modèle avec la configuration en cours
+    const providerSel  = document.getElementById('new-thread-provider-select');
+    const memSel        = document.getElementById('new-thread-routing-memory');
+    const titreSel      = document.getElementById('new-thread-routing-titre');
+    const syntheseSel   = document.getElementById('new-thread-routing-synthese');
+    const providerVal   = routing.chat || prov.provider || 'mistral';
+    const memVal0       = routing.memoire?.provider  || 'same';
+    const titreVal0     = routing.titre?.provider    || 'same';
+    const syntheseVal0  = routing.synthese?.provider || 'same';
+
+    providerSel.value = providerVal;
+    memSel.value      = memVal0;
+    titreSel.value    = titreVal0;
+    syntheseSel.value = syntheseVal0;
+    await _populateModelSelect(providerVal, modelData.model || null, 'new-thread-model-select');
+    _applyProviderConstraints(keys);
+
+    providerSel.onchange = async () => {
+        await _populateModelSelect(providerSel.value, null, 'new-thread-model-select');
+        _applyProviderConstraints(keys);
+    };
 
     return new Promise(resolve => {
         const modal     = document.getElementById('new-thread-modal');
         const okBtn     = document.getElementById('new-thread-ok');
         const cancelBtn = document.getElementById('new-thread-cancel');
-        let selectedMode = 'mask';
+        let selectedMode = curMode;
 
         // Boutons mode
         document.querySelectorAll('.new-thread-mode-btn').forEach(btn => {
@@ -1203,14 +1235,45 @@ async function promptNewThreadModal() {
 
         modal.classList.remove('hidden');
 
+        // Focus accessible : sur l'élément pertinent selon le mode pré-sélectionné
+        setTimeout(() => {
+            const focusTarget = curMode === 'mask'
+                ? document.getElementById('new-thread-mask-select')
+                : document.getElementById('new-thread-mode-potards');
+            (focusTarget || modal.querySelector('button, select, input'))?.focus();
+        }, 50);
+
         const cleanup = (result) => {
             modal.classList.add('hidden');
             resolve(result);
         };
-        okBtn.onclick = () => {
+        okBtn.onclick = async () => {
             const maskId = selectedMode === 'mask'
                 ? document.getElementById('new-thread-mask-select').value
                 : null;
+
+            // Persister le routage / modèle s'ils ont été modifiés pour ce fil
+            if (providerSel.value !== providerVal) {
+                await _saveRouting('chat', providerSel.value);
+            }
+            const modelSel = document.getElementById('new-thread-model-select');
+            if (modelSel && modelSel.value && modelSel.value !== (modelData.model || '')) {
+                await fetch('/api/settings/model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: modelSel.value })
+                });
+            }
+            if (memSel.value !== memVal0) {
+                await _saveRouting('memoire', memSel.value === 'same' ? {} : { provider: memSel.value });
+            }
+            if (titreSel.value !== titreVal0) {
+                await _saveRouting('titre', titreSel.value === 'same' ? {} : { provider: titreSel.value });
+            }
+            if (syntheseSel.value !== syntheseVal0) {
+                await _saveRouting('synthese', syntheseSel.value === 'same' ? {} : { provider: syntheseSel.value });
+            }
+
             cleanup({ maskId, mode: selectedMode });
         };
         cancelBtn.onclick = () => cleanup(null);
@@ -3335,9 +3398,10 @@ const MODELS_BY_PROVIDER = {
     ],
 };
 
-async function _populateModelSelect(provider, savedModel) {
-    const sel = document.getElementById('model-select');
+async function _populateModelSelect(provider, savedModel, selId = 'model-select') {
+    const sel = document.getElementById(selId);
     if (!sel) return;
+    const isMainSelect = selId === 'model-select';
 
     if (provider === 'ollama') {
         sel.innerHTML = '<option value="">⏳ Détection des modèles...</option>';
@@ -3354,19 +3418,21 @@ async function _populateModelSelect(provider, savedModel) {
                 sel.value = savedModel;
             } else {
                 sel.value = models[0];
-                await fetch('/api/settings/model', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: models[0] })
-                });
+                if (isMainSelect) {
+                    await fetch('/api/settings/model', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: models[0] })
+                    });
+                }
             }
         } catch {
             sel.innerHTML = [
                 'llama3', 'llama3.1', 'mistral', 'gemma3:4b', 'gemma3:12b', 'phi3', 'qwen2'
             ].map(m => `<option value="${m}">${m}</option>`).join('');
 
-            // Champ texte libre pour les modeles non listes
-            if (!document.getElementById('ollama-custom-model')) {
+            // Champ texte libre pour les modeles non listes (uniquement Réglages)
+            if (isMainSelect && !document.getElementById('ollama-custom-model')) {
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.id = 'ollama-custom-model';
@@ -3387,8 +3453,10 @@ async function _populateModelSelect(provider, savedModel) {
                 sel.parentNode.insertBefore(input, sel.nextSibling);
             }
 
-            const warn = document.getElementById('ollama-warn');
-            if (warn) warn.classList.remove('hidden');
+            if (isMainSelect) {
+                const warn = document.getElementById('ollama-warn');
+                if (warn) warn.classList.remove('hidden');
+            }
         }
         return;
     }
@@ -3404,8 +3472,10 @@ async function _populateModelSelect(provider, savedModel) {
     if (savedModel && !models.find(m => m.value === savedModel)) {
         sel.value = models[0].value;
     }
-    const warn = document.getElementById('ollama-warn');
-    if (warn) warn.classList.add('hidden');
+    if (isMainSelect) {
+        const warn = document.getElementById('ollama-warn');
+        if (warn) warn.classList.add('hidden');
+    }
 }
 
 document.getElementById('provider-select')?.addEventListener('change', async (e) => {
