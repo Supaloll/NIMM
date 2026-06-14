@@ -6,6 +6,7 @@
 import uuid
 import json
 import os
+import re
 import asyncio
 import threading
 import time
@@ -15,7 +16,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 import os as _os_main
 import base64 as _base64
@@ -30,7 +31,8 @@ from core.database import (
     check_auto_resets,
     set_user_context, get_current_user,
     get_all_users, create_user, delete_user, update_user,
-    save_image, get_images, rename_image, delete_image
+    save_image, get_images, rename_image, delete_image,
+    list_presets, save_preset, delete_preset, apply_preset
 )
 from core.hub import process_message, memory_worker
 
@@ -289,6 +291,10 @@ class ProviderSetting(BaseModel):
 class MaskSetting(BaseModel):
     mask_id: str
 
+class MaskSaveRequest(BaseModel):
+    name:  str
+    emoji: Optional[str] = None
+
 class LengthSetting(BaseModel):
     value: int
 
@@ -327,9 +333,12 @@ class ModelSetting(BaseModel):
     model: str
 
 class RoutingSetting(BaseModel):
-    chat:   Optional[str] = None
-    vision: Optional[str] = None
-    image:  Optional[str] = None
+    chat:     Optional[str] = None
+    vision:   Optional[str] = None
+    image:    Optional[str] = None
+    memoire:  Optional[Dict[str, str]] = None
+    titre:    Optional[Dict[str, str]] = None
+    synthese: Optional[Dict[str, str]] = None
 
 
 # ══════════════════════════════════════════
@@ -788,6 +797,36 @@ async def save_routing(req: RoutingSetting):
     if 'image'  in updates: set_setting('image_provider',  updates['image'])
     return {"status": "ok", "routing": current}
 
+class PresetSaveRequest(BaseModel):
+    name: str
+
+@app.get("/api/presets")
+async def get_presets():
+    """Liste les préréglages enregistrés (nom -> config + date)."""
+    return {"presets": list_presets()}
+
+@app.post("/api/presets")
+async def post_preset(req: PresetSaveRequest):
+    """Enregistre (ou remplace) un preset à partir des réglages actuels."""
+    name = (req.name or '').strip()
+    if not name:
+        raise HTTPException(400, "Nom de préréglage requis.")
+    config = save_preset(name)
+    return {"status": "ok", "name": name, "config": config}
+
+@app.delete("/api/presets/{name}")
+async def delete_preset_route(name: str):
+    delete_preset(name)
+    return {"status": "ok"}
+
+@app.post("/api/presets/{name}/apply")
+async def apply_preset_route(name: str):
+    """Réapplique un preset enregistré aux réglages courants."""
+    config = apply_preset(name)
+    if config is None:
+        raise HTTPException(404, "Préréglage introuvable.")
+    return {"status": "ok", "config": config}
+
 @app.get("/api/settings/length")
 async def get_length():
     return {"value": int(get_setting('max_tokens', '3500'))}
@@ -1167,6 +1206,49 @@ async def list_masks():
     return result
 
 
+@app.post("/api/masks/save")
+async def save_mask_from_potards(req: MaskSaveRequest):
+    """Crée un masque personnalisé (fichier JSON) à partir de l'état actuel
+    des curseurs (potards), pour pouvoir le réutiliser ensuite tel quel."""
+    from core.hub import load_potards, build_potards_prompt
+
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Nom manquant.")
+    emoji = (req.emoji or '🎛️').strip() or '🎛️'
+
+    import unicodedata
+    mask_id = unicodedata.normalize('NFD', name.lower())
+    mask_id = ''.join(c for c in mask_id if unicodedata.category(c) != 'Mn')
+    mask_id = re.sub(r'\s+', '_', mask_id)
+    mask_id = re.sub(r'[^a-z0-9_]', '', mask_id) or 'masque_perso'
+
+    masks_dir = os.path.join(os.path.dirname(__file__), 'modules', 'masks')
+    os.makedirs(masks_dir, exist_ok=True)
+
+    # Éviter d'écraser un masque existant sous le même id
+    base_id = mask_id
+    n = 2
+    while os.path.exists(os.path.join(masks_dir, f'{mask_id}.json')):
+        mask_id = f'{base_id}_{n}'
+        n += 1
+
+    potards = load_potards()
+    system_prompt = build_potards_prompt(potards)
+
+    data = {
+        'name':          name,
+        'emoji':         emoji,
+        'id':            mask_id,
+        'nom':           name,
+        'system_prompt': system_prompt,
+    }
+    with open(os.path.join(masks_dir, f'{mask_id}.json'), 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return {'id': mask_id, 'label': f"{name} {emoji}".strip()}
+
+
 # ══════════════════════════════════════════
 # IDENTITÉ UTILISATEUR
 # ══════════════════════════════════════════
@@ -1490,8 +1572,22 @@ class RatesUpdate(BaseModel):
 
 @app.get("/api/costs")
 async def costs_summary():
-    """Retourne l'état de tous les wallets providers."""
-    return {"wallets": get_cost_summary()}
+    """
+    Retourne l'état des wallets providers pour lesquels une clé API est
+    configurée (Ollama et Brave Search restent toujours affichés : Ollama
+    est local/gratuit, Brave a un palier gratuit sans clé)."""
+    from core.hub import load_settings
+    settings = load_settings()
+    api_keys = settings.get('api_keys', {}) or {}
+
+    def _a_une_cle(provider: str) -> bool:
+        if provider in ('ollama', 'brave'):
+            return True
+        key_name = 'stability_ai' if provider == 'stability-ai' else provider
+        return bool(api_keys.get(key_name))
+
+    wallets = [w for w in get_cost_summary() if _a_une_cle(w['provider'])]
+    return {"wallets": wallets}
 
 @app.post("/api/costs/reset/{provider}")
 async def costs_reset(provider: str):
@@ -1510,6 +1606,23 @@ async def costs_rates_update(provider: str, req: RatesUpdate):
     """Met à jour les tarifs ($/1M tokens) d'un provider."""
     update_wallet_rates(provider, req.rate_in, req.rate_out)
     return {"status": "ok", "provider": provider, "rate_in": req.rate_in, "rate_out": req.rate_out}
+
+@app.get("/api/costs/credits")
+async def costs_credits():
+    """
+    Interroge en temps réel le solde restant des providers dont l'API
+    l'expose (OpenRouter, DeepSeek, Stability AI). Les autres providers
+    renvoient {'available': False, 'reason': '...'}.
+    """
+    from core.engine import get_provider_credit, PROVIDERS_WITH_CREDIT
+    from core.hub import load_settings
+    settings = load_settings()
+    api_keys = settings.get('api_keys', {})
+
+    results = {}
+    for provider in PROVIDERS_WITH_CREDIT:
+        results[provider] = await get_provider_credit(provider, api_keys)
+    return {"credits": results}
 
 
 # ══════════════════════════════════════════

@@ -1,0 +1,52 @@
+Voici une conversation. La personne qui parle s'appelle {{USER_NAME}}.
+
+{{CONV_TEXT}}
+
+TÂCHE : extraire les faits mémorisables sur {{USER_NAME}}, et sur les proches dont le lien avec lui est explicitement nommé (ex : 'ma femme Nadia', 'mon fils Théo'). Le prénom seul ne suffit pas, il faut le lien.
+
+NE PAS EXTRAIRE :
+- une personne publique, historique, fictionnelle, ou un sujet de discussion sans lien familial/relationnel direct avec {{USER_NAME}}.
+- un objet vide, un score, une phrase entière comme prédicat.
+- un fragment qui n'a pas de sens seul (ex: 'Strasbourg' sans rôle).
+
+Si rien à extraire : réponds [].
+
+FORMAT — un tableau JSON d'objets, chacun avec EXACTEMENT ces champs :
+{"registre": "...", "type": "...", "sujet": "...", "predicat": "...", "objet": "...", "memoire_type": "...", "profondeur": N, "type_temporal": "...", "contexte": "..."}
+
+CHAMP "registre" — choisis 1 mot parmi : neutre, emotionnel, figure, intention, hypothese
+  - neutre : fait calme, même s'il décrit une émotion passée ('j'étais content')
+  - emotionnel : ton à vif, écrit dans le feu de l'action (colère, frustration forte)
+  - figure : humour, ironie, second degré
+  - intention : souhait, projet réel
+  - hypothese : fiction, irréel pur
+  Par défaut, si tu hésites : neutre.
+
+CHAMP "sujet" : le prénom réel — '{{USER_NAME}}' ou le prénom du proche concerné. Jamais un rôle ('mon fils'), jamais 'je' ou 'utilisateur'.
+
+CHAMP "type" : trait, relation ou evenement.
+
+CHAMP "predicat" : un mot court (max 2 mots), parmi ces familles :
+  identité : prenom, age, sexe, nationalite
+  famille  : conjoint, enfant, parent, frere, soeur
+  travail  : metier, employeur, diplome, competence, anciennete_debut
+  santé    : probleme_sante, traitement, allergie
+  goûts    : aime, n_aime_pas, musique_preferee, serie_preferee
+  loisirs  : sport, lecture, loisir, anciennete_pratique
+  lieu     : domicile, vehicule
+  projets  : objectif, reve, intention, projet
+  caractère: trait, valeur, stress, qualite
+  anecdote : pour un événement marquant qui ne rentre dans aucune autre case (résume en objet ≤ 12 mots)
+
+CHAMP "objet" : la valeur du fait, courte et compréhensible seule (sans relire la conversation).
+CHAMP "memoire_type" : identite, famille, preference, loisir, sante, travail, humeur ou autre.
+CHAMP "profondeur" : entier de 1 (info de base) à 5 (anecdote précise).
+CHAMP "type_temporal" : permanent, persistant, episodique ou engagement.
+CHAMP "contexte" : précision courte (5 mots max), ou "" si rien à ajouter.
+
+EXEMPLES :
+"J'habite à Lyon" -> {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"domicile","objet":"Lyon","memoire_type":"identite","profondeur":2,"type_temporal":"permanent","contexte":""}
+"Je fais du judo depuis 6 ans" -> {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"anciennete_pratique","objet":"6 ans","memoire_type":"loisir","profondeur":2,"type_temporal":"persistant","contexte":"judo"}
+"Ma femme Nadia est infirmière" -> {"registre":"neutre","type":"trait","sujet":"Nadia","predicat":"metier","objet":"infirmiere","memoire_type":"travail","profondeur":2,"type_temporal":"persistant","contexte":""}
+
+Réponds UNIQUEMENT avec le tableau JSON, sans aucun texte avant ou après, sans balises de code.

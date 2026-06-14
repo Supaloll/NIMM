@@ -105,8 +105,9 @@
                 <button id="float-tts-btn" class="float-tts-btn hidden" title="Ecouter la reponse" aria-label="Écouter la dernière réponse">
                     <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.5h2.5l4-3v11l-4-3H2z"/><path d="M10.5 5.5a3.5 3.5 0 0 1 0 5"/><path d="M12.5 3.5a6 6 0 0 1 0 9"/></svg>
                 </button>
-                <div id="messages" role="log" aria-live="polite" aria-label="Zone de conversation">
+                <div id="messages" role="log" aria-live="off" aria-label="Zone de conversation">
                 </div>
+                <div id="sr-stream-status" class="sr-only" role="status" aria-live="polite"></div>
             </div>
 
             <div id="input-area"><h2 class="sr-only">Message</h2>
@@ -184,7 +185,36 @@
         <!-- ── CONTENU ONGLET PARAMÈTRES ── -->
         <div id="settings-tab-params" class="settings-tab-content" role="tabpanel" aria-labelledby="tab-btn-params">
 
-        <div class="settings-section-title">🔑 Connexions</div>
+        <!-- ── PRÉRÉGLAGES ── -->
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🧩 Préréglages</summary>
+        <div class="settings-section">
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <label for="preset-select" style="font-size:0.82rem;color:var(--text-muted);">Préréglage :</label>
+                <select id="preset-select" class="routing-select" aria-label="Préréglage enregistré" style="flex:1;min-width:160px;">
+                    <option value="">— aucun préréglage enregistré —</option>
+                </select>
+                <button id="preset-apply-btn" type="button">▶ Appliquer</button>
+                <button id="preset-delete-btn" type="button">🗑️ Supprimer</button>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+                <label for="preset-name-input" style="font-size:0.82rem;color:var(--text-muted);">Nouveau nom :</label>
+                <input type="text" id="preset-name-input" placeholder="ex : Confidentiel (Mistral local)"
+                       aria-label="Nom du préréglage à créer à partir des réglages actuels"
+                       style="flex:1;min-width:160px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-main);font-size:0.85rem;">
+                <button id="preset-save-btn" type="button">💾 Enregistrer la config actuelle</button>
+            </div>
+            <div id="preset-status" role="status" aria-live="polite" style="font-size:0.78rem;color:var(--text-muted);margin-top:6px;"></div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                Un préréglage retient : fournisseur/modèle de chat, routage par tâche, masque, mode local, niveau de mémorisation, longueur des réponses, moteur de recherche.
+            </div>
+        </div>
+        </details>
+
+        <div class="settings-divider"></div>
+
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🔑 Connexions</summary>
 
         <!-- ── CLÉS API ── -->
         <div class="settings-section">
@@ -278,15 +308,44 @@
                 </select>
                 <span class="routing-warning hidden" id="warn-memory" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
 
+                <span class="routing-label">🏷️ Titre des conversations</span>
+                <select id="routing-titre" class="routing-select" aria-label="Provider pour la génération du titre des conversations">
+                    <option value="same">↩ Même que le chat</option>
+                    <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
+                    <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                    <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
+                    <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
+                    <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
+                    <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                    <option value="ollama">🟢 Ollama (local)</option>
+                </select>
+                <span class="routing-warning hidden" id="warn-titre" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+
+                <span class="routing-label">📄 Synthèse</span>
+                <select id="routing-synthese" class="routing-select" aria-label="Provider pour la génération de synthèse">
+                    <option value="same">↩ Même que le chat</option>
+                    <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
+                    <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                    <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
+                    <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
+                    <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
+                    <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                    <option value="ollama">🟢 Ollama (local)</option>
+                </select>
+                <span class="routing-warning hidden" id="warn-synthese" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+
                 <span class="routing-label">🔠 PDF (texte sélectionnable)</span>
                 <span class="routing-fixed">Local gratuit (pypdf)</span>
 
             </div>
         </div>
 
+        </details>
+
         <div class="settings-divider"></div>
 
-        <div class="settings-section-title">🎭 Personnalité</div>
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🎭 Personnalité</summary>
 
         <!-- ── PERSONNALITÉ ── -->
         <div class="setting-group">
@@ -326,12 +385,28 @@
                 <div id="potards-wtf" class="hidden">
                 </div>
 
+                <!-- Sauvegarder l'état actuel des curseurs comme masque -->
+                <div style="margin-top:14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                    <label for="potards-save-name" style="font-size:0.8rem;color:var(--text-muted);">Nom du masque :</label>
+                    <input type="text" id="potards-save-name" placeholder="ex : Mon réglage du soir"
+                           aria-label="Nom du masque à créer à partir des curseurs actuels"
+                           style="flex:1;min-width:140px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-main);font-size:0.85rem;">
+                    <button id="potards-save-btn" type="button"
+                            style="padding:6px 12px;border-radius:6px;background:var(--accent);color:#000;border:none;cursor:pointer;font-size:0.8rem;font-weight:600;">
+                        💾 Enregistrer comme masque
+                    </button>
+                </div>
+                <div id="potards-save-status" role="status" aria-live="polite" style="font-size:0.78rem;color:var(--text-muted);margin-top:4px;"></div>
+
             </div>
         </div>
 
+        </details>
+
         <div class="settings-divider"></div>
 
-        <div class="settings-section-title">🎙️ Voix</div>
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🎙️ Voix</summary>
 
         <div class="setting-group">
             <label>🔊 Voix TTS</label>
@@ -341,9 +416,12 @@
             </div>
         </div>
 
+        </details>
+
         <div class="settings-divider"></div>
 
-        <div class="settings-section-title">⚙️ Avancé</div>
+        <details class="settings-section-details">
+        <summary class="settings-section-title">⚙️ Avancé</summary>
 
         <div class="setting-group">
             <label>📏 Longueur des réponses</label>
@@ -466,7 +544,21 @@
 
         <div class="settings-divider"></div>
 
-        <div class="settings-section-title">🎨 Apparence</div>
+        <!-- ── MISE À JOUR ── -->
+        <div class="setting-group">
+            <label>🔄 Mise à jour</label>
+            <button id="btn-update" style="margin-top:8px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;">
+                Vérifier et installer les mises à jour
+            </button>
+            <div id="update-status" style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);"></div>
+        </div>
+
+        </details>
+
+        <div class="settings-divider"></div>
+
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🎨 Apparence</summary>
 
         <!-- ── POLICE ── -->
         <div class="setting-group">
@@ -507,16 +599,7 @@
             </div>
         </div>
 
-        <div class="settings-divider"></div>
-
-        <!-- ── MISE À JOUR ── -->
-        <div class="setting-group">
-            <label>🔄 Mise à jour</label>
-            <button id="btn-update" style="margin-top:8px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;">
-                Vérifier et installer les mises à jour
-            </button>
-            <div id="update-status" style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);"></div>
-        </div>
+        </details>
 
         </div><!-- /settings-tab-params -->
 
@@ -668,6 +751,67 @@
                     style="width:100%;margin:6px 0 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.9rem;outline:none;box-sizing:border-box;">
             </select>
         </div>
+
+        <!-- ── ROUTAGE ET MODÈLE (pré-rempli avec la config en cours) ── -->
+        <details class="settings-section-details" style="margin-bottom:14px;">
+        <summary class="settings-section-title" style="font-size:0.85rem;">⚙️ Routage et modèle pour ce fil</summary>
+        <div class="settings-section" style="padding-top:8px;">
+            <span class="routing-label">💬 Fournisseur</span>
+            <select id="new-thread-provider-select" class="routing-select" aria-label="Fournisseur pour ce fil">
+                <option value="anthropic" data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                <option value="deepseek"  data-needs-key="deepseek">🟢 DeepSeek</option>
+                <option value="gemini"    data-needs-key="gemini">🟡 Gemini</option>
+                <option value="openai"    data-needs-key="openai">🔴 OpenAI</option>
+                <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                <option value="mistral"   data-needs-key="mistral">🔵 Mistral</option>
+                <option value="ollama">🟢 Ollama (local)</option>
+            </select>
+            <span class="routing-sublabel">🤖 Modèle</span>
+            <select id="new-thread-model-select" class="routing-select routing-subselect" aria-label="Modèle pour ce fil">
+                <option value="">— chargement —</option>
+            </select>
+
+            <span class="routing-label">🧠 Mémoire</span>
+            <select id="new-thread-routing-memory" class="routing-select" aria-label="Provider pour l'extraction mémoire de ce fil">
+                <option value="same">↩ Même que le chat</option>
+                <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
+                <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
+                <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
+                <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
+                <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                <option value="ollama">🟢 Ollama (local)</option>
+            </select>
+
+            <span class="routing-label">🏷️ Titre</span>
+            <select id="new-thread-routing-titre" class="routing-select" aria-label="Provider pour le titre de ce fil">
+                <option value="same">↩ Même que le chat</option>
+                <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
+                <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
+                <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
+                <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
+                <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                <option value="ollama">🟢 Ollama (local)</option>
+            </select>
+
+            <span class="routing-label">📄 Synthèse</span>
+            <select id="new-thread-routing-synthese" class="routing-select" aria-label="Provider pour la synthèse de ce fil">
+                <option value="same">↩ Même que le chat</option>
+                <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
+                <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
+                <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
+                <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
+                <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                <option value="ollama">🟢 Ollama (local)</option>
+            </select>
+
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;">
+                Pré-rempli avec la configuration en cours. Modifie si ce fil doit utiliser un autre fournisseur ou modèle.
+            </div>
+        </div>
+        </details>
 
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
             <button id="new-thread-cancel" class="btn-secondary">Annuler</button>
@@ -855,72 +999,4 @@
             <h3 id="galerie-modal-title"><span aria-hidden="true">🖼️</span> Galerie d'images</h3>
             <button id="galerie-close" class="modal-close" aria-label="Fermer la galerie">✕</button>
         </div>
-        <div id="galerie-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;max-height:65vh;overflow-y:auto;padding:4px 2px;">
-            <div id="galerie-empty" style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px 0;">Aucune image sauvegardée.</div>
-        </div>
-    </div>
-</div>
-
-<!-- MODALE RENOMMAGE IMAGE -->
-<div id="galerie-rename-modal" class="modal-overlay hidden">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="galerie-rename-title" style="max-width:400px;">
-        <div class="modal-header">
-            <h3 id="galerie-rename-title">Renommer l'image</h3>
-            <button id="galerie-rename-close" class="modal-close" aria-label="Fermer">✕</button>
-        </div>
-        <input id="galerie-rename-input" type="text" placeholder="Nouveau nom (sans .png)"
-            style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;margin-top:8px;">
-        <div style="display:flex;gap:8px;margin-top:12px;">
-            <button id="galerie-rename-ok" class="btn-primary">✓ Renommer</button>
-            <button id="galerie-rename-cancel" class="btn-secondary">Annuler</button>
-        </div>
-    </div>
-</div>
-
-<div id="drop-overlay" aria-hidden="true">
-    <span>📎 Déposer le fichier ici</span>
-</div>
-<!-- MODALE ENRICHISSEMENT WEB -->
-<div id="enrich-modal" class="modal-overlay hidden">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="enrich-modal-title" style="max-width:620px;">
-        <div class="modal-header">
-            <h3 id="enrich-modal-title"><span aria-hidden="true">🌐 </span>Enrichissement web</h3>
-            <button class="close-modal" id="enrich-close" aria-label="Fermer">✕</button>
-        </div>
-        <p style="color:var(--text-muted);font-size:0.88rem;margin:4px 0 12px;">
-            Ajoute du contenu à la zone de référence : indique des URL (une par ligne) ou colle un texte.
-            Ce contenu reste séparé de la mémoire personnelle.
-        </p>
-        <div style="display:flex;gap:8px;margin-bottom:10px;" role="radiogroup" aria-label="Type de source">
-            <button id="enrich-mode-url" class="btn-secondary" role="radio" aria-checked="true">URL (une par ligne)</button>
-            <button id="enrich-mode-text" class="btn-secondary" role="radio" aria-checked="false">Texte collé</button>
-            <button id="enrich-mode-file" class="btn-secondary" role="radio" aria-checked="false">Fichier</button>
-        </div>
-        <div id="enrich-title-row" class="hidden" style="margin-bottom:8px;">
-            <label for="enrich-title" class="sr-only">Titre du contenu collé</label>
-            <input type="text" id="enrich-title" placeholder="Titre (facultatif)"
-                   style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
-        </div>
-        <div id="enrich-file-row" class="hidden" style="margin-bottom:8px;">
-            <label for="enrich-file" class="sr-only">Fichier à ingérer</label>
-            <input type="file" id="enrich-file" accept=".pdf,.docx,.rtf,.odt,.epub,.html,.htm,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"
-                   style="width:100%;color:var(--text);">
-            <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:0.88rem;color:var(--text-muted);">
-                <input type="checkbox" id="enrich-force-ocr"> Forcer l'OCR (PDF scanné ou mixte)
-            </label>
-        </div>
-        <label for="enrich-input" class="sr-only">Contenu à ingérer</label>
-        <textarea id="enrich-input" rows="4" placeholder="https://exemple.org/article&#10;https://autre.org/page"
-                  style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;"></textarea>
-        <div style="display:flex;gap:8px;margin-top:10px;">
-            <button id="enrich-submit" class="btn-primary" style="flex:1;">Ingérer</button>
-        </div>
-        <p id="enrich-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:8px 0;"></p>
-        <h4 style="margin:14px 0 6px;">Contenus en mémoire</h4>
-        <div id="enrich-list" aria-live="polite"></div>
-    </div>
-</div>
-
-<script src="/static/app.js?v=20260613-2"></script>
-</body>
-</html>
+        <div id="galerie-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;max-height:65vh;overflow-y:auto;padding:4px 2px;

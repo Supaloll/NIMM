@@ -1242,6 +1242,19 @@ body {
     opacity: 0.5;
 }
 
+/* Sections de Réglages repliables — moins de bruit à l'affichage et au
+   défilement, navigation au clavier/lecteur d'écran native via <summary>. */
+.settings-section-details {
+    margin: 0;
+}
+.settings-section-details > summary.settings-section-title {
+    cursor: pointer;
+}
+.settings-section-details > summary.settings-section-title:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+}
+
 .routing-select option:disabled {
     color: var(--text-muted);
     font-style: italic;

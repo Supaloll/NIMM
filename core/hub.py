@@ -70,7 +70,8 @@ async def generate_tab_title(content: str) -> str:
     """
     settings = load_settings()
     api_keys = _load_api_keys()
-    provider = settings.get('provider', '')
+    settings['api_keys'] = api_keys
+    provider, model = get_task_provider_model('titre', settings)
     if not provider or not api_keys.get(provider):
         return content[:20].strip()
 
@@ -89,7 +90,7 @@ async def generate_tab_title(content: str) -> str:
             max_tokens  = 20,
             temperature = 0.3,
             api_keys    = api_keys,
-            model       = settings.get('model'),
+            model       = model,
         )
         return title.strip().strip('"').strip("'")
     except Exception as e:
@@ -229,11 +230,30 @@ def _load_provider_routing() -> dict:
     except Exception:
         saved = {}
     defaults = {
-        'chat':   get_setting('provider', ''),
-        'vision': get_setting('vision_provider', ''),
-        'image':  get_setting('image_provider', ''),
+        'chat':     get_setting('provider', ''),
+        'vision':   get_setting('vision_provider', ''),
+        'image':    get_setting('image_provider', ''),
+        'memoire':  {},
+        'titre':    {},
+        'synthese': {},
     }
     return {**defaults, **saved}
+
+
+def get_task_provider_model(task: str, settings: dict) -> tuple:
+    """
+    Provider + modèle pour une tâche annexe (memoire, titre, synthese...).
+    Une entrée de routing pour `task` peut être {'provider':..., 'model':...} ;
+    si absente, vide ou sans 'provider', retombe sur le provider/modèle du chat
+    (settings['provider'] / settings['model']). En mode local, force ollama.
+    """
+    if settings.get('local_mode'):
+        return 'ollama', settings.get('model')
+    routing = settings.get('provider_routing', {}) or {}
+    entry = routing.get(task)
+    if isinstance(entry, dict) and entry.get('provider'):
+        return entry['provider'], entry.get('model') or None
+    return settings.get('provider', ''), settings.get('model')
 
 # ══════════════════════════════════════════
 # PRÉSENCE TEMPORELLE
@@ -1623,6 +1643,61 @@ def _parse_llm_json(raw: str) -> list:
         return []
 
 
+# ── Prompts d'extraction mémoire — par fournisseur, avec repli par défaut ──
+import os as _os_prompts
+
+_PROMPTS_DIR = _os_prompts.path.join(_os_prompts.path.dirname(__file__), '..', 'data', 'prompts')
+_memoire_prompt_cache: dict = {}
+
+_MEMOIRE_PROMPT_FALLBACK = (
+    "Voici une conversation. La personne qui parle s'appelle {{USER_NAME}}.\n\n"
+    "{{CONV_TEXT}}\n\n"
+    "Extrais les faits mémorisables sur {{USER_NAME}} sous forme de tableau JSON "
+    "d'objets {\"registre\":\"neutre\",\"type\":\"trait\",\"sujet\":\"...\",\"predicat\":\"...\","
+    "\"objet\":\"...\",\"memoire_type\":\"autre\",\"profondeur\":3,\"type_temporal\":\"persistant\","
+    "\"contexte\":\"\"}. Si aucun fait : réponds [].\n"
+    "Réponds UNIQUEMENT avec le tableau JSON."
+)
+
+def _model_slug(model: str) -> str:
+    """Normalise un nom de modèle pour un nom de fichier
+    (ex: 'mistral-small-latest' -> 'mistral_small_latest', 'llama3.1:8b' -> 'llama3_1_8b')."""
+    return re.sub(r'[^a-z0-9]+', '_', (model or '').lower()).strip('_')
+
+
+def _load_memoire_prompt_template(provider: str, model: str = None) -> str:
+    """
+    Charge le gabarit de prompt d'extraction mémoire, avec variante par sous-modèle
+    (data/prompts/memoire_<provider>_<modele>.txt), repli sur la variante par
+    fournisseur (memoire_<provider>.txt), puis sur memoire_default.txt, puis sur
+    un gabarit minimal en dur si aucun fichier n'est trouvé.
+    """
+    slug = _model_slug(model)
+    cache_key = f"{provider or 'default'}:{slug}"
+    if cache_key in _memoire_prompt_cache:
+        return _memoire_prompt_cache[cache_key]
+
+    candidates = []
+    if slug:
+        candidates.append(f'memoire_{provider}_{slug}.txt')
+    candidates.append(f'memoire_{provider}.txt')
+    candidates.append('memoire_default.txt')
+
+    for fname in candidates:
+        path = _os_prompts.path.join(_PROMPTS_DIR, fname)
+        if _os_prompts.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    template = f.read()
+                _memoire_prompt_cache[cache_key] = template
+                return template
+            except Exception as e:
+                print(f"[HUB] ⚠️ Lecture {fname} impossible : {e}")
+
+    _memoire_prompt_cache[cache_key] = _MEMOIRE_PROMPT_FALLBACK
+    return _MEMOIRE_PROMPT_FALLBACK
+
+
 async def extract_memories_from_window(messages: list, settings: dict) -> int:
     """
     Passe mémoire v2 sur une fenêtre de messages.
@@ -1648,99 +1723,19 @@ async def extract_memories_from_window(messages: list, settings: dict) -> int:
         for m in messages
     )
 
-    prompt = (
-        f"Voici une conversation. La personne qui parle s'appelle {user_name}.\n\n"
-        f"{conv_text}\n\n"
-        f"Extrais les faits mémorisables sur {user_name} uniquement, "
-        "et sur les personnes dont le lien avec lui est explicitement nommé dans la conversation "
-        "par un lien de parenté ou de relation directe (ex : 'ma femme Nadia', 'mon fils Théo', "
-        "'ma collègue Sonia', 'mon médecin'). Le prénom seul ne suffit pas — le lien doit être déclaré.\n"
-        f"INTERDIT : tout triplet dont le sujet est une personne publique, historique, "
-        "fictionnelle, ou simplement mentionnée comme sujet de discussion "
-        f"sans lien relationnel explicite avec {user_name}. "
-        "Exemples INTERDITS : un roi, un auteur, une célébrité, un personnage de roman, "
-        "un voisin anonyme, un collègue sans prénom ni lien déclaré. "
-        "Absence de lien nommé = répondre [] pour ce fait.\n"
-        "Résous les pronoms et références implicites depuis le contexte.\n\n"
-        "Pour chaque fait, produis UN objet JSON. Réponds avec un tableau JSON uniquement.\n"
-        "Si aucun fait mémorisable : réponds []\n\n"
-        "Format de chaque objet :\n"
-        '{"registre": "...", "type": "...", "sujet": "...", "predicat": "...", '
-        '"objet": "...", "memoire_type": "...", "profondeur": N, '
-        '"type_temporal": "...", "contexte": "..."}\n\n'
-        "REGISTRE — obligatoire, 1 valeur parmi ces 5 exactement :\n"
-        "  neutre      : déclaration factuelle calme ('J'habite à Lyon')\n"
-        "  emotionnel  : colère, frustration, enthousiasme fort ('J'EN PEUX PLUS !')\n"
-        "  figure      : humour, ironie, métaphore, second degré ('Super, encore une panne…')\n"
-        "  intention   : désir, projet, souhait réel ('Je voudrais apprendre la guitare')\n"
-        "  hypothese   : irréel pur, fiction, condition impossible ('Si j'étais riche…')\n"
-        "Priorité si ambiguïté : figure > emotionnel > intention > neutre > hypothese\n"
-        "ATTENTION : le registre note le TON de la phrase, pas la présence d'une émotion "
-        "dans le contenu. Une émotion rapportée calmement ('j'étais fier de...', "
-        "'ça m'a rendu triste sur le moment', 'j'étais content du résultat') reste "
-        "'neutre' — c'est un fait sur la personne. 'emotionnel' est réservé au ton "
-        "à vif au moment de l'écrire (majuscules, ponctuation excessive, "
-        "colère/frustration manifeste : 'J'EN PEUX PLUS !!!').\n\n"
-        "AUTRES CHAMPS :\n"
-        f"  sujet       : prénom réel uniquement — '{user_name}' pour l'utilisateur, ou le prénom "
-        f"d'un proche dont le lien a été explicitement déclaré. "
-        "Jamais un rôle ('père', 'mon fils'), un groupe nominal ('collègue non nommé'), "
-        "un verbe ('mis_au_chomage'), le nom de l'assistant, ni 'utilisateur' ni 'je'.\n"
-        "  type        : trait | relation | evenement\n"
-        "  predicat    : 1 mot canonique (2 mots max). Exemples :\n"
-        "    identité : prenom · age · sexe · nationalite\n"
-        "    famille  : conjoint · enfant · parent · frere · soeur\n"
-        "    travail  : metier · employeur · diplome · competence · anciennete_debut\n"
-        "      → anciennete_debut : stocker l'année brute si 'depuis YYYY' détecté (ex: '1998')\n"
-        "        anciennete sera dérivée automatiquement — ne pas la calculer toi-même\n"
-        "    santé    : probleme_sante · traitement · allergie\n"
-        "    goûts    : aime · n_aime_pas · musique_preferee · serie_preferee\n"
-        "    loisirs  : sport · lecture · loisir · musique_instrument · apprentissage · "
-        "anciennete_pratique\n"
-        "      → anciennete_pratique : durée déclarée d'une pratique ('je fais du judo "
-        "depuis 6 ans' / '6 ans de judo') — objet = durée brute (ex: '6 ans'), "
-        "contexte = l'activité concernée (ex: 'judo')\n"
-        "    lieu     : domicile · vehicule\n"
-        "    projets  : objectif · reve · intention · projet\n"
-        "    caractère: trait · valeur · stress · qualite\n"
-        "      → qualite : trait de personnalité rapporté sur soi ou un proche "
-        "('douce', 'patient', 'têtu', 'courageuse') — objet = l'adjectif tel "
-        "qu'employé\n"
-        "  memoire_type: identite | famille | preference | loisir | sante | travail | humeur | autre\n"
-        "  profondeur  : entier 1 (existentiel) → 5 (anecdote)\n"
-        "  type_temporal: permanent | persistant | episodique | engagement\n"
-        "  contexte    : circonstance courte 5 mots max — laisser '' si aucune\n\n"
-        "INTERDIT : prédicats-phrases · objets vides ('non spécifié') · scores numériques\n"
-        "INTERDIT d'extraire si l'objet est un fragment sans sens autonome : nom de lieu seul, "
-        "adjectif flottant, verbe isolé. Exemples refusés : 'Strasbourg' sans rôle, "
-        "'voiture_personnelle' sans contexte, 'regle son'.\n"
-        "RÈGLE D'AUTONOMIE : le triplet doit se comprendre sans relire la conversation. "
-        "Si l'objet a besoin du fil pour exister → ne pas extraire. "
-        "Laisser le carnet de bord capturer ce contexte.\n"
-        "EXCEPTION — nuance comparative/qualitative : une précision qui ne tient pas "
-        "seule ('il gagne aux points plutôt que par ippon') mais qui complète un fait "
-        "déjà extractible par ailleurs (ici : pratique du judo) ne doit pas être "
-        "rejetée — rattache-la comme 'contexte' du triplet concerné "
-        "(ex: predicat='loisir', objet='judo', contexte='gagne aux points plutôt "
-        "que par ippon').\n\n"
-        "ANECDOTES / ÉVÉNEMENTS MARQUANTS : un moment narratif qui ne se résume pas "
-        "à un trait stable (une finale perdue, une réussite, une rencontre) ne doit "
-        "pas être perdu faute de prédicat canonique. Résume-le en objet (≤ 12 mots, "
-        "autonome) avec predicat='anecdote', memoire_type='autre', profondeur=5, "
-        "type_temporal='episodique' "
-        "(ex: sujet=utilisateur, predicat='anecdote', objet='a perdu la finale de "
-        "judo de peu', contexte='compétition régionale').\n\n"
-        "Réponds UNIQUEMENT avec le tableau JSON. Aucun texte avant ou après."
-    )
+    provider_mem, model_mem = get_task_provider_model('memoire', settings)
+    from core.engine import _resolve_model
+    template = _load_memoire_prompt_template(provider_mem, _resolve_model(provider_mem, model_mem))
+    prompt = template.replace('{{USER_NAME}}', user_name).replace('{{CONV_TEXT}}', conv_text)
 
     try:
         response = await call_llm(
             messages=[{'role': 'user', 'content': prompt}],
-            provider=settings['provider'],
+            provider=provider_mem,
             max_tokens=1500,
             temperature=0.1,
             api_keys=settings['api_keys'],
-            model=settings.get('model'),
+            model=model_mem,
         )
 
         if not response:
@@ -1935,6 +1930,7 @@ async def generate_tab_synthesis(tab_id: str) -> dict:
     from modules.bibliotheque import generate_tab_synthesis as _gts
     settings = load_settings()
     settings['api_keys'] = _load_api_keys()
+    settings['provider'], settings['model'] = get_task_provider_model('synthese', settings)
     return await _gts(tab_id, settings)
 
 
@@ -1947,6 +1943,7 @@ async def resume_from_archive(entry: dict) -> str:
     from modules.bibliotheque import resume_from_archive as _rfa
     settings = load_settings()
     settings['api_keys'] = _load_api_keys()
+    settings['provider'], settings['model'] = get_task_provider_model('synthese', settings)
     return await _rfa(entry, settings)
 
 

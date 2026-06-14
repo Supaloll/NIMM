@@ -1,0 +1,53 @@
+Voici une conversation. La personne qui parle s'appelle {{USER_NAME}}.
+
+{{CONV_TEXT}}
+
+Extrais les faits mémorisables sur {{USER_NAME}} uniquement, et sur les personnes dont le lien avec lui est explicitement nommé dans la conversation par un lien de parenté ou de relation directe (ex : 'ma femme Nadia', 'mon fils Théo', 'ma collègue Sonia', 'mon médecin'). Le prénom seul ne suffit pas — le lien doit être déclaré.
+INTERDIT : tout triplet dont le sujet est une personne publique, historique, fictionnelle, ou simplement mentionnée comme sujet de discussion sans lien relationnel explicite avec {{USER_NAME}}. Exemples INTERDITS : un roi, un auteur, une célébrité, un personnage de roman, un voisin anonyme, un collègue sans prénom ni lien déclaré. Absence de lien nommé = répondre [] pour ce fait.
+Résous les pronoms et références implicites depuis le contexte.
+
+Pour chaque fait, produis UN objet JSON. Réponds avec un tableau JSON uniquement.
+Si aucun fait mémorisable : réponds []
+
+Format de chaque objet :
+{"registre": "...", "type": "...", "sujet": "...", "predicat": "...", "objet": "...", "memoire_type": "...", "profondeur": N, "type_temporal": "...", "contexte": "..."}
+
+REGISTRE — obligatoire, 1 valeur parmi ces 5 exactement :
+  neutre      : déclaration factuelle calme ('J'habite à Lyon')
+  emotionnel  : colère, frustration, enthousiasme fort ('J'EN PEUX PLUS !')
+  figure      : humour, ironie, métaphore, second degré ('Super, encore une panne…')
+  intention   : désir, projet, souhait réel ('Je voudrais apprendre la guitare')
+  hypothese   : irréel pur, fiction, condition impossible ('Si j'étais riche…')
+Priorité si ambiguïté : figure > emotionnel > intention > neutre > hypothese
+ATTENTION : le registre note le TON de la phrase, pas la présence d'une émotion dans le contenu. Une émotion rapportée calmement ('j'étais fier de...', 'ça m'a rendu triste sur le moment', 'j'étais content du résultat') reste 'neutre' — c'est un fait sur la personne. 'emotionnel' est réservé au ton à vif au moment de l'écrire (majuscules, ponctuation excessive, colère/frustration manifeste : 'J'EN PEUX PLUS !!!').
+
+AUTRES CHAMPS :
+  sujet       : prénom réel uniquement — '{{USER_NAME}}' pour l'utilisateur, ou le prénom d'un proche dont le lien a été explicitement déclaré. Jamais un rôle ('père', 'mon fils'), un groupe nominal ('collègue non nommé'), un verbe ('mis_au_chomage'), le nom de l'assistant, ni 'utilisateur' ni 'je'.
+  type        : trait | relation | evenement
+  predicat    : 1 mot canonique (2 mots max). Exemples :
+    identité : prenom · age · sexe · nationalite
+    famille  : conjoint · enfant · parent · frere · soeur
+    travail  : metier · employeur · diplome · competence · anciennete_debut
+      → anciennete_debut : stocker l'année brute si 'depuis YYYY' détecté (ex: '1998')
+        anciennete sera dérivée automatiquement — ne pas la calculer toi-même
+    santé    : probleme_sante · traitement · allergie
+    goûts    : aime · n_aime_pas · musique_preferee · serie_preferee
+    loisirs  : sport · lecture · loisir · musique_instrument · apprentissage · anciennete_pratique
+      → anciennete_pratique : durée déclarée d'une pratique ('je fais du judo depuis 6 ans' / '6 ans de judo') — objet = durée brute (ex: '6 ans'), contexte = l'activité concernée (ex: 'judo')
+    lieu     : domicile · vehicule
+    projets  : objectif · reve · intention · projet
+    caractère: trait · valeur · stress · qualite
+      → qualite : trait de personnalité rapporté sur soi ou un proche ('douce', 'patient', 'têtu', 'courageuse') — objet = l'adjectif tel qu'employé
+  memoire_type: identite | famille | preference | loisir | sante | travail | humeur | autre
+  profondeur  : entier 1 (existentiel) → 5 (anecdote)
+  type_temporal: permanent | persistant | episodique | engagement
+  contexte    : circonstance courte 5 mots max — laisser '' si aucune
+
+INTERDIT : prédicats-phrases · objets vides ('non spécifié') · scores numériques
+INTERDIT d'extraire si l'objet est un fragment sans sens autonome : nom de lieu seul, adjectif flottant, verbe isolé. Exemples refusés : 'Strasbourg' sans rôle, 'voiture_personnelle' sans contexte, 'regle son'.
+RÈGLE D'AUTONOMIE : le triplet doit se comprendre sans relire la conversation. Si l'objet a besoin du fil pour exister → ne pas extraire. Laisser le carnet de bord capturer ce contexte.
+EXCEPTION — nuance comparative/qualitative : une précision qui ne tient pas seule ('il gagne aux points plutôt que par ippon') mais qui complète un fait déjà extractible par ailleurs (ici : pratique du judo) ne doit pas être rejetée — rattache-la comme 'contexte' du triplet concerné (ex: predicat='loisir', objet='judo', contexte='gagne aux points plutôt que par ippon').
+
+ANECDOTES / ÉVÉNEMENTS MARQUANTS : un moment narratif qui ne se résume pas à un trait stable (une finale perdue, une réussite, une rencontre) ne doit pas être perdu faute de prédicat canonique. Résume-le en objet (≤ 12 mots, autonome) avec predicat='anecdote', memoire_type='autre', profondeur=5, type_temporal='episodique' (ex: sujet=utilisateur, predicat='anecdote', objet='a perdu la finale de judo de peu', contexte='compétition régionale').
+
+Réponds UNIQUEMENT avec le tableau JSON. Aucun texte avant ou après.

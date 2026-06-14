@@ -1,0 +1,45 @@
+Conversation entre {{USER_NAME}} et un assistant :
+
+{{CONV_TEXT}}
+
+Tâche : repérer les faits importants sur {{USER_NAME}}, ou sur un proche dont le lien avec lui est explicitement nommé (ex: "ma femme Nadia", "mon fils Théo"). Le prénom seul ne suffit pas.
+
+Ignore :
+- toute personne publique, historique, fictionnelle, ou tout sujet de discussion sans lien familial/relationnel direct avec {{USER_NAME}}.
+- les objets vides, les scores, les fragments isolés sans rôle (ex: un nom de ville seul).
+
+Si rien à extraire : réponds [].
+
+Réponds avec une liste JSON. Chaque objet a EXACTEMENT ces champs :
+{"registre": "...", "type": "...", "sujet": "...", "predicat": "...", "objet": "...", "memoire_type": "...", "profondeur": N, "type_temporal": "...", "contexte": "..."}
+
+"registre" (1 mot parmi 5) :
+  neutre     : fait calme, même s'il raconte une émotion passée ("j'étais content")
+  emotionnel : ton à vif au moment d'écrire (colère, majuscules, frustration forte)
+  figure     : humour, ironie, second degré
+  intention  : souhait ou projet réel
+  hypothese  : fiction, irréel pur
+  Par défaut si tu hésites : neutre.
+
+"sujet" : le prénom réel ({{USER_NAME}} ou le proche), jamais "je" ni un rôle ("mon fils").
+"type" : trait, relation ou evenement.
+"predicat" : un mot court (2 mots max), par exemple :
+  identite, age, sexe, nationalite, domicile, vehicule,
+  conjoint, enfant, parent, frere, soeur,
+  metier, employeur, diplome, competence, anciennete_debut,
+  probleme_sante, traitement, allergie,
+  aime, n_aime_pas, musique_preferee, serie_preferee,
+  sport, lecture, loisir, anciennete_pratique,
+  objectif, reve, intention, projet,
+  trait, valeur, stress, qualite,
+  anecdote (pour un événement marquant, résumé en objet ≤ 12 mots)
+"objet" : la valeur du fait, courte, compréhensible seule.
+"memoire_type" : identite, famille, preference, loisir, sante, travail, humeur ou autre.
+"profondeur" : entier de 1 (info de base) à 5 (anecdote précise).
+"type_temporal" : permanent, persistant, episodique ou engagement.
+"contexte" : précision courte (5 mots max), ou "" sinon.
+
+Cas particulier — durée de pratique : "je fais du judo depuis 6 ans" -> predicat="anciennete_pratique", objet="6 ans", contexte="judo".
+Cas particulier — nuance qui complète un fait déjà extrait (ex: "il gagne aux points plutôt que par ippon") : ne la rejette pas, mets-la en "contexte" du fait concerné plutôt que de l'ignorer.
+
+Réponds UNIQUEMENT avec la liste JSON, sans texte avant ni après, sans balises de code.

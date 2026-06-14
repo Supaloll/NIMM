@@ -1172,23 +1172,55 @@ function _updateMaskIndicator(thread) {
 }
 
 async function promptNewThreadModal() {
-    // Charger les masques disponibles
-    const masks = await fetch('/api/masks').then(r => r.json()).catch(() => []);
+    // Charger les masques disponibles + la configuration en cours
+    const [masks, routing, prov, modelData, keys] = await Promise.all([
+        fetch('/api/masks').then(r => r.json()).catch(() => []),
+        fetch('/api/settings/routing').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/provider').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/model').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/api-keys').then(r => r.json()).catch(() => ({})),
+    ]);
     const sel = document.getElementById('new-thread-mask-select');
     sel.innerHTML = masks.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
     const activeMask = document.getElementById('mask-select')?.value;
     if (activeMask) sel.value = activeMask;
 
-    // Remettre à zéro
-    document.getElementById('new-thread-mask-row').style.display = '';
+    // Pré-déterminer le mode personnalité d'après le fil courant
+    const curThread = threads.find(t => t.thread_id === currentThreadId);
+    const curMode = curThread?.personality_mode === 'potards' ? 'potards' : 'mask';
+
     document.querySelectorAll('.new-thread-mode-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('new-thread-mode-mask').classList.add('active');
+    (document.querySelector(`.new-thread-mode-btn[data-mode="${curMode}"]`)
+        || document.getElementById('new-thread-mode-mask')).classList.add('active');
+    document.getElementById('new-thread-mask-row').style.display = curMode === 'mask' ? '' : 'none';
+
+    // Pré-remplir le routage et le modèle avec la configuration en cours
+    const providerSel  = document.getElementById('new-thread-provider-select');
+    const memSel        = document.getElementById('new-thread-routing-memory');
+    const titreSel      = document.getElementById('new-thread-routing-titre');
+    const syntheseSel   = document.getElementById('new-thread-routing-synthese');
+    const providerVal   = routing.chat || prov.provider || 'mistral';
+    const memVal0       = routing.memoire?.provider  || 'same';
+    const titreVal0     = routing.titre?.provider    || 'same';
+    const syntheseVal0  = routing.synthese?.provider || 'same';
+
+    providerSel.value = providerVal;
+    memSel.value      = memVal0;
+    titreSel.value    = titreVal0;
+    syntheseSel.value = syntheseVal0;
+    await _populateModelSelect(providerVal, modelData.model || null, 'new-thread-model-select');
+    _applyProviderConstraints(keys);
+
+    providerSel.onchange = async () => {
+        await _populateModelSelect(providerSel.value, null, 'new-thread-model-select');
+        _applyProviderConstraints(keys);
+    };
 
     return new Promise(resolve => {
         const modal     = document.getElementById('new-thread-modal');
         const okBtn     = document.getElementById('new-thread-ok');
         const cancelBtn = document.getElementById('new-thread-cancel');
-        let selectedMode = 'mask';
+        let selectedMode = curMode;
 
         // Boutons mode
         document.querySelectorAll('.new-thread-mode-btn').forEach(btn => {
@@ -1203,14 +1235,45 @@ async function promptNewThreadModal() {
 
         modal.classList.remove('hidden');
 
+        // Focus accessible : sur l'élément pertinent selon le mode pré-sélectionné
+        setTimeout(() => {
+            const focusTarget = curMode === 'mask'
+                ? document.getElementById('new-thread-mask-select')
+                : document.getElementById('new-thread-mode-potards');
+            (focusTarget || modal.querySelector('button, select, input'))?.focus();
+        }, 50);
+
         const cleanup = (result) => {
             modal.classList.add('hidden');
             resolve(result);
         };
-        okBtn.onclick = () => {
+        okBtn.onclick = async () => {
             const maskId = selectedMode === 'mask'
                 ? document.getElementById('new-thread-mask-select').value
                 : null;
+
+            // Persister le routage / modèle s'ils ont été modifiés pour ce fil
+            if (providerSel.value !== providerVal) {
+                await _saveRouting('chat', providerSel.value);
+            }
+            const modelSel = document.getElementById('new-thread-model-select');
+            if (modelSel && modelSel.value && modelSel.value !== (modelData.model || '')) {
+                await fetch('/api/settings/model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: modelSel.value })
+                });
+            }
+            if (memSel.value !== memVal0) {
+                await _saveRouting('memoire', memSel.value === 'same' ? {} : { provider: memSel.value });
+            }
+            if (titreSel.value !== titreVal0) {
+                await _saveRouting('titre', titreSel.value === 'same' ? {} : { provider: titreSel.value });
+            }
+            if (syntheseSel.value !== syntheseVal0) {
+                await _saveRouting('synthese', syntheseSel.value === 'same' ? {} : { provider: syntheseSel.value });
+            }
+
             cleanup({ maskId, mode: selectedMode });
         };
         cancelBtn.onclick = () => cleanup(null);
@@ -2125,6 +2188,15 @@ function _startBretzelAnim(svg, loader) {
     loader._cancelAnim = () => cancelAnimationFrame(rafId);
 }
 
+// ── Annonce lecteur d'écran (zone live discrète, hors flux affiché) ──
+function _srAnnounce(text) {
+    const el = document.getElementById('sr-stream-status');
+    if (!el) return;
+    el.textContent = '';
+    // Forcer la ré-annonce même si le texte est identique au précédent
+    requestAnimationFrame(() => { el.textContent = text; });
+}
+
 function showLoader() {
     const loader = document.createElement('div');
     loader.id        = 'thinking-loader';
@@ -2156,6 +2228,8 @@ function showLoader() {
 
     // Démarrer l'animation après insertion dans le DOM (getTotalLength() requiert le DOM)
     requestAnimationFrame(() => _startBretzelAnim(svg, loader));
+
+    _srAnnounce('NIMM réfléchit…');
 }
 
 function removeLoader() {
@@ -2649,6 +2723,7 @@ async function _triggerStream(content, conversationId) {
         if (!_userScrolledUp) messagesDiv.scrollTop = messagesDiv.scrollHeight;
         const finalContent = bubble.textContent;
         _updateFloatTTS(finalContent, div);
+        _srAnnounce('NIMM t\'a répondu.');
 
         // Brancher le bouton TTS individuel de cette bulle
         streamTtsBtn.addEventListener('click', (e) => {
@@ -2712,6 +2787,7 @@ async function _triggerStream(content, conversationId) {
     } catch(e) {
         removeLoader();
         appendAssistantMessage('❌ Erreur de connexion au serveur.', 'neutre', false);
+        _srAnnounce('Erreur de connexion au serveur.');
         console.error('[NIMM] Erreur stream :', e);
     }
 }
@@ -2957,6 +3033,8 @@ function _applyProviderConstraints(keys) {
         { selId: 'routing-vision',  warnId: 'warn-vision'  },
         { selId: 'routing-image',   warnId: 'warn-image'   },
         { selId: 'routing-memory',  warnId: 'warn-memory'  },
+        { selId: 'routing-titre',   warnId: 'warn-titre'   },
+        { selId: 'routing-synthese', warnId: 'warn-synthese' },
     ];
     checks.forEach(({ selId, warnId }) => {
         const sel  = document.getElementById(selId);
@@ -3064,7 +3142,20 @@ async function loadSettingsIntoUI() {
         if (imageSel && routing.image) imageSel.value = routing.image;
 
         const memorySel = document.getElementById('routing-memory');
-        if (memorySel && routing.memory) memorySel.value = routing.memory;
+        if (memorySel) {
+            const memProvider = routing.memoire?.provider;
+            memorySel.value = memProvider || 'same';
+        }
+
+        const titreSel = document.getElementById('routing-titre');
+        if (titreSel) {
+            titreSel.value = routing.titre?.provider || 'same';
+        }
+
+        const syntheseSel = document.getElementById('routing-synthese');
+        if (syntheseSel) {
+            syntheseSel.value = routing.synthese?.provider || 'same';
+        }
 
         // Indiquer si les clés sont configurées
         ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily'].forEach(p => {
@@ -3130,6 +3221,88 @@ async function loadSettingsIntoUI() {
     }
 }
 
+// ══════════════════════════════════════════
+// PRÉRÉGLAGES (presets de configuration)
+// ══════════════════════════════════════════
+
+async function loadPresetsIntoUI() {
+    const sel = document.getElementById('preset-select');
+    if (!sel) return;
+    try {
+        const data = await fetch('/api/presets').then(r => r.json());
+        const names = Object.keys(data.presets || {}).sort((a, b) => a.localeCompare(b, 'fr'));
+        const previous = sel.value;
+        sel.innerHTML = names.length
+            ? names.map(n => `<option value="${n}">${n}</option>`).join('')
+            : '<option value="">— aucun préréglage enregistré —</option>';
+        if (names.includes(previous)) sel.value = previous;
+    } catch(e) {
+        console.error('[NIMM] Erreur chargement préréglages :', e);
+    }
+}
+
+document.getElementById('preset-save-btn')?.addEventListener('click', async () => {
+    const input  = document.getElementById('preset-name-input');
+    const status = document.getElementById('preset-status');
+    const name   = (input?.value || '').trim();
+    if (!name) {
+        if (status) status.textContent = 'Indique un nom pour le préréglage.';
+        return;
+    }
+    try {
+        await fetch('/api/presets', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+        if (input) input.value = '';
+        await loadPresetsIntoUI();
+        const sel = document.getElementById('preset-select');
+        if (sel) sel.value = name;
+        if (status) status.textContent = `Préréglage « ${name} » enregistré à partir des réglages actuels.`;
+    } catch(e) {
+        if (status) status.textContent = "Erreur lors de l'enregistrement du préréglage.";
+    }
+});
+
+document.getElementById('preset-apply-btn')?.addEventListener('click', async () => {
+    const sel    = document.getElementById('preset-select');
+    const status = document.getElementById('preset-status');
+    const name   = sel?.value;
+    if (!name) {
+        if (status) status.textContent = 'Choisis un préréglage à appliquer.';
+        return;
+    }
+    try {
+        const res = await fetch(`/api/presets/${encodeURIComponent(name)}/apply`, { method: 'POST' });
+        if (!res.ok) throw new Error('apply failed');
+        if (status) status.textContent = `Préréglage « ${name} » appliqué. Mise à jour des réglages…`;
+        // Recharge tous les panneaux de réglages (routage, masque, mode local,
+        // moteur de recherche, etc.) en redéclenchant les chargeurs liés à
+        // l'ouverture de la fenêtre Paramètres.
+        document.getElementById('toggle-settings')?.dispatchEvent(new Event('click'));
+        if (status) status.textContent = `Préréglage « ${name} » appliqué.`;
+    } catch(e) {
+        if (status) status.textContent = "Erreur lors de l'application du préréglage.";
+    }
+});
+
+document.getElementById('preset-delete-btn')?.addEventListener('click', async () => {
+    const sel    = document.getElementById('preset-select');
+    const status = document.getElementById('preset-status');
+    const name   = sel?.value;
+    if (!name) {
+        if (status) status.textContent = 'Choisis un préréglage à supprimer.';
+        return;
+    }
+    try {
+        await fetch(`/api/presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        await loadPresetsIntoUI();
+        if (status) status.textContent = `Préréglage « ${name} » supprimé.`;
+    } catch(e) {
+        if (status) status.textContent = 'Erreur lors de la suppression du préréglage.';
+    }
+});
+
 async function _checkProviderBanner() {
     try {
         const [keys, routing] = await Promise.all([
@@ -3163,6 +3336,7 @@ document.getElementById('toggle-settings').addEventListener('click', async () =>
     document.getElementById('settings-modal').classList.remove('hidden');
     setTimeout(() => { document.querySelector('#settings-modal .close-modal')?.focus(); }, 50);
     loadSettingsIntoUI();
+    loadPresetsIntoUI();
     loadVoices();
     // Charger l'état embeddings
     try {
@@ -3224,9 +3398,10 @@ const MODELS_BY_PROVIDER = {
     ],
 };
 
-async function _populateModelSelect(provider, savedModel) {
-    const sel = document.getElementById('model-select');
+async function _populateModelSelect(provider, savedModel, selId = 'model-select') {
+    const sel = document.getElementById(selId);
     if (!sel) return;
+    const isMainSelect = selId === 'model-select';
 
     if (provider === 'ollama') {
         sel.innerHTML = '<option value="">⏳ Détection des modèles...</option>';
@@ -3243,19 +3418,21 @@ async function _populateModelSelect(provider, savedModel) {
                 sel.value = savedModel;
             } else {
                 sel.value = models[0];
-                await fetch('/api/settings/model', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: models[0] })
-                });
+                if (isMainSelect) {
+                    await fetch('/api/settings/model', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: models[0] })
+                    });
+                }
             }
         } catch {
             sel.innerHTML = [
                 'llama3', 'llama3.1', 'mistral', 'gemma3:4b', 'gemma3:12b', 'phi3', 'qwen2'
             ].map(m => `<option value="${m}">${m}</option>`).join('');
 
-            // Champ texte libre pour les modeles non listes
-            if (!document.getElementById('ollama-custom-model')) {
+            // Champ texte libre pour les modeles non listes (uniquement Réglages)
+            if (isMainSelect && !document.getElementById('ollama-custom-model')) {
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.id = 'ollama-custom-model';
@@ -3276,8 +3453,10 @@ async function _populateModelSelect(provider, savedModel) {
                 sel.parentNode.insertBefore(input, sel.nextSibling);
             }
 
-            const warn = document.getElementById('ollama-warn');
-            if (warn) warn.classList.remove('hidden');
+            if (isMainSelect) {
+                const warn = document.getElementById('ollama-warn');
+                if (warn) warn.classList.remove('hidden');
+            }
         }
         return;
     }
@@ -3293,8 +3472,10 @@ async function _populateModelSelect(provider, savedModel) {
     if (savedModel && !models.find(m => m.value === savedModel)) {
         sel.value = models[0].value;
     }
-    const warn = document.getElementById('ollama-warn');
-    if (warn) warn.classList.add('hidden');
+    if (isMainSelect) {
+        const warn = document.getElementById('ollama-warn');
+        if (warn) warn.classList.add('hidden');
+    }
 }
 
 document.getElementById('provider-select')?.addEventListener('change', async (e) => {
@@ -3334,7 +3515,20 @@ document.getElementById('routing-image')?.addEventListener('change', async (e) =
 });
 
 document.getElementById('routing-memory')?.addEventListener('change', async (e) => {
-    await _saveRouting('memory', e.target.value);
+    const val = e.target.value;
+    await _saveRouting('memoire', val === 'same' ? {} : { provider: val });
+    _autoSaveFlash(e.target);
+});
+
+document.getElementById('routing-titre')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    await _saveRouting('titre', val === 'same' ? {} : { provider: val });
+    _autoSaveFlash(e.target);
+});
+
+document.getElementById('routing-synthese')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    await _saveRouting('synthese', val === 'same' ? {} : { provider: val });
     _autoSaveFlash(e.target);
 });
 
@@ -3510,6 +3704,36 @@ async function _initPotards() {
                 body: JSON.stringify({ mode: 'potards' })
             });
             _applyModeUI('potards');
+        });
+    }
+
+    // Sauvegarder l'état actuel des curseurs comme masque personnalisé
+    const saveBtn    = document.getElementById('potards-save-btn');
+    const saveInput  = document.getElementById('potards-save-name');
+    const saveStatus = document.getElementById('potards-save-status');
+    if (saveBtn && !saveBtn.dataset.bound) {
+        saveBtn.dataset.bound = '1';
+        saveBtn.addEventListener('click', async () => {
+            const name = (saveInput?.value || '').trim();
+            if (!name) {
+                if (saveStatus) saveStatus.textContent = '⚠️ Donne un nom au masque avant d\'enregistrer.';
+                saveInput?.focus();
+                return;
+            }
+            if (saveStatus) saveStatus.textContent = 'Enregistrement…';
+            try {
+                const r = await fetch('/api/masks/save', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                if (!r.ok) throw new Error('Échec');
+                const mask = await r.json();
+                if (saveStatus) saveStatus.textContent = `✅ Masque « ${name} » enregistré (utilisable depuis le mode Masque).`;
+                if (saveInput) saveInput.value = '';
+                _maskCache[mask.id] = mask.label;
+            } catch (e) {
+                if (saveStatus) saveStatus.textContent = '❌ Erreur lors de l\'enregistrement du masque.';
+            }
         });
     }
 
@@ -5426,6 +5650,19 @@ async function loadCosts() {
         }
         grid.innerHTML = d.wallets.map(w => _renderWalletCard(w)).join('');
         _setupCostActions();
+
+        // Crédit restant en temps réel — chargement non bloquant, en plus
+        fetch('/api/costs/credits').then(r => r.json()).then(cd => {
+            const credits = cd.credits || {};
+            for (const [provider, info] of Object.entries(credits)) {
+                const card = grid.querySelector(`.cost-card[data-provider="${provider}"]`);
+                if (!card || !info.available) continue;
+                const detail = document.createElement('div');
+                detail.className = 'cost-detail';
+                detail.innerHTML = `Crédit restant : <strong>${info.balance} ${info.currency}</strong>`;
+                card.appendChild(detail);
+            }
+        }).catch(() => {});
     } catch(e) {
         if (loading) loading.textContent = 'Erreur de chargement.';
     }
@@ -5476,7 +5713,7 @@ function _renderWalletCard(w) {
     }
 
     return `
-        <div class="cost-card">
+        <div class="cost-card" data-provider="${w.provider}">
             <div class="cost-card-header">${icon} <strong>${w.display_name}</strong></div>
             ${content}
         </div>`;
@@ -5926,7 +6163,6 @@ document.addEventListener('click', () => {
     document.getElementById('toggle-settings')?.addEventListener('click', load);
     load();
 })();
-
 // ── Moteur de recherche web (Brave / Tavily) ──
 (function () {
     var sel = document.getElementById('search-provider-select');
