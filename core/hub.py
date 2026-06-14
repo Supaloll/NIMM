@@ -27,6 +27,39 @@ from modules.quiz import wrap_bare_quiz as _wrap_bare_quiz
 
 
 # ══════════════════════════════════════════
+# ASSAINISSEUR D'HISTORIQUE (correctif 400 Mistral)
+# ══════════════════════════════════════════
+
+def _sanitize_history(messages: list) -> list:
+    """
+    Nettoie l'historique avant envoi à un fournisseur OpenAI-compat (Mistral
+    en particulier, le plus strict) :
+      - supprime les messages au contenu vide/None (sauf s'ils portent des
+        tool_calls, indispensables à la cohérence du fil) ;
+      - fusionne les messages consécutifs de même rôle (Mistral refuse deux
+        messages 'user' ou 'assistant' d'affilée) ;
+      - garantit que le premier message est bien 'user'.
+    """
+    cleaned = []
+    for m in messages:
+        content = m.get('content')
+        if not content and not m.get('tool_calls'):
+            continue
+        if cleaned and cleaned[-1]['role'] == m['role'] and not m.get('tool_calls') and not cleaned[-1].get('tool_calls'):
+            # Fusion avec le message précédent de même rôle
+            prev_content = cleaned[-1].get('content') or ''
+            cleaned[-1]['content'] = (prev_content + '\n\n' + (content or '')).strip()
+        else:
+            cleaned.append(dict(m))
+
+    # Le premier message doit être 'user' (sinon Mistral râle)
+    while cleaned and cleaned[0]['role'] != 'user':
+        cleaned.pop(0)
+
+    return cleaned
+
+
+# ══════════════════════════════════════════
 # TITRE ONGLET -- genere automatiquement
 # ══════════════════════════════════════════
 
@@ -2071,7 +2104,7 @@ async def process_message(
 
     # 7. Historique récent (60 derniers messages)
     history = get_messages(thread_id, limit=60)
-    messages = [{'role': m['role'], 'content': m['content']} for m in history]
+    messages = _sanitize_history([{'role': m['role'], 'content': m['content']} for m in history])
 
     # 8. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
@@ -2340,7 +2373,7 @@ async def process_message_stream(
 
     # 4. Historique
     history  = get_messages(thread_id, limit=60)
-    messages = [{'role': m['role'], 'content': m['content']} for m in history]
+    messages = _sanitize_history([{'role': m['role'], 'content': m['content']} for m in history])
 
     # 5. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
