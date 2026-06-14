@@ -1227,7 +1227,10 @@ async def get_provider_credit(provider: str, api_keys: dict) -> dict:
         supporté, ou erreur réseau/API — `reason` reste court et sûr à
         afficher)
     """
-    key = (api_keys or {}).get(provider)
+    # La clé Stability AI est stockée sous 'stability_ai' (underscore) côté
+    # api_keys, alors que le provider de crédit est 'stability-ai' (tiret).
+    key_name = 'stability_ai' if provider == 'stability-ai' else provider
+    key = (api_keys or {}).get(key_name)
     if not key:
         return {'available': False, 'reason': 'no_key'}
 

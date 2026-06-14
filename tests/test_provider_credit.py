@@ -78,11 +78,23 @@ async def test_deepseek():
 
 
 async def test_stability():
+    # La clé est stockée sous 'stability_ai' (underscore) dans api_keys,
+    # comme dans frontend/index.html et hub.get_api_key — le provider de
+    # crédit reste 'stability-ai' (tiret), get_provider_credit fait le pont.
     FakeClient.next_response = {'credits': 87.5}
     FakeClient.next_ok = True
-    res = await engine.get_provider_credit('stability-ai', {'stability-ai': 'sk-fake'})
+    res = await engine.get_provider_credit('stability-ai', {'stability_ai': 'sk-fake'})
     assert res == {'available': True, 'balance': 87.5, 'currency': 'crédits'}, res
     print("OK  stability-ai → solde lu")
+
+
+async def test_stability_legacy_key_name_not_found():
+    # Si la clé est stockée sous 'stability-ai' (tiret), elle n'est pas
+    # trouvée — confirme qu'on ne dépend pas de cette forme non utilisée
+    # par l'app.
+    res = await engine.get_provider_credit('stability-ai', {'stability-ai': 'sk-fake'})
+    assert res == {'available': False, 'reason': 'no_key'}, res
+    print("OK  stability-ai (clé sous 'stability-ai') → no_key")
 
 
 async def test_no_key():
@@ -111,11 +123,8 @@ async def main():
     await test_openrouter()
     await test_deepseek()
     await test_stability()
+    await test_stability_legacy_key_name_not_found()
     await test_no_key()
     await test_unsupported_provider()
     await test_api_error()
     print("\nTous les tests passent.\n")
-
-
-if __name__ == '__main__':
-    asyncio.run(main())

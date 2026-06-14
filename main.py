@@ -1541,8 +1541,22 @@ class RatesUpdate(BaseModel):
 
 @app.get("/api/costs")
 async def costs_summary():
-    """Retourne l'état de tous les wallets providers."""
-    return {"wallets": get_cost_summary()}
+    """
+    Retourne l'état des wallets providers pour lesquels une clé API est
+    configurée (Ollama et Brave Search restent toujours affichés : Ollama
+    est local/gratuit, Brave a un palier gratuit sans clé)."""
+    from core.hub import load_settings
+    settings = load_settings()
+    api_keys = settings.get('api_keys', {}) or {}
+
+    def _a_une_cle(provider: str) -> bool:
+        if provider in ('ollama', 'brave'):
+            return True
+        key_name = 'stability_ai' if provider == 'stability-ai' else provider
+        return bool(api_keys.get(key_name))
+
+    wallets = [w for w in get_cost_summary() if _a_une_cle(w['provider'])]
+    return {"wallets": wallets}
 
 @app.post("/api/costs/reset/{provider}")
 async def costs_reset(provider: str):

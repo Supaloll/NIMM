@@ -785,6 +785,7 @@ def init_db(user_id: str = None):
         ('mistral',    'Mistral',      'compteur_tokens',   0.10,   0.30, 'monthly'),
         ('ollama',     'Ollama',       'compteur_tokens',   0.0,    0.0,  'never'),
         ('brave',      'Brave Search', 'compteur_requetes', 0.0,    0.0,  'monthly'),
+        ('tavily',     'Tavily',       'compteur_requetes', 0.0,    0.0,  'monthly'),
     ]
     for (prov, name, wtype, r_in, r_out, policy) in default_wallets:
         conn.execute('''
@@ -1320,6 +1321,7 @@ TARIFS_DEFAUT = {
     'mistral':    {'in': 0.10,  'out': 0.30},
     'ollama':     {'in': 0.0,   'out': 0.0},
     'brave':      {'in': 0.0,   'out': 0.0},
+    'tavily':     {'in': 0.0,   'out': 0.0},
 }
 
 def log_cost(provider: str, model: str, tokens_in: int, tokens_out: int,
