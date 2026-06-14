@@ -478,6 +478,36 @@ async def get_thread_carnet(thread_id: str):
     return get_carnet_notes(thread_id)
 
 
+@app.get("/api/threads/{thread_id}/export")
+async def export_thread_markdown(thread_id: str):
+    """Exporte un fil (ou onglet) en Markdown téléchargeable."""
+    from fastapi import Response
+    thread = get_thread(thread_id)
+    if not thread:
+        raise HTTPException(404, "Fil introuvable.")
+    messages = get_messages(thread_id, limit=10000)
+
+    titre = thread.get('name') or 'Conversation NIMM'
+    lignes = [f"# {titre}", "", f"_Exporté le {datetime.now().strftime('%d/%m/%Y à %H:%M')}_", ""]
+    role_labels = {"user": "**Vous**", "assistant": "**NIMM**"}
+    for m in messages:
+        label = role_labels.get(m['role'], f"**{m['role']}**")
+        lignes.append(f"{label} :")
+        lignes.append("")
+        lignes.append(m['content'] or "")
+        lignes.append("")
+        lignes.append("---")
+        lignes.append("")
+    contenu = "\n".join(lignes)
+
+    nom_fichier = re.sub(r'[^\w\-éèàâêîôûüçÉÈÀÂÊÎÔÛÜÇ ]', '', titre).strip() or 'conversation'
+    return Response(
+        content=contenu,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}.md"'}
+    )
+
+
 # ══════════════════════════════════════════
 # ONGLETS (TABS)
 # Les onglets sont des threads enfants.

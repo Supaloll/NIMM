@@ -1034,6 +1034,22 @@ function renderSidebar() {
             renderSidebar();
         });
 
+        // Exporter en Markdown
+        const expItem = document.createElement('button');
+        expItem.className = 'thread-dropdown-item';
+        expItem.setAttribute('role', 'menuitem');
+        expItem.textContent = 'Exporter en Markdown';
+        expItem.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdown.classList.remove('open');
+            const a = document.createElement('a');
+            a.href = `/api/threads/${t.thread_id}/export`;
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        });
+
         // Epingler
         const pinItem = document.createElement('button');
         pinItem.className = 'thread-dropdown-item';
@@ -1086,6 +1102,7 @@ function renderSidebar() {
         });
 
         dropdown.appendChild(renItem);
+        dropdown.appendChild(expItem);
         dropdown.appendChild(pinItem);
         dropdown.appendChild(delItem);
 
