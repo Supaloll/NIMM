@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 import os as _os_main
 import base64 as _base64
@@ -332,9 +332,12 @@ class ModelSetting(BaseModel):
     model: str
 
 class RoutingSetting(BaseModel):
-    chat:   Optional[str] = None
-    vision: Optional[str] = None
-    image:  Optional[str] = None
+    chat:     Optional[str] = None
+    vision:   Optional[str] = None
+    image:    Optional[str] = None
+    memoire:  Optional[Dict[str, str]] = None
+    titre:    Optional[Dict[str, str]] = None
+    synthese: Optional[Dict[str, str]] = None
 
 
 # ══════════════════════════════════════════
