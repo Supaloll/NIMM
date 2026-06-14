@@ -1188,27 +1188,24 @@ function renderSidebar() {
     const biblBtn = document.createElement('button');
     biblBtn.id        = 'toggle-bibliotheque';
     biblBtn.className = 'sidebar-section-btn';
-    biblBtn.title     = 'Bibliothèque (raccourci : Alt+B)';
+    biblBtn.title     = 'Bibliothèque (raccourci : Alt+Maj+B)';
     biblBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque');
-    biblBtn.setAttribute('accesskey', 'b');
     biblBtn.innerHTML = '<span aria-hidden="true">📚</span> Bibliothèque';
     threadList.appendChild(biblBtn);
 
     const promptBtn = document.createElement('button');
     promptBtn.id        = 'toggle-prompt-library';
     promptBtn.className = 'sidebar-section-btn';
-    promptBtn.title     = 'Promptothèque (raccourci : Alt+P)';
+    promptBtn.title     = 'Promptothèque (raccourci : Alt+Maj+O)';
     promptBtn.setAttribute('aria-label', 'Ouvrir la promptothèque');
-    promptBtn.setAttribute('accesskey', 'p');
     promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Promptothèque';
     threadList.appendChild(promptBtn);
 
     const searchBtn = document.createElement('button');
     searchBtn.id        = 'toggle-search-conversations';
     searchBtn.className = 'sidebar-section-btn';
-    searchBtn.title     = 'Recherche dans les conversations (raccourci : Alt+R)';
+    searchBtn.title     = 'Recherche dans les conversations (raccourci : Alt+Maj+R)';
     searchBtn.setAttribute('aria-label', 'Ouvrir la recherche dans les conversations');
-    searchBtn.setAttribute('accesskey', 'r');
     searchBtn.innerHTML = '<span aria-hidden="true">🔎</span> Recherche';
     threadList.appendChild(searchBtn);
 }
@@ -3796,6 +3793,17 @@ async function _initPotards() {
                 if (saveStatus) saveStatus.textContent = `✅ Masque « ${name} » enregistré (utilisable depuis le mode Masque).`;
                 if (saveInput) saveInput.value = '';
                 _maskCache[mask.id] = mask.label;
+                // Ajoute le nouveau masque aux listes déroulantes sans recharger la page.
+                [document.getElementById('mask-select'),
+                 document.getElementById('new-thread-mask-select')].forEach(sel => {
+                    if (!sel) return;
+                    if (![...sel.options].some(o => o.value === mask.id)) {
+                        const opt = document.createElement('option');
+                        opt.value = mask.id;
+                        opt.textContent = mask.label;
+                        sel.appendChild(opt);
+                    }
+                });
             } catch (e) {
                 if (saveStatus) saveStatus.textContent = '❌ Erreur lors de l\'enregistrement du masque.';
             }
@@ -4471,7 +4479,7 @@ document.getElementById('agenda-form-save')?.addEventListener('click', async fun
 document.getElementById('toggle-memory').addEventListener('click', () => {
     document.getElementById('memory-modal').classList.remove('hidden');
     loadMemory();
-    setTimeout(() => { if (!_isMobile) document.getElementById('memory-search')?.focus(); }, 50);
+    setTimeout(() => { if (!_isMobile) document.getElementById('memory-search')?.focus(); }, 120);
 });
 
 // ══════════════════════════════════════════
@@ -4482,16 +4490,16 @@ document.addEventListener('click', (e) => {
     if (e.target.closest('#toggle-bibliotheque')) {
         document.getElementById('bibliotheque-modal').classList.remove('hidden');
         loadBibliotheque();
-        setTimeout(() => { if (!_isMobile) document.getElementById('biblio-search')?.focus(); }, 50);
+        setTimeout(() => { if (!_isMobile) document.getElementById('biblio-search')?.focus(); }, 120);
     }
     if (e.target.closest('#toggle-prompt-library')) {
         document.getElementById('prompt-library-modal').classList.remove('hidden');
         loadPromptLibrary();
-        setTimeout(() => { if (!_isMobile) document.getElementById('prompt-save-current-btn')?.focus(); }, 50);
+        setTimeout(() => { if (!_isMobile) document.getElementById('prompt-save-current-btn')?.focus(); }, 120);
     }
     if (e.target.closest('#toggle-search-conversations')) {
         document.getElementById('search-conversations-modal').classList.remove('hidden');
-        setTimeout(() => { if (!_isMobile) document.getElementById('search-conversations-input')?.focus(); }, 50);
+        setTimeout(() => { if (!_isMobile) document.getElementById('search-conversations-input')?.focus(); }, 120);
     }
 });
 
@@ -6309,12 +6317,17 @@ document.addEventListener('click', () => {
         'm': 'toggle-memory',     // Mémoire
         'g': 'toggle-galerie',    // Galerie d'images
         'e': 'toggle-enrich',     // Enrichissement web
-        'p': 'toggle-settings'    // Paramètres
+        'p': 'toggle-settings',   // Paramètres
+        'b': 'toggle-bibliotheque',        // Bibliothèque
+        'o': 'toggle-prompt-library',      // Promptothèque
+        'r': 'toggle-search-conversations' // Recherche dans les conversations
     };
     var LABELS = {
         'toggle-history': 'Alt+Shift+C', 'toggle-agenda': 'Alt+Shift+A',
         'toggle-memory': 'Alt+Shift+M', 'toggle-galerie': 'Alt+Shift+G',
-        'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P'
+        'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P',
+        'toggle-bibliotheque': 'Alt+Shift+B', 'toggle-prompt-library': 'Alt+Shift+O',
+        'toggle-search-conversations': 'Alt+Shift+R'
     };
     // Annonce les raccourcis aux lecteurs d'écran.
     Object.keys(LABELS).forEach(function (id) {
