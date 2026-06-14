@@ -733,6 +733,27 @@
     </div>
 </div>
 
+<!-- MODALE BIBLIOTHÈQUE DE PROMPTS -->
+<div id="prompt-library-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="prompt-library-title" style="max-width:620px;">
+        <div class="modal-header">
+            <h3 id="prompt-library-title">📝 Bibliothèque de prompts</h3>
+            <button class="close-modal" aria-label="Fermer la bibliothèque de prompts">✕</button>
+        </div>
+
+        <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 12px;">
+            Enregistrez des modèles de message réutilisables. Utilisez <code>{{variable}}</code>
+            dans le texte pour qu'on vous demande sa valeur au moment de l'utilisation.
+        </p>
+
+        <button id="prompt-save-current-btn" style="width:100%;margin-bottom:14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.85rem;cursor:pointer;">
+            💾 Enregistrer le message en cours comme nouveau prompt
+        </button>
+
+        <div id="prompt-library-list"></div>
+    </div>
+</div>
+
 <!-- ── Modal création de fil ── -->
 <div id="new-thread-modal" class="modal-overlay hidden">
     <div class="modal-box" role="dialog" aria-modal="true" style="max-width:340px;">
@@ -999,4 +1020,72 @@
             <h3 id="galerie-modal-title"><span aria-hidden="true">🖼️</span> Galerie d'images</h3>
             <button id="galerie-close" class="modal-close" aria-label="Fermer la galerie">✕</button>
         </div>
-        <div id="galerie-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;max-height:65vh;overflow-y:auto;padding:4px 2px;
+        <div id="galerie-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;max-height:65vh;overflow-y:auto;padding:4px 2px;">
+            <div id="galerie-empty" style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px 0;">Aucune image sauvegardée.</div>
+        </div>
+    </div>
+</div>
+
+<!-- MODALE RENOMMAGE IMAGE -->
+<div id="galerie-rename-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="galerie-rename-title" style="max-width:400px;">
+        <div class="modal-header">
+            <h3 id="galerie-rename-title">Renommer l'image</h3>
+            <button id="galerie-rename-close" class="modal-close" aria-label="Fermer">✕</button>
+        </div>
+        <input id="galerie-rename-input" type="text" placeholder="Nouveau nom (sans .png)"
+            style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;margin-top:8px;">
+        <div style="display:flex;gap:8px;margin-top:12px;">
+            <button id="galerie-rename-ok" class="btn-primary">✓ Renommer</button>
+            <button id="galerie-rename-cancel" class="btn-secondary">Annuler</button>
+        </div>
+    </div>
+</div>
+
+<div id="drop-overlay" aria-hidden="true">
+    <span>📎 Déposer le fichier ici</span>
+</div>
+<!-- MODALE ENRICHISSEMENT WEB -->
+<div id="enrich-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="enrich-modal-title" style="max-width:620px;">
+        <div class="modal-header">
+            <h3 id="enrich-modal-title"><span aria-hidden="true">🌐 </span>Enrichissement web</h3>
+            <button class="close-modal" id="enrich-close" aria-label="Fermer">✕</button>
+        </div>
+        <p style="color:var(--text-muted);font-size:0.88rem;margin:4px 0 12px;">
+            Ajoute du contenu à la zone de référence : indique des URL (une par ligne) ou colle un texte.
+            Ce contenu reste séparé de la mémoire personnelle.
+        </p>
+        <div style="display:flex;gap:8px;margin-bottom:10px;" role="radiogroup" aria-label="Type de source">
+            <button id="enrich-mode-url" class="btn-secondary" role="radio" aria-checked="true">URL (une par ligne)</button>
+            <button id="enrich-mode-text" class="btn-secondary" role="radio" aria-checked="false">Texte collé</button>
+            <button id="enrich-mode-file" class="btn-secondary" role="radio" aria-checked="false">Fichier</button>
+        </div>
+        <div id="enrich-title-row" class="hidden" style="margin-bottom:8px;">
+            <label for="enrich-title" class="sr-only">Titre du contenu collé</label>
+            <input type="text" id="enrich-title" placeholder="Titre (facultatif)"
+                   style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
+        </div>
+        <div id="enrich-file-row" class="hidden" style="margin-bottom:8px;">
+            <label for="enrich-file" class="sr-only">Fichier à ingérer</label>
+            <input type="file" id="enrich-file" accept=".pdf,.docx,.rtf,.odt,.epub,.html,.htm,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"
+                   style="width:100%;color:var(--text);">
+            <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:0.88rem;color:var(--text-muted);">
+                <input type="checkbox" id="enrich-force-ocr"> Forcer l'OCR (PDF scanné ou mixte)
+            </label>
+        </div>
+        <label for="enrich-input" class="sr-only">Contenu à ingérer</label>
+        <textarea id="enrich-input" rows="4" placeholder="https://exemple.org/article&#10;https://autre.org/page"
+                  style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;"></textarea>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+            <button id="enrich-submit" class="btn-primary" style="flex:1;">Ingérer</button>
+        </div>
+        <p id="enrich-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:8px 0;"></p>
+        <h4 style="margin:14px 0 6px;">Contenus en mémoire</h4>
+        <div id="enrich-list" aria-live="polite"></div>
+    </div>
+</div>
+
+<script src="/static/app.js?v=20260613-2"></script>
+</body>
+</html>

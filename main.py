@@ -32,7 +32,8 @@ from core.database import (
     set_user_context, get_current_user,
     get_all_users, create_user, delete_user, update_user,
     save_image, get_images, rename_image, delete_image,
-    list_presets, save_preset, delete_preset, apply_preset
+    list_presets, save_preset, delete_preset, apply_preset,
+    list_prompts, save_prompt, delete_prompt
 )
 from core.hub import process_message, memory_worker
 
@@ -856,6 +857,31 @@ async def apply_preset_route(name: str):
     if config is None:
         raise HTTPException(404, "Préréglage introuvable.")
     return {"status": "ok", "config": config}
+
+class PromptSaveRequest(BaseModel):
+    id: Optional[str] = None
+    label: str
+    text: str
+
+@app.get("/api/prompts")
+async def get_prompts():
+    """Liste les prompts enregistrés dans la bibliothèque."""
+    return {"prompts": list_prompts()}
+
+@app.post("/api/prompts")
+async def post_prompt(req: PromptSaveRequest):
+    """Enregistre (ou met à jour) un prompt de la bibliothèque."""
+    label = (req.label or '').strip()
+    text = (req.text or '').strip()
+    if not label or not text:
+        raise HTTPException(400, "Libellé et texte du prompt requis.")
+    prompt = save_prompt(req.id, label, text)
+    return {"status": "ok", "prompt": prompt}
+
+@app.delete("/api/prompts/{prompt_id}")
+async def delete_prompt_route(prompt_id: str):
+    delete_prompt(prompt_id)
+    return {"status": "ok"}
 
 @app.get("/api/settings/length")
 async def get_length():

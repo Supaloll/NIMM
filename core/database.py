@@ -6,6 +6,7 @@
 import sqlite3
 import os
 import json
+import uuid
 from datetime import datetime
 from contextvars import ContextVar
 
@@ -1612,6 +1613,47 @@ def apply_preset(name: str):
     for k, v in entry.get('config', {}).items():
         set_setting(k, v)
     return entry.get('config', {})
+
+
+# ══════════════════════════════════════════
+# BIBLIOTHÈQUE DE PROMPTS (avec variables {{...}})
+# ══════════════════════════════════════════
+
+def list_prompts() -> dict:
+    """Retourne {id: {label, text, created_at}} pour tous les prompts enregistrés."""
+    raw = get_setting('prompt_library', '{}')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_prompt(prompt_id: str, label: str, text: str) -> dict:
+    """Enregistre (ou met à jour si prompt_id existe) un prompt.
+    Retourne {id, label, text, created_at}."""
+    prompts = list_prompts()
+    if prompt_id and prompt_id in prompts:
+        entry = prompts[prompt_id]
+        entry['label'] = label
+        entry['text'] = text
+    else:
+        prompt_id = prompt_id or uuid.uuid4().hex
+        entry = {
+            'label': label,
+            'text': text,
+            'created_at': datetime.now().isoformat(timespec='seconds'),
+        }
+        prompts[prompt_id] = entry
+    set_setting('prompt_library', json.dumps(prompts, ensure_ascii=False))
+    result = dict(entry)
+    result['id'] = prompt_id
+    return result
+
+def delete_prompt(prompt_id: str) -> None:
+    prompts = list_prompts()
+    if prompt_id in prompts:
+        del prompts[prompt_id]
+        set_setting('prompt_library', json.dumps(prompts, ensure_ascii=False))
 
 
 # ══════════════════════════════════════════
