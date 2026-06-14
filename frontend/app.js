@@ -4444,6 +4444,11 @@ document.addEventListener('click', (e) => {
         loadBibliotheque();
         setTimeout(() => { if (!_isMobile()) document.getElementById('biblio-search')?.focus(); }, 50);
     }
+    if (e.target.closest('#toggle-prompt-library')) {
+        document.getElementById('prompt-library-modal').classList.remove('hidden');
+        loadPromptLibrary();
+        setTimeout(() => { if (!_isMobile()) document.getElementById('prompt-save-current-btn')?.focus(); }, 50);
+    }
 });
 
 // Recherche dans la bibliothèque
@@ -4655,12 +4660,6 @@ function renderBiblioEntry(entry) {
 // ══════════════════════════════════════════
 // BIBLIOTHÈQUE DE PROMPTS
 // ══════════════════════════════════════════
-
-document.getElementById('toggle-prompt-library').addEventListener('click', () => {
-    document.getElementById('prompt-library-modal').classList.remove('hidden');
-    loadPromptLibrary();
-    setTimeout(() => { if (!_isMobile()) document.getElementById('prompt-save-current-btn')?.focus(); }, 50);
-});
 
 async function loadPromptLibrary() {
     const list = document.getElementById('prompt-library-list');
