@@ -1681,30 +1681,44 @@ def apply_preset(name: str):
 # BIBLIOTHÈQUE DE PROMPTS (avec variables {{...}})
 # ══════════════════════════════════════════
 
-def list_prompts() -> dict:
-    """Retourne {id: {label, text, created_at}} pour tous les prompts enregistrés."""
+def list_prompts(type: str = None) -> dict:
+    """Retourne {id: {label, text, type, created_at, meta?}} pour les éléments de la
+    Promptothèque. Les entrées créées avant l'ajout du champ 'type' sont traitées comme
+    'prompt'. Filtre optionnel par type."""
     raw = get_setting('prompt_library', '{}')
     try:
         data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
     except Exception:
         return {}
+    for entry in data.values():
+        entry.setdefault('type', 'prompt')
+    if type:
+        return {k: v for k, v in data.items() if v.get('type', 'prompt') == type}
+    return data
 
-def save_prompt(prompt_id: str, label: str, text: str) -> dict:
-    """Enregistre (ou met à jour si prompt_id existe) un prompt.
-    Retourne {id, label, text, created_at}."""
+def save_prompt(prompt_id: str, label: str, text: str, type: str = 'prompt', meta: dict = None) -> dict:
+    """Enregistre (ou met à jour si prompt_id existe) un élément de la Promptothèque.
+    Retourne {id, label, text, type, created_at, meta?}."""
     prompts = list_prompts()
     if prompt_id and prompt_id in prompts:
         entry = prompts[prompt_id]
         entry['label'] = label
         entry['text'] = text
+        entry['type'] = type or entry.get('type', 'prompt')
+        if meta is not None:
+            entry['meta'] = meta
     else:
         prompt_id = prompt_id or uuid.uuid4().hex
         entry = {
             'label': label,
             'text': text,
+            'type': type or 'prompt',
             'created_at': datetime.now().isoformat(timespec='seconds'),
         }
+        if meta is not None:
+            entry['meta'] = meta
         prompts[prompt_id] = entry
     set_setting('prompt_library', json.dumps(prompts, ensure_ascii=False))
     result = dict(entry)
@@ -1716,6 +1730,66 @@ def delete_prompt(prompt_id: str) -> None:
     if prompt_id in prompts:
         del prompts[prompt_id]
         set_setting('prompt_library', json.dumps(prompts, ensure_ascii=False))
+
+
+# ══════════════════════════════════════════
+# PERMISSIONS AGENT (CoaNIMM)
+# ══════════════════════════════════════════
+#
+# Une "action" est une chaîne libre (ex: 'exec_script:<id>') que CoaNIMM doit
+# pouvoir réaliser sans confirmation. L'accord peut être donné :
+#   - 'once'    : pour cette seule exécution, jamais persisté ;
+#   - 'project' : pour le fil de conversation courant (thread_id) ;
+#   - 'always'  : pour toujours, tous fils confondus.
+
+def list_agent_grants() -> dict:
+    """Retourne {'always': [actions...], 'threads': {thread_id: [actions...]}}."""
+    raw = get_setting('agent_permissions', '{}')
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    data.setdefault('always', [])
+    data.setdefault('threads', {})
+    return data
+
+def agent_permission_granted(action: str, thread_id: str = None) -> bool:
+    grants = list_agent_grants()
+    if action in grants['always']:
+        return True
+    if thread_id and action in grants['threads'].get(thread_id, []):
+        return True
+    return False
+
+def grant_agent_permission(action: str, scope: str, thread_id: str = None) -> None:
+    """Enregistre un accord durable. scope='once' n'est jamais persisté (no-op)."""
+    grants = list_agent_grants()
+    if scope == 'always':
+        if action not in grants['always']:
+            grants['always'].append(action)
+    elif scope == 'project':
+        if not thread_id:
+            return
+        lst = grants['threads'].setdefault(thread_id, [])
+        if action not in lst:
+            lst.append(action)
+    else:
+        return
+    set_setting('agent_permissions', json.dumps(grants, ensure_ascii=False))
+
+def revoke_agent_permission(action: str, thread_id: str = None) -> None:
+    grants = list_agent_grants()
+    changed = False
+    if action in grants['always']:
+        grants['always'].remove(action)
+        changed = True
+    if thread_id and action in grants['threads'].get(thread_id, []):
+        grants['threads'][thread_id].remove(action)
+        changed = True
+    if changed:
+        set_setting('agent_permissions', json.dumps(grants, ensure_ascii=False))
 
 
 # ══════════════════════════════════════════
@@ -1804,99 +1878,4 @@ def update_memory_value(key: str, valeur: str):
 
 # ══════════════════════════════════════════
 # RAPPELS / AGENDA
-# ══════════════════════════════════════════
-
-def create_rappel(description: str, date_echeance: str | None, type_rappel: str) -> int:
-    """Crée un rappel. Retourne l'id créé."""
-    conn = get_conn()
-    cur = conn.execute(
-        '''INSERT INTO rappels (description, date_echeance, type, statut, rappels_emis)
-           VALUES (?, ?, ?, 'actif', '[]')''',
-        (description, date_echeance, type_rappel)
-    )
-    conn.commit()
-    rid = cur.lastrowid
-    conn.close()
-    return rid
-
-def update_rappel_date(rappel_id: int, date_echeance: str) -> bool:
-    """Met à jour la date/heure d'un rappel existant."""
-    conn = get_conn()
-    conn.execute(
-        'UPDATE rappels SET date_echeance = ? WHERE id = ?',
-        (date_echeance, rappel_id)
-    )
-    conn.commit()
-    conn.close()
-    return True
-
-def close_rappel(rappel_id: int) -> bool:
-    """Marque un rappel comme clos (utilisateur confirme que c'est passé)."""
-    conn = get_conn()
-    conn.execute(
-        "UPDATE rappels SET statut = 'clos' WHERE id = ?",
-        (rappel_id,)
-    )
-    conn.commit()
-    conn.close()
-    return True
-
-def get_rappels_actifs() -> list:
-    """Retourne tous les rappels actifs, triés par date."""
-    conn = get_conn()
-    rows = conn.execute(
-        """SELECT * FROM rappels WHERE statut = 'actif'
-           ORDER BY date_echeance ASC NULLS LAST"""
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-def get_all_rappels() -> list:
-    """Retourne tous les rappels (actifs + clos + périmés)."""
-    conn = get_conn()
-    rows = conn.execute(
-        'SELECT * FROM rappels ORDER BY date_echeance ASC NULLS LAST'
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-def marquer_rappel_emis(rappel_id: int, seuil: str):
-    """Ajoute un seuil à rappels_emis. Ex: seuil='j7'."""
-    import json
-    conn = get_conn()
-    row = conn.execute('SELECT rappels_emis FROM rappels WHERE id = ?', (rappel_id,)).fetchone()
-    if row:
-        emis = json.loads(row['rappels_emis'] or '[]')
-        if seuil not in emis:
-            emis.append(seuil)
-        conn.execute(
-            'UPDATE rappels SET rappels_emis = ? WHERE id = ?',
-            (json.dumps(emis), rappel_id)
-        )
-        conn.commit()
-    conn.close()
-
-def perimer_rappels_depasses():
-    """Passe en 'perime' tous les rappels dont la date est dépassée."""
-    from datetime import datetime
-    now = datetime.now().strftime('%Y-%m-%d')
-    conn = get_conn()
-    conn.execute(
-        """UPDATE rappels SET statut = 'perime'
-           WHERE statut = 'actif'
-           AND date_echeance IS NOT NULL
-           AND date_echeance < ?""",
-        (now,)
-    )
-    conn.commit()
-    conn.close()
-
-
-def clear_all_memory():
-    """Vide toutes les entrées mémoire + rebuild FTS5."""
-    conn = get_conn()
-    conn.execute("DELETE FROM memory")
-    conn.execute("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')")
-    conn.commit()
-    conn.close()
-    print("[DB] Memoire videe + FTS5 rebuilt.")
+# ═════════════════════════════

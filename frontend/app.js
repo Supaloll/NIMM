@@ -4709,16 +4709,26 @@ function renderBiblioEntry(entry) {
 // BIBLIOTHÈQUE DE PROMPTS
 // ══════════════════════════════════════════
 
+// Icônes et libellés affichés pour chaque type d'élément de la Promptothèque.
+const PROMPT_TYPE_INFO = {
+    prompt:      { icone: '📝', libelle: 'Prompt' },
+    gabarit:     { icone: '📄', libelle: 'Gabarit de document' },
+    script:      { icone: '🐍', libelle: 'Script Python' },
+    tache_agent: { icone: '🤖', libelle: 'Tâche agent' },
+};
+
 async function loadPromptLibrary() {
     const list = document.getElementById('prompt-library-list');
+    const filtre = document.getElementById('prompt-type-filter')?.value || '';
     list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Chargement…</p>';
     try {
-        const res = await fetch('/api/prompts');
+        const url = filtre ? `/api/prompts?type=${encodeURIComponent(filtre)}` : '/api/prompts';
+        const res = await fetch(url);
         if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
         const { prompts } = await res.json();
         const ids = Object.keys(prompts || {});
         if (ids.length === 0) {
-            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun prompt enregistré pour le moment.</p>';
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun élément enregistré pour le moment.</p>';
             return;
         }
         ids.sort((a, b) => (prompts[a].label || '').localeCompare(prompts[b].label || ''));
@@ -4729,6 +4739,8 @@ async function loadPromptLibrary() {
         list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur de chargement.</p>';
     }
 }
+
+document.getElementById('prompt-type-filter').addEventListener('change', () => loadPromptLibrary());
 
 function renderPromptEntry(id, entry) {
     const div = document.createElement('div');
@@ -4741,11 +4753,12 @@ function renderPromptEntry(id, entry) {
 
     const info = document.createElement('div');
     info.style.flex = '1';
+    const typeInfo = PROMPT_TYPE_INFO[entry.type] || PROMPT_TYPE_INFO.prompt;
     const titre = document.createElement('div');
     titre.style.fontWeight = '600';
     titre.style.fontSize = '0.95rem';
     titre.style.marginBottom = '4px';
-    titre.textContent = entry.label || '(sans titre)';
+    titre.textContent = `${typeInfo.icone} ${entry.label || '(sans titre)'} — ${typeInfo.libelle}`;
     const extrait = document.createElement('div');
     extrait.style.color = 'var(--text-muted)';
     extrait.style.fontSize = '0.82rem';
@@ -4829,17 +4842,19 @@ function usePromptFromLibrary(text) {
 document.getElementById('prompt-save-current-btn').addEventListener('click', async () => {
     const input = document.getElementById('user-input');
     const texte = (input.value || '').trim();
+    const type = document.getElementById('prompt-save-type')?.value || 'prompt';
     if (!texte) {
-        alert('La zone de saisie est vide : écrivez le message à enregistrer comme prompt.');
+        alert('La zone de saisie est vide : écrivez le contenu à enregistrer.');
         return;
     }
-    const label = window.prompt('Nom de ce prompt :', '');
+    const typeInfo = PROMPT_TYPE_INFO[type] || PROMPT_TYPE_INFO.prompt;
+    const label = window.prompt(`Nom de ce ${typeInfo.libelle.toLowerCase()} :`, '');
     if (label === null || !label.trim()) return;
     try {
         const res = await fetch('/api/prompts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ label: label.trim(), text: texte })
+            body: JSON.stringify({ label: label.trim(), text: texte, type })
         });
         if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
         await loadPromptLibrary();
@@ -6458,27 +6473,3 @@ document.addEventListener('click', () => {
     sel.addEventListener('change', async function () {
         try {
             await fetch('/api/settings/user-genre', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ genre: sel.value })
-            });
-        } catch (e) {}
-    });
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-// -- Dictee vocale (STT Whisper) --
-(function () {
-    var toggle    = document.getElementById('stt-enabled-toggle');
-    var modelSel  = document.getElementById('stt-model-select');
-    var modelRow  = document.getElementById('stt-model-row');
-    if (!toggle) return;
-
-    function applyVisibility(enabled) {
-        // Bouton micro desktop
-        if (micBtn) micBtn.style.display = enabled ? '' : 'none';
-        // Bouton micro mobile
-        var mobileBtn = document.getElementById('mobile-mic-btn');
-        if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
-        // Afficher/masquer le selecteur de modele
-        if (

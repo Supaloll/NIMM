@@ -866,26 +866,53 @@ class PromptSaveRequest(BaseModel):
     id: Optional[str] = None
     label: str
     text: str
+    type: Optional[str] = 'prompt'
+    meta: Optional[dict] = None
 
 @app.get("/api/prompts")
-async def get_prompts():
-    """Liste les prompts enregistrés dans la bibliothèque."""
-    return {"prompts": list_prompts()}
+async def get_prompts(type: Optional[str] = None):
+    """Liste les éléments de la Promptothèque (prompts, gabarits, scripts, tâches agent).
+    Filtre optionnel par type via ?type=..."""
+    return {"prompts": list_prompts(type)}
 
 @app.post("/api/prompts")
 async def post_prompt(req: PromptSaveRequest):
-    """Enregistre (ou met à jour) un prompt de la bibliothèque."""
+    """Enregistre (ou met à jour) un élément de la Promptothèque."""
     label = (req.label or '').strip()
     text = (req.text or '').strip()
     if not label or not text:
-        raise HTTPException(400, "Libellé et texte du prompt requis.")
-    prompt = save_prompt(req.id, label, text)
+        raise HTTPException(400, "Libellé et texte requis.")
+    type_ = (req.type or 'prompt').strip() or 'prompt'
+    if type_ not in ('prompt', 'gabarit', 'script', 'tache_agent'):
+        raise HTTPException(400, "Type invalide (prompt, gabarit, script ou tache_agent).")
+    prompt = save_prompt(req.id, label, text, type_, req.meta)
     return {"status": "ok", "prompt": prompt}
 
 @app.delete("/api/prompts/{prompt_id}")
 async def delete_prompt_route(prompt_id: str):
     delete_prompt(prompt_id)
     return {"status": "ok"}
+
+
+# ══════════════════════════════════════════
+# COANIMM — agent d'exécution
+# ══════════════════════════════════════════
+
+class CoanimmRunScriptRequest(BaseModel):
+    script_id: str
+    args: Optional[List[str]] = None
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None  # 'once' | 'project' | 'always'
+
+@app.post("/api/coanimm/run_script")
+async def coanimm_run_script(req: CoanimmRunScriptRequest):
+    """Exécute un script de la Promptothèque (type='script') dans le bac à sable
+    CoaNIMM. Renvoie 'permission_required' si l'utilisateur doit d'abord accorder
+    l'exécution (une fois / pour ce fil / toujours)."""
+    from modules.coanimm import run_script
+    if req.confirm_scope not in (None, 'once', 'project', 'always'):
+        raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
+    return run_script(req.script_id, req.args, req.thread_id, req.confirm_scope)
 
 @app.get("/api/search")
 async def search_conversations_route(q: str = "", k: int = 8):
@@ -1939,41 +1966,4 @@ async def images_file(filename: str):
     filepath = os.path.join(_IMAGES_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(404, "Image non trouvée")
-    return FileResponse(filepath, media_type="image/png")
-
-@app.patch("/api/images/{img_id}")
-async def images_rename(img_id: int, req: ImageRenameRequest):
-    """Renomme une image sur disque et en DB."""
-    images = get_images()
-    current = next((i for i in images if i['id'] == img_id), None)
-    if not current:
-        raise HTTPException(404, "Image non trouvée")
-    new_filename = req.filename.strip()
-    if not new_filename.endswith('.png'):
-        new_filename += '.png'
-    old_path = os.path.join(_IMAGES_DIR, current['filename'])
-    new_path = os.path.join(_IMAGES_DIR, new_filename)
-    if os.path.exists(old_path):
-        os.rename(old_path, new_path)
-    rename_image(img_id, new_filename)
-    return {"status": "ok", "filename": new_filename}
-
-@app.delete("/api/images/{img_id}")
-async def images_delete(img_id: int):
-    """Supprime une image (DB + disque)."""
-    filename = delete_image(img_id)
-    if not filename:
-        raise HTTPException(404, "Image non trouvée")
-    filepath = os.path.join(_IMAGES_DIR, filename)
-    if os.path.exists(filepath):
-        os.remove(filepath)
-    return {"status": "ok"}
-
-
-# ══════════════════════════════════════════
-# LANCEMENT DIRECT
-# ══════════════════════════════════════════
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    return FileResponse(filepath
