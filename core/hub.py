@@ -1727,7 +1727,15 @@ async def extract_memories_from_window(messages: list, settings: dict) -> int:
     provider_mem, model_mem = get_task_provider_model('memoire', settings)
     from core.engine import _resolve_model
     template = _load_memoire_prompt_template(provider_mem, _resolve_model(provider_mem, model_mem))
-    prompt = template.replace('{{USER_NAME}}', user_name).replace('{{CONV_TEXT}}', conv_text)
+    date_str     = datetime.now().strftime('%d/%m/%Y')
+    location_str = settings.get('location', '')
+    prompt = (
+        template
+        .replace('{{USER_NAME}}', user_name)
+        .replace('{{DATE}}',      date_str)
+        .replace('{{LOCATION}}',  location_str)
+        .replace('{{CONV_TEXT}}', conv_text)
+    )
 
     try:
         response = await call_llm(
