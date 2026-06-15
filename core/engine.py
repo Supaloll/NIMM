@@ -706,14 +706,13 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
     if not api_key:
         raise ValueError("Clé API Anthropic manquante.")
     model = model or 'claude-opus-4-5'
-    anthropic_messages = []
-    for m in messages:
-        if m['role'] == 'system':
-            continue
-        anthropic_messages.append({'role': m['role'], 'content': m['content']})
+    # Conversion OpenAI -> Anthropic : gère les messages 'tool' (rôle inexistant
+    # côté Anthropic) et les tool_calls de l'assistant, sinon 400 Bad Request
+    # dès qu'un outil (search_web, search_memory…) a été utilisé en phase 1.
+    anthropic_messages = _oai_msgs_to_anthropic(messages)
     if images and anthropic_messages:
         last = anthropic_messages[-1]
-        if last['role'] == 'user':
+        if last['role'] == 'user' and isinstance(last['content'], str):
             content_blocks = []
             for img in images:
                 content_blocks.append({
@@ -1274,8 +1273,3 @@ async def get_provider_credit(provider: str, api_keys: dict) -> dict:
                 r.raise_for_status()
                 data = r.json()
                 return {'available': True, 'balance': float(data.get('credits', 0)), 'currency': 'crédits'}
-
-    except Exception as e:
-        return {'available': False, 'reason': str(e)[:120]}
-
-    return {'available': False, 'reason': 'unsupported_provider'}

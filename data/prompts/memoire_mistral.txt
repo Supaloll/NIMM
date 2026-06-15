@@ -49,4 +49,6 @@ CHAMP "contexte" : précision courte (5 mots max), ou "" si rien à ajouter.
 EXEMPLES :
 "J'habite à Lyon" -> {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"domicile","objet":"Lyon","memoire_type":"identite","profondeur":2,"type_temporal":"permanent","contexte":""}
 "Je fais du judo depuis 6 ans" -> {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"anciennete_pratique","objet":"6 ans","memoire_type":"loisir","profondeur":2,"type_temporal":"persistant","contexte":"judo"}
-"Ma femme Nadia est infirmière" -> {"registre":"neutre","type":"tra
+"Ma femme Nadia est infirmière" -> {"registre":"neutre","type":"trait","sujet":"Nadia","predicat":"metier","objet":"infirmiere","memoire_type":"travail","profondeur":2,"type_temporal":"persistant","contexte":""}
+
+Réponds UNIQUEMENT avec le tableau JSON, sans aucun texte avant ou après, sans balises de code.

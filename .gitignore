@@ -206,6 +206,9 @@ data/nimm_*.db-wal
 data/nimm_global.json
 data/users.json
 
+# Espaces de travail CoaNIMM (générés par fil, données utilisateur)
+data/coanimm_workspace/
+
 # Modèles lourds — Kokoro TTS
 kokoro-v1.0.onnx
 voices-v1.0.bin
@@ -279,8 +282,4 @@ modules/masks/exemple_confidente.json
 modules/masks/exemple_expert.json
 modules/masks/exemple_mentor.json
 modules/masks/exemple_pote.json
-modules/masks/exemple_prof.json
-data/nimm_laurent.db-wal
-data/nimm_laurent.db-shm
-data/nimm_laurent.db-shm
-*.db-shm
+modules/masks/exemp
