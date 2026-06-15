@@ -1878,4 +1878,98 @@ def update_memory_value(key: str, valeur: str):
 
 # ══════════════════════════════════════════
 # RAPPELS / AGENDA
-# ═════════════════════════════
+# ══════════════════════════════════════════
+
+def create_rappel(description: str, date_echeance: str | None, type_rappel: str) -> int:
+    """Crée un rappel. Retourne l'id créé."""
+    conn = get_conn()
+    cur = conn.execute(
+        '''INSERT INTO rappels (description, date_echeance, type, statut, rappels_emis)
+           VALUES (?, ?, ?, 'actif', '[]')''',
+        (description, date_echeance, type_rappel)
+    )
+    conn.commit()
+    rid = cur.lastrowid
+    conn.close()
+    return rid
+
+def update_rappel_date(rappel_id: int, date_echeance: str) -> bool:
+    """Met à jour la date/heure d'un rappel existant."""
+    conn = get_conn()
+    conn.execute(
+        'UPDATE rappels SET date_echeance = ? WHERE id = ?',
+        (date_echeance, rappel_id)
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+def close_rappel(rappel_id: int) -> bool:
+    """Marque un rappel comme clos (utilisateur confirme que c'est passé)."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE rappels SET statut = 'clos' WHERE id = ?",
+        (rappel_id,)
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+def get_rappels_actifs() -> list:
+    """Retourne tous les rappels actifs, triés par date."""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT * FROM rappels WHERE statut = 'actif'
+           ORDER BY date_echeance ASC NULLS LAST"""
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_all_rappels() -> list:
+    """Retourne tous les rappels (actifs + clos + périmés)."""
+    conn = get_conn()
+    rows = conn.execute(
+        'SELECT * FROM rappels ORDER BY date_echeance ASC NULLS LAST'
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def marquer_rappel_emis(rappel_id: int, seuil: str):
+    """Ajoute un seuil à rappels_emis. Ex: seuil='j7'."""
+    import json
+    conn = get_conn()
+    row = conn.execute('SELECT rappels_emis FROM rappels WHERE id = ?', (rappel_id,)).fetchone()
+    if row:
+        emis = json.loads(row['rappels_emis'] or '[]')
+        if seuil not in emis:
+            emis.append(seuil)
+        conn.execute(
+            'UPDATE rappels SET rappels_emis = ? WHERE id = ?',
+            (json.dumps(emis), rappel_id)
+        )
+        conn.commit()
+    conn.close()
+
+def perimer_rappels_depasses():
+    """Passe en 'perime' tous les rappels dont la date est dépassée."""
+    from datetime import datetime
+    now = datetime.now().strftime('%Y-%m-%d')
+    conn = get_conn()
+    conn.execute(
+        """UPDATE rappels SET statut = 'perime'
+           WHERE statut = 'actif'
+           AND date_echeance IS NOT NULL
+           AND date_echeance < ?""",
+        (now,)
+    )
+    conn.commit()
+    conn.close()
+
+def clear_all_memory():
+    """Vide toutes les entrées mémoire + rebuild FTS5."""
+    conn = get_conn()
+    conn.execute("DELETE FROM memory")
+    conn.execute("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')")
+    conn.commit()
+    conn.close()
+    print("[DB] Memoire videe + FTS5 rebuilt.")

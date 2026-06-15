@@ -6365,6 +6365,190 @@ document.addEventListener('click', () => {
 })();
 
 // ══════════════════════════════════════════
+// AGENT COANIMM
+// ══════════════════════════════════════════
+
+let _coanimmPendingAction = null; // { kind: 'script'|'generated', scriptId?, label, consigne? }
+
+// Ouverture de la modale Agent CoaNIMM
+document.getElementById('toggle-coanimm')?.addEventListener('click', function() {
+    document.getElementById('coanimm-modal').classList.remove('hidden');
+    loadCoanimm();
+});
+
+async function loadCoanimm() {
+    const list = document.getElementById('coanimm-script-list');
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    document.getElementById('coanimm-result').classList.add('hidden');
+    document.getElementById('coanimm-result-code-box')?.classList.add('hidden');
+    list.textContent = 'Chargement…';
+
+    try {
+        const r = await fetch('/api/prompts?type=script');
+        const data = await r.json();
+        const scripts = Object.entries(data.prompts || {});
+
+        if (scripts.length === 0) {
+            list.textContent = 'Aucun script enregistré. Ajoutez-en un depuis la Promptothèque (type « Script Python »).';
+            return;
+        }
+
+        list.innerHTML = '';
+        scripts.forEach(([id, entry]) => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';
+
+            const span = document.createElement('span');
+            span.textContent = entry.label || '(sans titre)';
+            span.style.flex = '1';
+
+            const btn = document.createElement('button');
+            btn.textContent = '▶️ Exécuter';
+            btn.style.cssText = 'background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:0.82rem;cursor:pointer;';
+            btn.addEventListener('click', () => runCoanimmScript(id, entry.label || id, null));
+
+            row.appendChild(span);
+            row.appendChild(btn);
+            list.appendChild(row);
+        });
+    } catch (e) {
+        console.error('[COANIMM] Erreur chargement scripts :', e);
+        list.textContent = 'Erreur lors du chargement des scripts.';
+    }
+}
+
+function _coanimmShowResult(data, label) {
+    const resultBox = document.getElementById('coanimm-result');
+    resultBox.classList.remove('hidden');
+    const statusEl = document.getElementById('coanimm-result-status');
+    const stdoutEl = document.getElementById('coanimm-result-stdout');
+    const stderrEl = document.getElementById('coanimm-result-stderr');
+    const codeBox = document.getElementById('coanimm-result-code-box');
+    const codeEl = document.getElementById('coanimm-result-code');
+
+    if (data.status === 'ok') {
+        statusEl.textContent = `Script « ${label} » terminé (code retour ${data.returncode}).`;
+        stdoutEl.value = data.stdout || '';
+        stderrEl.value = data.stderr || '';
+    } else {
+        statusEl.textContent = `Erreur : ${data.message || 'erreur inconnue.'}`;
+        stdoutEl.value = '';
+        stderrEl.value = '';
+    }
+
+    if (typeof data.code === 'string') {
+        codeEl.value = data.code;
+        codeBox.classList.remove('hidden');
+    } else {
+        codeEl.value = '';
+        codeBox.classList.add('hidden');
+    }
+
+    setTimeout(() => { if (!_isMobile) statusEl.focus(); }, 50);
+}
+
+function _coanimmShowPermission(label) {
+    const permBox = document.getElementById('coanimm-permission');
+    document.getElementById('coanimm-permission-text').textContent =
+        `L'agent CoaNIMM demande l'autorisation d'exécuter : ${label}.`;
+    permBox.classList.remove('hidden');
+    setTimeout(() => { if (!_isMobile) document.getElementById('coanimm-allow-once')?.focus(); }, 50);
+}
+
+async function runCoanimmScript(scriptId, label, confirmScope) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
+
+    try {
+        const r = await fetch('/api/coanimm/run_script', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                script_id: scriptId,
+                thread_id: currentThreadId || null,
+                confirm_scope: confirmScope,
+            }),
+        });
+        const data = await r.json();
+
+        if (data.status === 'permission_required') {
+            _coanimmPendingAction = { kind: 'script', scriptId, label };
+            _coanimmShowPermission(`le script « ${label} »`);
+            return;
+        }
+
+        _coanimmShowResult(data, label);
+    } catch (e) {
+        console.error('[COANIMM] Erreur exécution :', e);
+        document.getElementById('coanimm-result').classList.remove('hidden');
+        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de l\'exécution.';
+        document.getElementById('coanimm-result-stdout').value = '';
+        document.getElementById('coanimm-result-stderr').value = '';
+        document.getElementById('coanimm-result-code-box').classList.add('hidden');
+    }
+}
+
+async function runCoanimmGenerated(consigne, confirmScope) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
+
+    try {
+        const r = await fetch('/api/coanimm/generate_and_run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                consigne,
+                thread_id: currentThreadId || null,
+                confirm_scope: confirmScope,
+            }),
+        });
+        const data = await r.json();
+
+        if (data.status === 'permission_required') {
+            _coanimmPendingAction = { kind: 'generated', consigne, label: 'la consigne libre' };
+            _coanimmShowPermission("la génération et l'exécution d'un script à partir de votre consigne");
+            return;
+        }
+
+        _coanimmShowResult(data, 'généré');
+    } catch (e) {
+        console.error('[COANIMM] Erreur génération/exécution :', e);
+        document.getElementById('coanimm-result').classList.remove('hidden');
+        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de la génération/exécution.';
+        document.getElementById('coanimm-result-stdout').value = '';
+        document.getElementById('coanimm-result-stderr').value = '';
+        document.getElementById('coanimm-result-code-box').classList.add('hidden');
+    }
+}
+
+function _coanimmResumePending(confirmScope) {
+    if (!_coanimmPendingAction) return;
+    const action = _coanimmPendingAction;
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    if (action.kind === 'generated') {
+        runCoanimmGenerated(action.consigne, confirmScope);
+    } else {
+        runCoanimmScript(action.scriptId, action.label, confirmScope);
+    }
+}
+
+document.getElementById('coanimm-allow-once')?.addEventListener('click', () => _coanimmResumePending('once'));
+document.getElementById('coanimm-allow-project')?.addEventListener('click', () => _coanimmResumePending('project'));
+document.getElementById('coanimm-allow-always')?.addEventListener('click', () => _coanimmResumePending('always'));
+document.getElementById('coanimm-deny')?.addEventListener('click', () => {
+    _coanimmPendingAction = null;
+    document.getElementById('coanimm-permission').classList.add('hidden');
+});
+
+document.getElementById('coanimm-generate-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('coanimm-consigne');
+    const consigne = (input?.value || '').trim();
+    if (!consigne) {
+        input?.focus();
+        return;
+    }
+    runCoanimmGenerated(consigne, null);
+});
+
+// ══════════════════════════════════════════
 // RACCOURCIS CLAVIER GLOBAUX (Alt+Maj+lettre)
 // ══════════════════════════════════════════
 (function () {
@@ -6376,14 +6560,16 @@ document.addEventListener('click', () => {
         'e': 'toggle-enrich',     // Enrichissement web
         'p': 'toggle-settings',   // Paramètres
         'o': 'toggle-prompt-library',      // Promptothèque
-        'r': 'toggle-search-conversations' // Recherches
+        'r': 'toggle-search-conversations', // Recherches
+        't': 'toggle-coanimm'              // agenT CoaNIMM
     };
     var LABELS = {
         'toggle-history': 'Alt+Shift+C', 'toggle-agenda': 'Alt+Shift+A',
         'toggle-memory': 'Alt+Shift+M', 'toggle-galerie': 'Alt+Shift+G',
         'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P',
         'toggle-prompt-library': 'Alt+Shift+O',
-        'toggle-search-conversations': 'Alt+Shift+R'
+        'toggle-search-conversations': 'Alt+Shift+R',
+        'toggle-coanimm': 'Alt+Shift+T'
     };
     // Annonce les raccourcis aux lecteurs d'écran.
     Object.keys(LABELS).forEach(function (id) {
@@ -6473,3 +6659,77 @@ document.addEventListener('click', () => {
     sel.addEventListener('change', async function () {
         try {
             await fetch('/api/settings/user-genre', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ genre: sel.value })
+            });
+        } catch (e) {}
+    });
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+// -- Dictee vocale (STT Whisper) --
+(function () {
+    var toggle    = document.getElementById('stt-enabled-toggle');
+    var modelSel  = document.getElementById('stt-model-select');
+    var modelRow  = document.getElementById('stt-model-row');
+    if (!toggle) return;
+
+    function applyVisibility(enabled) {
+        // Bouton micro desktop
+        if (micBtn) micBtn.style.display = enabled ? '' : 'none';
+        // Bouton micro mobile
+        var mobileBtn = document.getElementById('mobile-mic-btn');
+        if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
+        // Afficher/masquer le selecteur de modele
+        if (modelRow) modelRow.style.display = enabled ? '' : 'none';
+    }
+
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/stt').then(function (r) { return r.json(); });
+            toggle.checked = !!d.enabled;
+            if (modelSel) modelSel.value = d.model || 'base';
+            applyVisibility(!!d.enabled);
+        } catch (e) {}
+    }
+
+    async function save() {
+        try {
+            await fetch('/api/settings/stt', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: toggle.checked,
+                    model:   modelSel ? modelSel.value : 'base'
+                })
+            });
+            applyVisibility(toggle.checked);
+        } catch (e) {}
+    }
+
+    toggle.addEventListener('change', save);
+    if (modelSel) modelSel.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+// ── Moteur de recherche web (Brave / Tavily) ──
+(function () {
+    var sel = document.getElementById('search-provider-select');
+    if (!sel) return;
+    async function load() {
+        try { var d = await fetch('/api/settings/search-provider').then(function (r) { return r.json(); }); sel.value = d.provider || 'auto'; } catch (e) {}
+    }
+    sel.addEventListener('change', async function () {
+        try {
+            await fetch('/api/settings/search-provider', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: sel.value })
+            });
+        } catch (e) {}
+    });
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+setupSettingsTabs();
+init();

@@ -1966,4 +1966,40 @@ async def images_file(filename: str):
     filepath = os.path.join(_IMAGES_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(404, "Image non trouvée")
-    return FileResponse(filepath
+    return FileResponse(filepath, media_type="image/png")
+
+@app.patch("/api/images/{img_id}")
+async def images_rename(img_id: int, req: ImageRenameRequest):
+    """Renomme une image sur disque et en DB."""
+    images = get_images()
+    current = next((i for i in images if i['id'] == img_id), None)
+    if not current:
+        raise HTTPException(404, "Image non trouvée")
+    new_filename = req.filename.strip()
+    if not new_filename.endswith('.png'):
+        new_filename += '.png'
+    old_path = os.path.join(_IMAGES_DIR, current['filename'])
+    new_path = os.path.join(_IMAGES_DIR, new_filename)
+    if os.path.exists(old_path):
+        os.rename(old_path, new_path)
+    rename_image(img_id, new_filename)
+    return {"status": "ok", "filename": new_filename}
+
+@app.delete("/api/images/{img_id}")
+async def images_delete(img_id: int):
+    """Supprime une image (DB + disque)."""
+    filename = delete_image(img_id)
+    if not filename:
+        raise HTTPException(404, "Image non trouvée")
+    filepath = os.path.join(_IMAGES_DIR, filename)
+    if os.path.exists(filepath):
+        os.remove(filepath)
+    return {"status": "ok"}
+
+# ══════════════════════════════════════════
+# LANCEMENT DIRECT
+# ══════════════════════════════════════════
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
