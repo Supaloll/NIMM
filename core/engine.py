@@ -1273,3 +1273,7 @@ async def get_provider_credit(provider: str, api_keys: dict) -> dict:
                 r.raise_for_status()
                 data = r.json()
                 return {'available': True, 'balance': float(data.get('credits', 0)), 'currency': 'crédits'}
+    except Exception as e:
+        return {'available': False, 'reason': str(e)[:120]}
+
+    return {'available': False, 'reason': 'unsupported_provider'}
