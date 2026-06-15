@@ -49,4 +49,6 @@ INTERDIT d'extraire si l'objet est un fragment sans sens autonome : nom de lieu 
 RÈGLE D'AUTONOMIE : le triplet doit se comprendre sans relire la conversation. Si l'objet a besoin du fil pour exister → ne pas extraire. Laisser le carnet de bord capturer ce contexte.
 EXCEPTION — nuance comparative/qualitative : une précision qui ne tient pas seule ('il gagne aux points plutôt que par ippon') mais qui complète un fait déjà extractible par ailleurs (ici : pratique du judo) ne doit pas être rejetée — rattache-la comme 'contexte' du triplet concerné (ex: predicat='loisir', objet='judo', contexte='gagne aux points plutôt que par ippon').
 
-ANECDOTES / ÉVÉNEMENTS MARQUANTS : un moment narratif qui ne se résume pas à un trait stable (une finale perdue, une réussite, un
+ANECDOTES / ÉVÉNEMENTS MARQUANTS : un moment narratif qui ne se résume pas à un trait stable (une finale perdue, une réussite, une rencontre) ne doit pas être perdu faute de prédicat canonique. Résume-le en objet (≤ 12 mots, autonome) avec predicat='anecdote', memoire_type='autre', profondeur=5, type_temporal='episodique' (ex: sujet=utilisateur, predicat='anecdote', objet='a perdu la finale de judo de peu', contexte='compétition régionale').
+
+Réponds UNIQUEMENT avec le tableau JSON. Aucun texte avant ou après.

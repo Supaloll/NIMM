@@ -41,4 +41,6 @@ ATTENTION : un trait de caractère ("douce", "gentille", "sensible", "émotive")
 "contexte" : précision courte (5 mots max), ou "" sinon.
 
 Cas particulier — durée de pratique : "je fais du judo depuis 6 ans" -> predicat="anciennete_pratique", objet="6 ans", contexte="judo".
-Cas particulier — nuance qui complète un fait 
+Cas particulier — nuance qui complète un fait déjà extrait (ex: "il gagne aux points plutôt que par ippon") : ne la rejette pas, mets-la en "contexte" du fait concerné plutôt que de l'ignorer.
+
+Réponds UNIQUEMENT avec la liste JSON, sans texte avant ni après, sans balises de code.

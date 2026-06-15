@@ -24,4 +24,6 @@ Chaque objet a CES champs, et uniquement ceux-là :
 
 Exemple :
 Phrase : "J'habite à Lyon et j'aime le foot."
-Réponse : [{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"domicile","objet":"Lyon","memoire_type":"identite","profondeur":2,"type_temporal":"permanent","contexte":""},{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"aime","objet":"le foot","memoire_ty
+Réponse : [{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"domicile","objet":"Lyon","memoire_type":"identite","profondeur":2,"type_temporal":"permanent","contexte":""},{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"aime","objet":"le foot","memoire_type":"preference","profondeur":1,"type_temporal":"persistant","contexte":""}]
+
+Réponds UNIQUEMENT avec la liste JSON. Pas de texte avant, pas de texte après, pas de ```.

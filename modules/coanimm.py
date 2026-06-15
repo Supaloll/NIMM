@@ -20,6 +20,7 @@ Deux modes :
                        naturel (via le LLM configuré), puis l'exécute.
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -43,11 +44,27 @@ GENERATE_SYSTEM_PROMPT = (
 )
 
 
+def _sanitize_dirname(name: str) -> str:
+    """Nettoie un nom de fil pour en faire un nom de dossier valide (Windows compris)."""
+    name = (name or '').strip()
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
+    name = name.strip(' .')
+    return name[:60] or 'sans_titre'
+
+
 def _workspace_dir(thread_id: str = None) -> str:
-    """Répertoire de travail sandboxé pour CoaNIMM, par fil de conversation."""
+    """Répertoire de travail sandboxé pour CoaNIMM, par fil de conversation.
+
+    Le dossier reprend le nom du fil (plus lisible qu'un identifiant opaque),
+    suffixé par les 8 premiers caractères de son identifiant pour éviter toute
+    collision entre fils de même nom.
+    """
     base = os.path.join(db.DATA_DIR, WORKSPACE_DIRNAME)
     if thread_id:
-        base = os.path.join(base, thread_id)
+        thread = db.get_thread(thread_id)
+        name = thread.get('name') if thread else None
+        folder = f"{_sanitize_dirname(name)}_{thread_id[:8]}" if name else thread_id
+        base = os.path.join(base, folder)
     os.makedirs(base, exist_ok=True)
     return base
 
@@ -75,11 +92,21 @@ def _execute(code: str, args: list, workdir: str) -> dict:
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(code)
+        # Sous Windows, le sous-processus hérite d'un stdout/stderr en cp1252
+        # ("charmap") par défaut : tout print() contenant un emoji (ex: 📁) y
+        # provoque un UnicodeEncodeError. On force l'UTF-8 pour le script généré,
+        # avec remplacement plutôt que crash pour la capture si besoin.
+        env = dict(os.environ)
+        env['PYTHONIOENCODING'] = 'utf-8'
+        env['PYTHONUTF8'] = '1'
         proc = subprocess.run(
             [sys.executable, script_path, *(args or [])],
             cwd=workdir,
             capture_output=True,
             text=True,
+            encoding='utf-8',
+            errors='replace',
+            env=env,
             timeout=TIMEOUT_SECONDS,
         )
         return {
@@ -136,10 +163,11 @@ async def generate_code(consigne: str, thread_id: str = None) -> str:
     import core.hub as hub
 
     settings = hub.load_settings(thread_id)
+    provider, model = hub.get_task_provider_model('coanimm', settings)
     response = await engine.call_llm(
         messages=[{'role': 'user', 'content': consigne}],
-        provider=settings['provider'],
-        model=settings['model'],
+        provider=provider,
+        model=model,
         system_prompt=GENERATE_SYSTEM_PROMPT,
         max_tokens=1024,
         temperature=0.2,

@@ -236,6 +236,7 @@ def _load_provider_routing() -> dict:
         'memoire':  {},
         'titre':    {},
         'synthese': {},
+        'coanimm':  {},
     }
     return {**defaults, **saved}
 
