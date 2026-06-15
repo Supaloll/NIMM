@@ -25,7 +25,7 @@
 
     <!-- BARRE SUPÉRIEURE -->
     <header id="top-bar"><h2 class="sr-only">Barre d'outils</h2>
-        <button id="toggle-history" title="Conversations" aria-label="Ouvrir ou fermer le panneau des conversations">
+        <button id="toggle-history" title="Conversations" aria-label="Conversations">
             <svg viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
                 <line x1="0" y1="2" x2="20" y2="2"/>
                 <line x1="0" y1="8" x2="20" y2="8"/>
@@ -44,8 +44,8 @@
         </button>
         <!-- Indicateur masque verrouillé sur le fil -->
         <div id="top-right">
-            <button id="toggle-galerie" title="Galerie d'images" aria-label="Ouvrir la galerie d'images"><span aria-hidden="true">🖼️</span></button>
-            <button id="toggle-agenda" title="Agenda" aria-label="Ouvrir l'agenda">
+            <button id="toggle-galerie" title="Galerie d'images" aria-label="Galerie d'images"><span aria-hidden="true">🖼️</span></button>
+            <button id="toggle-agenda" title="Agenda" aria-label="Agenda">
                 <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="2" y="3" width="12" height="11" rx="1.5"/>
                     <line x1="5" y1="1.5" x2="5" y2="4.5"/>
@@ -54,9 +54,9 @@
                     <line x1="5.5" y1="10" x2="7" y2="11.5"/><line x1="7" y1="11.5" x2="10.5" y2="9"/>
                 </svg>
             </button>
-            <button id="toggle-enrich" title="Enrichissement web" aria-label="Ouvrir l'enrichissement web"><span aria-hidden="true">🌐</span></button>
-            <button id="toggle-memory" title="Mémoire" aria-label="Ouvrir la mémoire"><span aria-hidden="true">🧠</span></button>
-            <button id="toggle-settings" title="Paramètres" aria-label="Ouvrir les paramètres"><span aria-hidden="true">⚙️</span></button>
+            <button id="toggle-enrich" title="Enrichissement web" aria-label="Enrichissement web"><span aria-hidden="true">🌐</span></button>
+            <button id="toggle-settings" title="Paramètres" aria-label="Paramètres"><span aria-hidden="true">⚙️</span></button>
+            <!-- Emplacement réservé : bouton agent CoaNIMM (à venir) -->
         </div>
     </header>
 
@@ -714,25 +714,6 @@
     </div>
 </div>
 
-<!-- MODALE BIBLIOTHÈQUE -->
-<div id="bibliotheque-modal" class="modal-overlay hidden">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="biblio-modal-title" style="max-width:620px;">
-        <div class="modal-header">
-            <h3 id="biblio-modal-title">📚 Bibliothèque</h3>
-            <button class="close-modal" aria-label="Fermer la bibliothèque">✕</button>
-        </div>
-
-        <div style="display:flex;gap:8px;margin-bottom:12px;">
-            <input id="biblio-search" type="text" placeholder="🔍 Rechercher..."
-                aria-label="Rechercher dans la bibliothèque"
-                style="flex:1;background:var(--bg-input);border:1px solid var(--border);
-                       border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.9rem;outline:none;">
-        </div>
-
-        <div id="biblio-list"></div>
-    </div>
-</div>
-
 <!-- MODALE BIBLIOTHÈQUE DE PROMPTS -->
 <div id="prompt-library-modal" class="modal-overlay hidden">
     <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="prompt-library-title" style="max-width:620px;">
@@ -754,24 +735,43 @@
     </div>
 </div>
 
-<!-- MODALE RECHERCHE DANS LES CONVERSATIONS -->
+<!-- MODALE RECHERCHES -->
 <div id="search-conversations-modal" class="modal-overlay hidden">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="search-conversations-title" style="max-width:620px;">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="search-conversations-title" style="max-width:760px;overflow-y:auto;">
         <div class="modal-header">
-            <h3 id="search-conversations-title">🔎 Recherche dans les conversations</h3>
-            <button class="close-modal" aria-label="Fermer la recherche">✕</button>
+            <h3 id="search-conversations-title">🔎 Recherches</h3>
+            <button class="close-modal" aria-label="Fermer les recherches">✕</button>
         </div>
 
-        <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 12px;">
-            Recherche par sens dans l'historique de tous vos fils.
+        <h4 style="margin:0 0 4px;font-size:0.9rem;">Dans vos conversations (par sens)</h4>
+        <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 8px;">
+            Retrouvez une phrase ou une idée précise, même dans un fil non archivé.
         </p>
-
         <label for="search-conversations-input" class="sr-only">Rechercher dans les conversations</label>
         <input id="search-conversations-input" type="search" placeholder="Rechercher dans vos conversations…"
-               style="width:100%;margin-bottom:14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
-
-        <div id="search-conversations-results">
+               style="width:100%;margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+        <div id="search-conversations-results" style="margin-bottom:18px;">
             <p style="color:var(--text-muted);font-size:0.85rem;">Tapez quelques mots pour chercher dans vos conversations.</p>
+        </div>
+
+        <h4 style="margin:0 0 4px;font-size:0.9rem;">Dans vos archives (Bibliothèque)</h4>
+        <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 8px;">
+            Retrouvez une synthèse archivée (titre, sujet, étiquettes).
+        </p>
+        <label for="biblio-search" class="sr-only">Rechercher dans la bibliothèque</label>
+        <input id="biblio-search" type="text" placeholder="🔍 Rechercher dans la bibliothèque…"
+               style="width:100%;margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+        <div id="biblio-list" style="margin-bottom:18px;"></div>
+
+        <h4 style="margin:0 0 4px;font-size:0.9rem;">Dans votre mémoire (triplets)</h4>
+        <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 8px;">
+            Retrouvez ce que NIMM a retenu (sujet, prédicat, valeur, catégorie).
+        </p>
+        <label for="memory-search-global" class="sr-only">Rechercher dans la mémoire</label>
+        <input id="memory-search-global" type="text" placeholder="🔍 Rechercher dans la mémoire…"
+               style="width:100%;margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+        <div id="memory-search-global-results">
+            <p style="color:var(--text-muted);font-size:0.85rem;">Tapez quelques mots pour chercher dans votre mémoire.</p>
         </div>
     </div>
 </div>
@@ -1098,16 +1098,4 @@
         </div>
         <label for="enrich-input" class="sr-only">Contenu à ingérer</label>
         <textarea id="enrich-input" rows="4" placeholder="https://exemple.org/article&#10;https://autre.org/page"
-                  style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;"></textarea>
-        <div style="display:flex;gap:8px;margin-top:10px;">
-            <button id="enrich-submit" class="btn-primary" style="flex:1;">Ingérer</button>
-        </div>
-        <p id="enrich-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:8px 0;"></p>
-        <h4 style="margin:14px 0 6px;">Contenus en mémoire</h4>
-        <div id="enrich-list" aria-live="polite"></div>
-    </div>
-</div>
-
-<script src="/static/app.js?v=20260613-2"></script>
-</body>
-</html>
+                  style="width:100%;b

@@ -15,6 +15,7 @@ Chaque objet a CES champs, et uniquement ceux-là :
 - "registre" : presque toujours "neutre". Mets "emotionnel" seulement si le message est écrit avec colère ou en majuscules.
 - "sujet" : le prénom ({{USER_NAME}} ou le prénom du proche), jamais "je".
 - "predicat" : un seul mot simple, par exemple : domicile, metier, age, conjoint, enfant, aime, n_aime_pas, sport, loisir, probleme_sante, projet, qualite.
+- Attention : un trait de caractère ("douce", "gentille", "sensible") n'est pas un problème de santé. Si predicat="qualite", mets memoire_type="autre", jamais "sante".
 - "objet" : la réponse courte, qui se comprend seule.
 - "memoire_type" : un mot parmi identite, famille, preference, loisir, sante, travail, autre.
 - "profondeur" : un nombre entre 1 et 5.
@@ -23,6 +24,4 @@ Chaque objet a CES champs, et uniquement ceux-là :
 
 Exemple :
 Phrase : "J'habite à Lyon et j'aime le foot."
-Réponse : [{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"domicile","objet":"Lyon","memoire_type":"identite","profondeur":2,"type_temporal":"permanent","contexte":""},{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"aime","objet":"le foot","memoire_type":"preference","profondeur":1,"type_temporal":"persistant","contexte":""}]
-
-Réponds UNIQUEMENT avec la liste JSON. Pas de texte avant, pas de texte après, pas de ```.
+Réponse : [{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"domicile","objet":"Lyon","memoire_type":"identite","profondeur":2,"type_temporal":"permanent","contexte":""},{"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"aime","objet":"le foot","memoire_ty

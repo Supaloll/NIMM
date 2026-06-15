@@ -922,6 +922,15 @@ function togglePinThread(threadId) {
 function renderSidebar() {
     threadList.innerHTML = '';
 
+    // ── Bouton Recherches, en tête de liste ──
+    const searchBtn = document.createElement('button');
+    searchBtn.id        = 'toggle-search-conversations';
+    searchBtn.className = 'sidebar-section-btn';
+    searchBtn.title     = 'Recherches (raccourci : Alt+Maj+R)';
+    searchBtn.setAttribute('aria-label', 'Recherches');
+    searchBtn.innerHTML = '<span aria-hidden="true">🔎</span> Recherches';
+    threadList.appendChild(searchBtn);
+
     // ── Ligne Nouveau chat + Nouvel onglet (60/40) ──
     const newChatRow = document.createElement('div');
     newChatRow.className = 'thread-actions-row';
@@ -1180,34 +1189,26 @@ function renderSidebar() {
         }
     });
 
-    // ── Séparateur + bouton Bibliothèque collé après les fils ──
-    const biblSep = document.createElement('div');
-    biblSep.className = 'sidebar-section-sep';
-    threadList.appendChild(biblSep);
-
-    const biblBtn = document.createElement('button');
-    biblBtn.id        = 'toggle-bibliotheque';
-    biblBtn.className = 'sidebar-section-btn';
-    biblBtn.title     = 'Bibliothèque (raccourci : Alt+Maj+B)';
-    biblBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque');
-    biblBtn.innerHTML = '<span aria-hidden="true">📚</span> Bibliothèque';
-    threadList.appendChild(biblBtn);
+    // ── Séparateur + bouton Promptothèque collé après les fils ──
+    const promptSep = document.createElement('div');
+    promptSep.className = 'sidebar-section-sep';
+    threadList.appendChild(promptSep);
 
     const promptBtn = document.createElement('button');
     promptBtn.id        = 'toggle-prompt-library';
     promptBtn.className = 'sidebar-section-btn';
     promptBtn.title     = 'Promptothèque (raccourci : Alt+Maj+O)';
-    promptBtn.setAttribute('aria-label', 'Ouvrir la promptothèque');
+    promptBtn.setAttribute('aria-label', 'Promptothèque');
     promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Promptothèque';
     threadList.appendChild(promptBtn);
 
-    const searchBtn = document.createElement('button');
-    searchBtn.id        = 'toggle-search-conversations';
-    searchBtn.className = 'sidebar-section-btn';
-    searchBtn.title     = 'Recherche dans les conversations (raccourci : Alt+Maj+R)';
-    searchBtn.setAttribute('aria-label', 'Ouvrir la recherche dans les conversations');
-    searchBtn.innerHTML = '<span aria-hidden="true">🔎</span> Recherche';
-    threadList.appendChild(searchBtn);
+    const memoryBtn = document.createElement('button');
+    memoryBtn.id        = 'toggle-memory';
+    memoryBtn.className = 'sidebar-section-btn';
+    memoryBtn.title     = 'Mémoire (raccourci : Alt+Maj+M)';
+    memoryBtn.setAttribute('aria-label', 'Mémoire');
+    memoryBtn.innerHTML = '<span aria-hidden="true">🧠</span> Mémoire';
+    threadList.appendChild(memoryBtn);
 }
 
 async function selectThread(threadId) {
@@ -4476,21 +4477,15 @@ document.getElementById('agenda-form-save')?.addEventListener('click', async fun
 });
 
 
-document.getElementById('toggle-memory').addEventListener('click', () => {
-    document.getElementById('memory-modal').classList.remove('hidden');
-    loadMemory();
-    setTimeout(() => { if (!_isMobile) document.getElementById('memory-search')?.focus(); }, 120);
-});
-
 // ══════════════════════════════════════════
 // BIBLIOTHÈQUE
 // ══════════════════════════════════════════
 
 document.addEventListener('click', (e) => {
-    if (e.target.closest('#toggle-bibliotheque')) {
-        document.getElementById('bibliotheque-modal').classList.remove('hidden');
-        loadBibliotheque();
-        setTimeout(() => { if (!_isMobile) document.getElementById('biblio-search')?.focus(); }, 120);
+    if (e.target.closest('#toggle-memory')) {
+        document.getElementById('memory-modal').classList.remove('hidden');
+        loadMemory();
+        setTimeout(() => { if (!_isMobile) document.getElementById('memory-search')?.focus(); }, 120);
     }
     if (e.target.closest('#toggle-prompt-library')) {
         document.getElementById('prompt-library-modal').classList.remove('hidden');
@@ -4499,6 +4494,7 @@ document.addEventListener('click', (e) => {
     }
     if (e.target.closest('#toggle-search-conversations')) {
         document.getElementById('search-conversations-modal').classList.remove('hidden');
+        loadBibliotheque();
         setTimeout(() => { if (!_isMobile) document.getElementById('search-conversations-input')?.focus(); }, 120);
     }
 });
@@ -4693,8 +4689,8 @@ function renderBiblioEntry(entry) {
             const res = await fetch(`/api/bibliotheque/${entry.id}/reprendre`, { method: 'POST' });
             if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
             const { thread_id } = await res.json();
-            // Fermer la modale bibliothèque
-            document.getElementById('bibliotheque-modal').classList.add('hidden');
+            // Fermer la modale recherches
+            document.getElementById('search-conversations-modal').classList.add('hidden');
             // Naviguer vers le nouveau fil
             await loadThreads();
             await selectThread(thread_id);
@@ -4926,6 +4922,52 @@ document.getElementById('search-conversations-input').addEventListener('input', 
     clearTimeout(_searchConversationsTimer);
     const valeur = e.target.value;
     _searchConversationsTimer = setTimeout(() => runConversationSearch(valeur), 400);
+});
+
+// ── Recherche mémoire (triplets), section "Recherches" ──
+let _memorySearchGlobalCache = null;
+
+async function runMemorySearchGlobal(query) {
+    const list = document.getElementById('memory-search-global-results');
+    query = (query || '').trim();
+    if (!query) {
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Tapez quelques mots pour chercher dans votre mémoire.</p>';
+        return;
+    }
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Recherche…</p>';
+    try {
+        if (!_memorySearchGlobalCache) {
+            _memorySearchGlobalCache = await fetch('/api/memory/triplets').then(r => r.json());
+        }
+        const q = query.toLowerCase();
+        const resultats = _memorySearchGlobalCache.filter(m =>
+            [m.sujet, m.predicat, m.valeur, m.categorie].some(v => v?.toLowerCase().includes(q))
+        );
+        if (!resultats.length) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun résultat.</p>';
+            return;
+        }
+        list.innerHTML = '';
+        resultats.slice(0, 30).forEach(m => list.appendChild(renderMemorySearchGlobalResult(m)));
+    } catch (err) {
+        console.error('[RECHERCHE MÉMOIRE] Erreur :', err);
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur lors de la recherche.</p>';
+    }
+}
+
+function renderMemorySearchGlobalResult(m) {
+    const div = document.createElement('div');
+    div.style.cssText = 'padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:0.85rem;';
+    const cat = m.categorie ? `<span style="color:var(--text-muted);">[${escapeHtml(m.categorie)}]</span> ` : '';
+    div.innerHTML = `${cat}<strong>${escapeHtml(m.sujet || '')}</strong> — ${escapeHtml(m.predicat || '')} : ${escapeHtml(m.valeur || '')}`;
+    return div;
+}
+
+let _memorySearchGlobalTimer = null;
+document.getElementById('memory-search-global').addEventListener('input', (e) => {
+    clearTimeout(_memorySearchGlobalTimer);
+    const valeur = e.target.value;
+    _memorySearchGlobalTimer = setTimeout(() => runMemorySearchGlobal(valeur), 400);
 });
 
 
@@ -6318,15 +6360,14 @@ document.addEventListener('click', () => {
         'g': 'toggle-galerie',    // Galerie d'images
         'e': 'toggle-enrich',     // Enrichissement web
         'p': 'toggle-settings',   // Paramètres
-        'b': 'toggle-bibliotheque',        // Bibliothèque
         'o': 'toggle-prompt-library',      // Promptothèque
-        'r': 'toggle-search-conversations' // Recherche dans les conversations
+        'r': 'toggle-search-conversations' // Recherches
     };
     var LABELS = {
         'toggle-history': 'Alt+Shift+C', 'toggle-agenda': 'Alt+Shift+A',
         'toggle-memory': 'Alt+Shift+M', 'toggle-galerie': 'Alt+Shift+G',
         'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P',
-        'toggle-bibliotheque': 'Alt+Shift+B', 'toggle-prompt-library': 'Alt+Shift+O',
+        'toggle-prompt-library': 'Alt+Shift+O',
         'toggle-search-conversations': 'Alt+Shift+R'
     };
     // Annonce les raccourcis aux lecteurs d'écran.
@@ -6440,54 +6481,4 @@ document.addEventListener('click', () => {
         var mobileBtn = document.getElementById('mobile-mic-btn');
         if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
         // Afficher/masquer le selecteur de modele
-        if (modelRow) modelRow.style.display = enabled ? '' : 'none';
-    }
-
-    async function load() {
-        try {
-            var d = await fetch('/api/settings/stt').then(function (r) { return r.json(); });
-            toggle.checked = !!d.enabled;
-            if (modelSel) modelSel.value = d.model || 'base';
-            applyVisibility(!!d.enabled);
-        } catch (e) {}
-    }
-
-    async function save() {
-        try {
-            await fetch('/api/settings/stt', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    enabled: toggle.checked,
-                    model:   modelSel ? modelSel.value : 'base'
-                })
-            });
-            applyVisibility(toggle.checked);
-        } catch (e) {}
-    }
-
-    toggle.addEventListener('change', save);
-    if (modelSel) modelSel.addEventListener('change', save);
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-// ── Moteur de recherche web (Brave / Tavily) ──
-(function () {
-    var sel = document.getElementById('search-provider-select');
-    if (!sel) return;
-    async function load() {
-        try { var d = await fetch('/api/settings/search-provider').then(function (r) { return r.json(); }); sel.value = d.provider || 'auto'; } catch (e) {}
-    }
-    sel.addEventListener('change', async function () {
-        try {
-            await fetch('/api/settings/search-provider', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: sel.value })
-            });
-        } catch (e) {}
-    });
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-setupSettingsTabs();
-init();
+        if (

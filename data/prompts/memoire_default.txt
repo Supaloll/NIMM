@@ -38,6 +38,7 @@ AUTRES CHAMPS :
     projets  : objectif · reve · intention · projet
     caractère: trait · valeur · stress · qualite
       → qualite : trait de personnalité rapporté sur soi ou un proche ('douce', 'patient', 'têtu', 'courageuse') — objet = l'adjectif tel qu'employé
+      → ATTENTION : un trait de personnalité ('douce', 'gentille', 'sensible', 'émotive') N'EST PAS une information de santé, même si l'adjectif évoque la sensibilité ou l'émotivité. predicat='qualite' ou 'trait' → memoire_type='autre' (jamais 'sante'). memoire_type='sante' est réservé aux predicats probleme_sante/traitement/allergie (diagnostic, maladie, médicament, handicap).
   memoire_type: identite | famille | preference | loisir | sante | travail | humeur | autre
   profondeur  : entier 1 (existentiel) → 5 (anecdote)
   type_temporal: permanent | persistant | episodique | engagement
@@ -48,6 +49,4 @@ INTERDIT d'extraire si l'objet est un fragment sans sens autonome : nom de lieu 
 RÈGLE D'AUTONOMIE : le triplet doit se comprendre sans relire la conversation. Si l'objet a besoin du fil pour exister → ne pas extraire. Laisser le carnet de bord capturer ce contexte.
 EXCEPTION — nuance comparative/qualitative : une précision qui ne tient pas seule ('il gagne aux points plutôt que par ippon') mais qui complète un fait déjà extractible par ailleurs (ici : pratique du judo) ne doit pas être rejetée — rattache-la comme 'contexte' du triplet concerné (ex: predicat='loisir', objet='judo', contexte='gagne aux points plutôt que par ippon').
 
-ANECDOTES / ÉVÉNEMENTS MARQUANTS : un moment narratif qui ne se résume pas à un trait stable (une finale perdue, une réussite, une rencontre) ne doit pas être perdu faute de prédicat canonique. Résume-le en objet (≤ 12 mots, autonome) avec predicat='anecdote', memoire_type='autre', profondeur=5, type_temporal='episodique' (ex: sujet=utilisateur, predicat='anecdote', objet='a perdu la finale de judo de peu', contexte='compétition régionale').
-
-Réponds UNIQUEMENT avec le tableau JSON. Aucun texte avant ou après.
+ANECDOTES / ÉVÉNEMENTS MARQUANTS : un moment narratif qui ne se résume pas à un trait stable (une finale perdue, une réussite, un

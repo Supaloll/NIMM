@@ -38,6 +38,8 @@ CHAMP "predicat" : un mot court (max 2 mots), parmi ces familles :
   caractère: trait, valeur, stress, qualite
   anecdote : pour un événement marquant qui ne rentre dans aucune autre case (résume en objet ≤ 12 mots)
 
+ATTENTION : un trait de caractère ('douce', 'gentille', 'sensible', 'émotive') n'est PAS une info de santé. predicat="qualite" ou "trait" -> memoire_type="autre", jamais "sante". "sante" est réservé à probleme_sante/traitement/allergie.
+
 CHAMP "objet" : la valeur du fait, courte et compréhensible seule (sans relire la conversation).
 CHAMP "memoire_type" : identite, famille, preference, loisir, sante, travail, humeur ou autre.
 CHAMP "profondeur" : entier de 1 (info de base) à 5 (anecdote précise).
@@ -47,6 +49,4 @@ CHAMP "contexte" : précision courte (5 mots max), ou "" si rien à ajouter.
 EXEMPLES :
 "J'habite à Lyon" -> {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"domicile","objet":"Lyon","memoire_type":"identite","profondeur":2,"type_temporal":"permanent","contexte":""}
 "Je fais du judo depuis 6 ans" -> {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"anciennete_pratique","objet":"6 ans","memoire_type":"loisir","profondeur":2,"type_temporal":"persistant","contexte":"judo"}
-"Ma femme Nadia est infirmière" -> {"registre":"neutre","type":"trait","sujet":"Nadia","predicat":"metier","objet":"infirmiere","memoire_type":"travail","profondeur":2,"type_temporal":"persistant","contexte":""}
-
-Réponds UNIQUEMENT avec le tableau JSON, sans aucun texte avant ou après, sans balises de code.
+"Ma femme Nadia est infirmière" -> {"registre":"neutre","type":"tra
