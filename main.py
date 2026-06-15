@@ -24,7 +24,7 @@ import httpx as _httpx
 
 from core.database import (
     init_db, get_threads, get_thread, create_thread, delete_thread, set_thread_mask,
-    update_thread_name, get_messages, add_message, count_messages,
+    update_thread_name, update_thread_tags, get_messages, add_message, count_messages,
     get_setting, set_setting, get_all_memory, delete_memory,
     update_memory_value, save_memory,
     get_cost_summary, reset_wallet, update_wallet_rates, update_wallet_solde,
@@ -277,7 +277,8 @@ class ThreadCreate(BaseModel):
     personality_mode: Optional[str] = None
 
 class ThreadRename(BaseModel):
-    name: str
+    name: Optional[str] = None
+    tags: Optional[str] = None
 
 class MessageCreate(BaseModel):
     role:    str
@@ -454,7 +455,10 @@ def _remove_from_ghost_list(thread_id: str) -> str:
 
 @app.patch("/api/threads/{thread_id}")
 async def rename_thread(thread_id: str, req: ThreadRename):
-    update_thread_name(thread_id, req.name)
+    if req.name is not None:
+        update_thread_name(thread_id, req.name)
+    if req.tags is not None:
+        update_thread_tags(thread_id, req.tags)
     return {"status": "ok"}
 
 
@@ -862,26 +866,59 @@ class PromptSaveRequest(BaseModel):
     id: Optional[str] = None
     label: str
     text: str
+    type: Optional[str] = 'prompt'
+    meta: Optional[dict] = None
 
 @app.get("/api/prompts")
-async def get_prompts():
-    """Liste les prompts enregistrés dans la bibliothèque."""
-    return {"prompts": list_prompts()}
+async def get_prompts(type: Optional[str] = None):
+    """Liste les éléments de la Promptothèque (prompts, gabarits, scripts, tâches agent).
+    Filtre optionnel par type via ?type=..."""
+    return {"prompts": list_prompts(type)}
 
 @app.post("/api/prompts")
 async def post_prompt(req: PromptSaveRequest):
-    """Enregistre (ou met à jour) un prompt de la bibliothèque."""
+    """Enregistre (ou met à jour) un élément de la Promptothèque."""
     label = (req.label or '').strip()
     text = (req.text or '').strip()
     if not label or not text:
-        raise HTTPException(400, "Libellé et texte du prompt requis.")
-    prompt = save_prompt(req.id, label, text)
+        raise HTTPException(400, "Libellé et texte requis.")
+    type_ = (req.type or 'prompt').strip() or 'prompt'
+    if type_ not in ('prompt', 'gabarit', 'script', 'tache_agent'):
+        raise HTTPException(400, "Type invalide (prompt, gabarit, script ou tache_agent).")
+    prompt = save_prompt(req.id, label, text, type_, req.meta)
     return {"status": "ok", "prompt": prompt}
 
 @app.delete("/api/prompts/{prompt_id}")
 async def delete_prompt_route(prompt_id: str):
     delete_prompt(prompt_id)
     return {"status": "ok"}
+
+
+# ══════════════════════════════════════════
+# COANIMM — agent d'exécution
+# ══════════════════════════════════════════
+
+class CoanimmRunScriptRequest(BaseModel):
+    script_id: str
+    args: Optional[List[str]] = None
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None  # 'once' | 'project' | 'always'
+
+@app.post("/api/coanimm/run_script")
+async def coanimm_run_script(req: CoanimmRunScriptRequest):
+    """Exécute un script de la Promptothèque (type='script') dans le bac à sable
+    CoaNIMM. Renvoie 'permission_required' si l'utilisateur doit d'abord accorder
+    l'exécution (une fois / pour ce fil / toujours)."""
+    from modules.coanimm import run_script
+    if req.confirm_scope not in (None, 'once', 'project', 'always'):
+        raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
+    return run_script(req.script_id, req.args, req.thread_id, req.confirm_scope)
+
+@app.get("/api/search")
+async def search_conversations_route(q: str = "", k: int = 8):
+    """Recherche par sens dans l'historique des conversations (embeddings)."""
+    from modules.recherche import search_conversations
+    return {"resultats": search_conversations(q, k)}
 
 @app.get("/api/settings/length")
 async def get_length():
@@ -1958,7 +1995,6 @@ async def images_delete(img_id: int):
     if os.path.exists(filepath):
         os.remove(filepath)
     return {"status": "ok"}
-
 
 # ══════════════════════════════════════════
 # LANCEMENT DIRECT

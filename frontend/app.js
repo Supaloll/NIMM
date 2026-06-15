@@ -922,6 +922,15 @@ function togglePinThread(threadId) {
 function renderSidebar() {
     threadList.innerHTML = '';
 
+    // ── Bouton Recherches, en tête de liste ──
+    const searchBtn = document.createElement('button');
+    searchBtn.id        = 'toggle-search-conversations';
+    searchBtn.className = 'sidebar-section-btn';
+    searchBtn.title     = 'Recherches (raccourci : Alt+Maj+R)';
+    searchBtn.setAttribute('aria-label', 'Recherches');
+    searchBtn.innerHTML = '<span aria-hidden="true">🔎</span> Recherches';
+    threadList.appendChild(searchBtn);
+
     // ── Ligne Nouveau chat + Nouvel onglet (60/40) ──
     const newChatRow = document.createElement('div');
     newChatRow.className = 'thread-actions-row';
@@ -999,6 +1008,15 @@ function renderSidebar() {
             name.appendChild(badge);
         }
 
+        // Badge étiquettes
+        if (t.tags && t.tags.trim()) {
+            const tagBadge = document.createElement('span');
+            tagBadge.className   = 'thread-tag-badge';
+            tagBadge.textContent = `🏷️ ${t.tags.trim()}`;
+            tagBadge.title       = `Étiquettes : ${t.tags.trim()}`;
+            name.appendChild(tagBadge);
+        }
+
         // Menu ...
         const menuBtn = document.createElement('button');
         menuBtn.className = 'thread-menu-btn';
@@ -1063,6 +1081,25 @@ function renderSidebar() {
             renderSidebar();
         });
 
+        // Étiquettes
+        const tagItem = document.createElement('button');
+        tagItem.className = 'thread-dropdown-item';
+        tagItem.setAttribute('role', 'menuitem');
+        tagItem.textContent = 'Étiquettes';
+        tagItem.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            dropdown.classList.remove('open');
+            const newTags = await promptModal('Étiquettes (séparées par des virgules)', t.tags || '');
+            if (newTags === null) return;
+            await fetch(`/api/threads/${t.thread_id}`, {
+                method:  'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ tags: newTags.trim() })
+            });
+            t.tags = newTags.trim();
+            renderSidebar();
+        });
+
         // Supprimer
         const delItem = document.createElement('button');
         delItem.className = 'thread-dropdown-item thread-dropdown-danger';
@@ -1104,6 +1141,7 @@ function renderSidebar() {
         dropdown.appendChild(renItem);
         dropdown.appendChild(expItem);
         dropdown.appendChild(pinItem);
+        dropdown.appendChild(tagItem);
         dropdown.appendChild(delItem);
 
         div.appendChild(name);
@@ -1151,26 +1189,26 @@ function renderSidebar() {
         }
     });
 
-    // ── Séparateur + bouton Bibliothèque collé après les fils ──
-    const biblSep = document.createElement('div');
-    biblSep.className = 'sidebar-section-sep';
-    threadList.appendChild(biblSep);
-
-    const biblBtn = document.createElement('button');
-    biblBtn.id        = 'toggle-bibliotheque';
-    biblBtn.className = 'sidebar-section-btn';
-    biblBtn.title     = 'Bibliothèque';
-    biblBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque');
-    biblBtn.innerHTML = '<span aria-hidden="true">📚</span> Bibliothèque';
-    threadList.appendChild(biblBtn);
+    // ── Séparateur + bouton Promptothèque collé après les fils ──
+    const promptSep = document.createElement('div');
+    promptSep.className = 'sidebar-section-sep';
+    threadList.appendChild(promptSep);
 
     const promptBtn = document.createElement('button');
     promptBtn.id        = 'toggle-prompt-library';
     promptBtn.className = 'sidebar-section-btn';
-    promptBtn.title     = 'Bibliothèque de prompts';
-    promptBtn.setAttribute('aria-label', 'Ouvrir la bibliothèque de prompts');
-    promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Prompts';
+    promptBtn.title     = 'Promptothèque (raccourci : Alt+Maj+O)';
+    promptBtn.setAttribute('aria-label', 'Promptothèque');
+    promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Promptothèque';
     threadList.appendChild(promptBtn);
+
+    const memoryBtn = document.createElement('button');
+    memoryBtn.id        = 'toggle-memory';
+    memoryBtn.className = 'sidebar-section-btn';
+    memoryBtn.title     = 'Mémoire (raccourci : Alt+Maj+M)';
+    memoryBtn.setAttribute('aria-label', 'Mémoire');
+    memoryBtn.innerHTML = '<span aria-hidden="true">🧠</span> Mémoire';
+    threadList.appendChild(memoryBtn);
 }
 
 async function selectThread(threadId) {
@@ -3756,6 +3794,17 @@ async function _initPotards() {
                 if (saveStatus) saveStatus.textContent = `✅ Masque « ${name} » enregistré (utilisable depuis le mode Masque).`;
                 if (saveInput) saveInput.value = '';
                 _maskCache[mask.id] = mask.label;
+                // Ajoute le nouveau masque aux listes déroulantes sans recharger la page.
+                [document.getElementById('mask-select'),
+                 document.getElementById('new-thread-mask-select')].forEach(sel => {
+                    if (!sel) return;
+                    if (![...sel.options].some(o => o.value === mask.id)) {
+                        const opt = document.createElement('option');
+                        opt.value = mask.id;
+                        opt.textContent = mask.label;
+                        sel.appendChild(opt);
+                    }
+                });
             } catch (e) {
                 if (saveStatus) saveStatus.textContent = '❌ Erreur lors de l\'enregistrement du masque.';
             }
@@ -4428,26 +4477,25 @@ document.getElementById('agenda-form-save')?.addEventListener('click', async fun
 });
 
 
-document.getElementById('toggle-memory').addEventListener('click', () => {
-    document.getElementById('memory-modal').classList.remove('hidden');
-    loadMemory();
-    setTimeout(() => { if (!_isMobile()) document.getElementById('memory-search')?.focus(); }, 50);
-});
-
 // ══════════════════════════════════════════
 // BIBLIOTHÈQUE
 // ══════════════════════════════════════════
 
 document.addEventListener('click', (e) => {
-    if (e.target.closest('#toggle-bibliotheque')) {
-        document.getElementById('bibliotheque-modal').classList.remove('hidden');
-        loadBibliotheque();
-        setTimeout(() => { if (!_isMobile()) document.getElementById('biblio-search')?.focus(); }, 50);
+    if (e.target.closest('#toggle-memory')) {
+        document.getElementById('memory-modal').classList.remove('hidden');
+        loadMemory();
+        setTimeout(() => { if (!_isMobile) document.getElementById('memory-search')?.focus(); }, 120);
     }
     if (e.target.closest('#toggle-prompt-library')) {
         document.getElementById('prompt-library-modal').classList.remove('hidden');
         loadPromptLibrary();
-        setTimeout(() => { if (!_isMobile()) document.getElementById('prompt-save-current-btn')?.focus(); }, 50);
+        setTimeout(() => { if (!_isMobile) document.getElementById('prompt-save-current-btn')?.focus(); }, 120);
+    }
+    if (e.target.closest('#toggle-search-conversations')) {
+        document.getElementById('search-conversations-modal').classList.remove('hidden');
+        loadBibliotheque();
+        setTimeout(() => { if (!_isMobile) document.getElementById('search-conversations-input')?.focus(); }, 120);
     }
 });
 
@@ -4641,8 +4689,8 @@ function renderBiblioEntry(entry) {
             const res = await fetch(`/api/bibliotheque/${entry.id}/reprendre`, { method: 'POST' });
             if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
             const { thread_id } = await res.json();
-            // Fermer la modale bibliothèque
-            document.getElementById('bibliotheque-modal').classList.add('hidden');
+            // Fermer la modale recherches
+            document.getElementById('search-conversations-modal').classList.add('hidden');
             // Naviguer vers le nouveau fil
             await loadThreads();
             await selectThread(thread_id);
@@ -4661,16 +4709,26 @@ function renderBiblioEntry(entry) {
 // BIBLIOTHÈQUE DE PROMPTS
 // ══════════════════════════════════════════
 
+// Icônes et libellés affichés pour chaque type d'élément de la Promptothèque.
+const PROMPT_TYPE_INFO = {
+    prompt:      { icone: '📝', libelle: 'Prompt' },
+    gabarit:     { icone: '📄', libelle: 'Gabarit de document' },
+    script:      { icone: '🐍', libelle: 'Script Python' },
+    tache_agent: { icone: '🤖', libelle: 'Tâche agent' },
+};
+
 async function loadPromptLibrary() {
     const list = document.getElementById('prompt-library-list');
+    const filtre = document.getElementById('prompt-type-filter')?.value || '';
     list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Chargement…</p>';
     try {
-        const res = await fetch('/api/prompts');
+        const url = filtre ? `/api/prompts?type=${encodeURIComponent(filtre)}` : '/api/prompts';
+        const res = await fetch(url);
         if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
         const { prompts } = await res.json();
         const ids = Object.keys(prompts || {});
         if (ids.length === 0) {
-            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun prompt enregistré pour le moment.</p>';
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun élément enregistré pour le moment.</p>';
             return;
         }
         ids.sort((a, b) => (prompts[a].label || '').localeCompare(prompts[b].label || ''));
@@ -4681,6 +4739,8 @@ async function loadPromptLibrary() {
         list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur de chargement.</p>';
     }
 }
+
+document.getElementById('prompt-type-filter').addEventListener('change', () => loadPromptLibrary());
 
 function renderPromptEntry(id, entry) {
     const div = document.createElement('div');
@@ -4693,11 +4753,12 @@ function renderPromptEntry(id, entry) {
 
     const info = document.createElement('div');
     info.style.flex = '1';
+    const typeInfo = PROMPT_TYPE_INFO[entry.type] || PROMPT_TYPE_INFO.prompt;
     const titre = document.createElement('div');
     titre.style.fontWeight = '600';
     titre.style.fontSize = '0.95rem';
     titre.style.marginBottom = '4px';
-    titre.textContent = entry.label || '(sans titre)';
+    titre.textContent = `${typeInfo.icone} ${entry.label || '(sans titre)'} — ${typeInfo.libelle}`;
     const extrait = document.createElement('div');
     extrait.style.color = 'var(--text-muted)';
     extrait.style.fontSize = '0.82rem';
@@ -4775,23 +4836,25 @@ function usePromptFromLibrary(text) {
     input.value = resultat;
     input.dispatchEvent(new Event('input'));
     document.getElementById('prompt-library-modal').classList.add('hidden');
-    if (!_isMobile()) input.focus();
+    if (!_isMobile) input.focus();
 }
 
 document.getElementById('prompt-save-current-btn').addEventListener('click', async () => {
     const input = document.getElementById('user-input');
     const texte = (input.value || '').trim();
+    const type = document.getElementById('prompt-save-type')?.value || 'prompt';
     if (!texte) {
-        alert('La zone de saisie est vide : écrivez le message à enregistrer comme prompt.');
+        alert('La zone de saisie est vide : écrivez le contenu à enregistrer.');
         return;
     }
-    const label = window.prompt('Nom de ce prompt :', '');
+    const typeInfo = PROMPT_TYPE_INFO[type] || PROMPT_TYPE_INFO.prompt;
+    const label = window.prompt(`Nom de ce ${typeInfo.libelle.toLowerCase()} :`, '');
     if (label === null || !label.trim()) return;
     try {
         const res = await fetch('/api/prompts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ label: label.trim(), text: texte })
+            body: JSON.stringify({ label: label.trim(), text: texte, type })
         });
         if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
         await loadPromptLibrary();
@@ -4799,6 +4862,127 @@ document.getElementById('prompt-save-current-btn').addEventListener('click', asy
         console.error('[PROMPTS] Erreur enregistrement :', err);
         alert('❌ Erreur lors de l\'enregistrement : ' + err.message);
     }
+});
+
+// ══════════════════════════════════════════
+// RECHERCHE DANS LES CONVERSATIONS (par sens)
+// ══════════════════════════════════════════
+
+const ROLE_LABELS = { user: 'Vous', assistant: 'NIMM' };
+
+async function runConversationSearch(query) {
+    const list = document.getElementById('search-conversations-results');
+    query = (query || '').trim();
+    if (!query) {
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Tapez quelques mots pour chercher dans vos conversations.</p>';
+        return;
+    }
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Recherche…</p>';
+    try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&k=8`);
+        if (!res.ok) throw new Error(`Erreur serveur : ${res.status}`);
+        const { resultats } = await res.json();
+        if (!resultats || resultats.length === 0) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun résultat.</p>';
+            return;
+        }
+        list.innerHTML = '';
+        resultats.forEach(r => list.appendChild(renderSearchResult(r)));
+    } catch (err) {
+        console.error('[RECHERCHE] Erreur recherche :', err);
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur lors de la recherche.</p>';
+    }
+}
+
+function renderSearchResult(r) {
+    const div = document.createElement('button');
+    div.className = 'biblio-entry';
+    div.style.display = 'block';
+    div.style.width = '100%';
+    div.style.textAlign = 'left';
+    div.style.padding = '10px 14px';
+    div.style.background = 'none';
+    div.style.border = '1px solid var(--border)';
+    div.style.borderRadius = '8px';
+    div.style.marginBottom = '8px';
+    div.style.cursor = 'pointer';
+    div.style.color = 'var(--text)';
+
+    const titre = document.createElement('div');
+    titre.style.fontWeight = '600';
+    titre.style.fontSize = '0.9rem';
+    titre.style.marginBottom = '4px';
+    const role = ROLE_LABELS[r.role] || r.role || '';
+    titre.textContent = `${r.thread_name || '(fil sans nom)'} — ${role}`;
+
+    const extrait = document.createElement('div');
+    extrait.style.color = 'var(--text-muted)';
+    extrait.style.fontSize = '0.82rem';
+    extrait.style.whiteSpace = 'pre-wrap';
+    extrait.textContent = r.content || '';
+
+    div.appendChild(titre);
+    div.appendChild(extrait);
+
+    div.addEventListener('click', async () => {
+        document.getElementById('search-conversations-modal').classList.add('hidden');
+        await selectThread(r.thread_id);
+    });
+
+    return div;
+}
+
+let _searchConversationsTimer = null;
+document.getElementById('search-conversations-input').addEventListener('input', (e) => {
+    clearTimeout(_searchConversationsTimer);
+    const valeur = e.target.value;
+    _searchConversationsTimer = setTimeout(() => runConversationSearch(valeur), 400);
+});
+
+// ── Recherche mémoire (triplets), section "Recherches" ──
+let _memorySearchGlobalCache = null;
+
+async function runMemorySearchGlobal(query) {
+    const list = document.getElementById('memory-search-global-results');
+    query = (query || '').trim();
+    if (!query) {
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Tapez quelques mots pour chercher dans votre mémoire.</p>';
+        return;
+    }
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Recherche…</p>';
+    try {
+        if (!_memorySearchGlobalCache) {
+            _memorySearchGlobalCache = await fetch('/api/memory/triplets').then(r => r.json());
+        }
+        const q = query.toLowerCase();
+        const resultats = _memorySearchGlobalCache.filter(m =>
+            [m.sujet, m.predicat, m.valeur, m.categorie].some(v => v?.toLowerCase().includes(q))
+        );
+        if (!resultats.length) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun résultat.</p>';
+            return;
+        }
+        list.innerHTML = '';
+        resultats.slice(0, 30).forEach(m => list.appendChild(renderMemorySearchGlobalResult(m)));
+    } catch (err) {
+        console.error('[RECHERCHE MÉMOIRE] Erreur :', err);
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur lors de la recherche.</p>';
+    }
+}
+
+function renderMemorySearchGlobalResult(m) {
+    const div = document.createElement('div');
+    div.style.cssText = 'padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:0.85rem;';
+    const cat = m.categorie ? `<span style="color:var(--text-muted);">[${escapeHtml(m.categorie)}]</span> ` : '';
+    div.innerHTML = `${cat}<strong>${escapeHtml(m.sujet || '')}</strong> — ${escapeHtml(m.predicat || '')} : ${escapeHtml(m.valeur || '')}`;
+    return div;
+}
+
+let _memorySearchGlobalTimer = null;
+document.getElementById('memory-search-global').addEventListener('input', (e) => {
+    clearTimeout(_memorySearchGlobalTimer);
+    const valeur = e.target.value;
+    _memorySearchGlobalTimer = setTimeout(() => runMemorySearchGlobal(valeur), 400);
 });
 
 
@@ -6181,6 +6365,190 @@ document.addEventListener('click', () => {
 })();
 
 // ══════════════════════════════════════════
+// AGENT COANIMM
+// ══════════════════════════════════════════
+
+let _coanimmPendingAction = null; // { kind: 'script'|'generated', scriptId?, label, consigne? }
+
+// Ouverture de la modale Agent CoaNIMM
+document.getElementById('toggle-coanimm')?.addEventListener('click', function() {
+    document.getElementById('coanimm-modal').classList.remove('hidden');
+    loadCoanimm();
+});
+
+async function loadCoanimm() {
+    const list = document.getElementById('coanimm-script-list');
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    document.getElementById('coanimm-result').classList.add('hidden');
+    document.getElementById('coanimm-result-code-box')?.classList.add('hidden');
+    list.textContent = 'Chargement…';
+
+    try {
+        const r = await fetch('/api/prompts?type=script');
+        const data = await r.json();
+        const scripts = Object.entries(data.prompts || {});
+
+        if (scripts.length === 0) {
+            list.textContent = 'Aucun script enregistré. Ajoutez-en un depuis la Promptothèque (type « Script Python »).';
+            return;
+        }
+
+        list.innerHTML = '';
+        scripts.forEach(([id, entry]) => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';
+
+            const span = document.createElement('span');
+            span.textContent = entry.label || '(sans titre)';
+            span.style.flex = '1';
+
+            const btn = document.createElement('button');
+            btn.textContent = '▶️ Exécuter';
+            btn.style.cssText = 'background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:0.82rem;cursor:pointer;';
+            btn.addEventListener('click', () => runCoanimmScript(id, entry.label || id, null));
+
+            row.appendChild(span);
+            row.appendChild(btn);
+            list.appendChild(row);
+        });
+    } catch (e) {
+        console.error('[COANIMM] Erreur chargement scripts :', e);
+        list.textContent = 'Erreur lors du chargement des scripts.';
+    }
+}
+
+function _coanimmShowResult(data, label) {
+    const resultBox = document.getElementById('coanimm-result');
+    resultBox.classList.remove('hidden');
+    const statusEl = document.getElementById('coanimm-result-status');
+    const stdoutEl = document.getElementById('coanimm-result-stdout');
+    const stderrEl = document.getElementById('coanimm-result-stderr');
+    const codeBox = document.getElementById('coanimm-result-code-box');
+    const codeEl = document.getElementById('coanimm-result-code');
+
+    if (data.status === 'ok') {
+        statusEl.textContent = `Script « ${label} » terminé (code retour ${data.returncode}).`;
+        stdoutEl.value = data.stdout || '';
+        stderrEl.value = data.stderr || '';
+    } else {
+        statusEl.textContent = `Erreur : ${data.message || 'erreur inconnue.'}`;
+        stdoutEl.value = '';
+        stderrEl.value = '';
+    }
+
+    if (typeof data.code === 'string') {
+        codeEl.value = data.code;
+        codeBox.classList.remove('hidden');
+    } else {
+        codeEl.value = '';
+        codeBox.classList.add('hidden');
+    }
+
+    setTimeout(() => { if (!_isMobile) statusEl.focus(); }, 50);
+}
+
+function _coanimmShowPermission(label) {
+    const permBox = document.getElementById('coanimm-permission');
+    document.getElementById('coanimm-permission-text').textContent =
+        `L'agent CoaNIMM demande l'autorisation d'exécuter : ${label}.`;
+    permBox.classList.remove('hidden');
+    setTimeout(() => { if (!_isMobile) document.getElementById('coanimm-allow-once')?.focus(); }, 50);
+}
+
+async function runCoanimmScript(scriptId, label, confirmScope) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
+
+    try {
+        const r = await fetch('/api/coanimm/run_script', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                script_id: scriptId,
+                thread_id: currentThreadId || null,
+                confirm_scope: confirmScope,
+            }),
+        });
+        const data = await r.json();
+
+        if (data.status === 'permission_required') {
+            _coanimmPendingAction = { kind: 'script', scriptId, label };
+            _coanimmShowPermission(`le script « ${label} »`);
+            return;
+        }
+
+        _coanimmShowResult(data, label);
+    } catch (e) {
+        console.error('[COANIMM] Erreur exécution :', e);
+        document.getElementById('coanimm-result').classList.remove('hidden');
+        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de l\'exécution.';
+        document.getElementById('coanimm-result-stdout').value = '';
+        document.getElementById('coanimm-result-stderr').value = '';
+        document.getElementById('coanimm-result-code-box').classList.add('hidden');
+    }
+}
+
+async function runCoanimmGenerated(consigne, confirmScope) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
+
+    try {
+        const r = await fetch('/api/coanimm/generate_and_run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                consigne,
+                thread_id: currentThreadId || null,
+                confirm_scope: confirmScope,
+            }),
+        });
+        const data = await r.json();
+
+        if (data.status === 'permission_required') {
+            _coanimmPendingAction = { kind: 'generated', consigne, label: 'la consigne libre' };
+            _coanimmShowPermission("la génération et l'exécution d'un script à partir de votre consigne");
+            return;
+        }
+
+        _coanimmShowResult(data, 'généré');
+    } catch (e) {
+        console.error('[COANIMM] Erreur génération/exécution :', e);
+        document.getElementById('coanimm-result').classList.remove('hidden');
+        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de la génération/exécution.';
+        document.getElementById('coanimm-result-stdout').value = '';
+        document.getElementById('coanimm-result-stderr').value = '';
+        document.getElementById('coanimm-result-code-box').classList.add('hidden');
+    }
+}
+
+function _coanimmResumePending(confirmScope) {
+    if (!_coanimmPendingAction) return;
+    const action = _coanimmPendingAction;
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    if (action.kind === 'generated') {
+        runCoanimmGenerated(action.consigne, confirmScope);
+    } else {
+        runCoanimmScript(action.scriptId, action.label, confirmScope);
+    }
+}
+
+document.getElementById('coanimm-allow-once')?.addEventListener('click', () => _coanimmResumePending('once'));
+document.getElementById('coanimm-allow-project')?.addEventListener('click', () => _coanimmResumePending('project'));
+document.getElementById('coanimm-allow-always')?.addEventListener('click', () => _coanimmResumePending('always'));
+document.getElementById('coanimm-deny')?.addEventListener('click', () => {
+    _coanimmPendingAction = null;
+    document.getElementById('coanimm-permission').classList.add('hidden');
+});
+
+document.getElementById('coanimm-generate-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('coanimm-consigne');
+    const consigne = (input?.value || '').trim();
+    if (!consigne) {
+        input?.focus();
+        return;
+    }
+    runCoanimmGenerated(consigne, null);
+});
+
+// ══════════════════════════════════════════
 // RACCOURCIS CLAVIER GLOBAUX (Alt+Maj+lettre)
 // ══════════════════════════════════════════
 (function () {
@@ -6190,12 +6558,18 @@ document.addEventListener('click', () => {
         'm': 'toggle-memory',     // Mémoire
         'g': 'toggle-galerie',    // Galerie d'images
         'e': 'toggle-enrich',     // Enrichissement web
-        'p': 'toggle-settings'    // Paramètres
+        'p': 'toggle-settings',   // Paramètres
+        'o': 'toggle-prompt-library',      // Promptothèque
+        'r': 'toggle-search-conversations', // Recherches
+        't': 'toggle-coanimm'              // agenT CoaNIMM
     };
     var LABELS = {
         'toggle-history': 'Alt+Shift+C', 'toggle-agenda': 'Alt+Shift+A',
         'toggle-memory': 'Alt+Shift+M', 'toggle-galerie': 'Alt+Shift+G',
-        'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P'
+        'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P',
+        'toggle-prompt-library': 'Alt+Shift+O',
+        'toggle-search-conversations': 'Alt+Shift+R',
+        'toggle-coanimm': 'Alt+Shift+T'
     };
     // Annonce les raccourcis aux lecteurs d'écran.
     Object.keys(LABELS).forEach(function (id) {

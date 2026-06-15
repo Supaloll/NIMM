@@ -444,9 +444,18 @@ def init_db(user_id: str = None):
             name        TEXT NOT NULL,
             mode        TEXT DEFAULT 'chat',
             created_at  TEXT DEFAULT (datetime('now')),
-            updated_at  TEXT DEFAULT (datetime('now'))
+            updated_at  TEXT DEFAULT (datetime('now')),
+            tags        TEXT DEFAULT ''
         )
     ''')
+
+    # Migration douce — ajoute la colonne si la table existait avant
+    try:
+        c.execute("ALTER TABLE threads ADD COLUMN tags TEXT DEFAULT ''")
+        conn.commit()
+        print("[DB] Colonne tags (threads) ajoutée.")
+    except Exception:
+        pass  # Colonne déjà présente — normal au redémarrage
 
     # ── Messages ──
     c.execute('''
@@ -466,6 +475,14 @@ def init_db(user_id: str = None):
         c.execute('ALTER TABLE messages ADD COLUMN processed_for_memory INTEGER DEFAULT 0')
         conn.commit()
         print("[DB] Colonne processed_for_memory ajoutée.")
+    except Exception:
+        pass  # Colonne déjà présente — normal au redémarrage
+
+    # Migration douce — embedding pour la recherche dans les conversations
+    try:
+        c.execute('ALTER TABLE messages ADD COLUMN embedding TEXT')
+        conn.commit()
+        print("[DB] Colonne embedding (messages) ajoutée.")
     except Exception:
         pass  # Colonne déjà présente — normal au redémarrage
 
@@ -1221,6 +1238,16 @@ def update_thread_name(thread_id: str, name: str):
     conn.commit()
     conn.close()
 
+def update_thread_tags(thread_id: str, tags: str):
+    """Enregistre les étiquettes d'un fil (chaîne libre, ex: 'projet, urgent')."""
+    conn = get_conn()
+    conn.execute(
+        'UPDATE threads SET tags = ? WHERE thread_id = ?',
+        (tags or '', thread_id)
+    )
+    conn.commit()
+    conn.close()
+
 def touch_thread(thread_id: str):
     conn = get_conn()
     conn.execute(
@@ -1262,6 +1289,41 @@ def count_messages(thread_id: str) -> int:
     ).fetchone()[0]
     conn.close()
     return n
+
+
+# ══════════════════════════════════════════
+# RECHERCHE DANS LES CONVERSATIONS (embeddings)
+# ══════════════════════════════════════════
+
+def save_message_embedding(message_id: int, embedding: str) -> None:
+    """Enregistre l'embedding (sérialisé) d'un message existant."""
+    conn = get_conn()
+    conn.execute('UPDATE messages SET embedding = ? WHERE id = ?', (embedding, message_id))
+    conn.commit()
+    conn.close()
+
+def get_messages_missing_embedding(limit: int = 50) -> list:
+    """Messages sans embedding (texte non vide), pour rattrapage progressif."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, content FROM messages "
+        "WHERE (embedding IS NULL OR embedding = '') AND content IS NOT NULL AND content != '' "
+        "ORDER BY id DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_all_message_embeddings() -> list:
+    """Tous les messages disposant d'un embedding, avec le nom de leur fil."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT m.id, m.thread_id, m.role, m.content, m.created_at, m.embedding, t.name AS thread_name "
+        "FROM messages m JOIN threads t ON t.thread_id = m.thread_id "
+        "WHERE m.embedding IS NOT NULL AND m.embedding != ''"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 def count_memories() -> int:
     """Retourne le nombre total de souvenirs — pour le radar uniquement."""
@@ -1619,30 +1681,44 @@ def apply_preset(name: str):
 # BIBLIOTHÈQUE DE PROMPTS (avec variables {{...}})
 # ══════════════════════════════════════════
 
-def list_prompts() -> dict:
-    """Retourne {id: {label, text, created_at}} pour tous les prompts enregistrés."""
+def list_prompts(type: str = None) -> dict:
+    """Retourne {id: {label, text, type, created_at, meta?}} pour les éléments de la
+    Promptothèque. Les entrées créées avant l'ajout du champ 'type' sont traitées comme
+    'prompt'. Filtre optionnel par type."""
     raw = get_setting('prompt_library', '{}')
     try:
         data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
     except Exception:
         return {}
+    for entry in data.values():
+        entry.setdefault('type', 'prompt')
+    if type:
+        return {k: v for k, v in data.items() if v.get('type', 'prompt') == type}
+    return data
 
-def save_prompt(prompt_id: str, label: str, text: str) -> dict:
-    """Enregistre (ou met à jour si prompt_id existe) un prompt.
-    Retourne {id, label, text, created_at}."""
+def save_prompt(prompt_id: str, label: str, text: str, type: str = 'prompt', meta: dict = None) -> dict:
+    """Enregistre (ou met à jour si prompt_id existe) un élément de la Promptothèque.
+    Retourne {id, label, text, type, created_at, meta?}."""
     prompts = list_prompts()
     if prompt_id and prompt_id in prompts:
         entry = prompts[prompt_id]
         entry['label'] = label
         entry['text'] = text
+        entry['type'] = type or entry.get('type', 'prompt')
+        if meta is not None:
+            entry['meta'] = meta
     else:
         prompt_id = prompt_id or uuid.uuid4().hex
         entry = {
             'label': label,
             'text': text,
+            'type': type or 'prompt',
             'created_at': datetime.now().isoformat(timespec='seconds'),
         }
+        if meta is not None:
+            entry['meta'] = meta
         prompts[prompt_id] = entry
     set_setting('prompt_library', json.dumps(prompts, ensure_ascii=False))
     result = dict(entry)
@@ -1654,6 +1730,66 @@ def delete_prompt(prompt_id: str) -> None:
     if prompt_id in prompts:
         del prompts[prompt_id]
         set_setting('prompt_library', json.dumps(prompts, ensure_ascii=False))
+
+
+# ══════════════════════════════════════════
+# PERMISSIONS AGENT (CoaNIMM)
+# ══════════════════════════════════════════
+#
+# Une "action" est une chaîne libre (ex: 'exec_script:<id>') que CoaNIMM doit
+# pouvoir réaliser sans confirmation. L'accord peut être donné :
+#   - 'once'    : pour cette seule exécution, jamais persisté ;
+#   - 'project' : pour le fil de conversation courant (thread_id) ;
+#   - 'always'  : pour toujours, tous fils confondus.
+
+def list_agent_grants() -> dict:
+    """Retourne {'always': [actions...], 'threads': {thread_id: [actions...]}}."""
+    raw = get_setting('agent_permissions', '{}')
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    data.setdefault('always', [])
+    data.setdefault('threads', {})
+    return data
+
+def agent_permission_granted(action: str, thread_id: str = None) -> bool:
+    grants = list_agent_grants()
+    if action in grants['always']:
+        return True
+    if thread_id and action in grants['threads'].get(thread_id, []):
+        return True
+    return False
+
+def grant_agent_permission(action: str, scope: str, thread_id: str = None) -> None:
+    """Enregistre un accord durable. scope='once' n'est jamais persisté (no-op)."""
+    grants = list_agent_grants()
+    if scope == 'always':
+        if action not in grants['always']:
+            grants['always'].append(action)
+    elif scope == 'project':
+        if not thread_id:
+            return
+        lst = grants['threads'].setdefault(thread_id, [])
+        if action not in lst:
+            lst.append(action)
+    else:
+        return
+    set_setting('agent_permissions', json.dumps(grants, ensure_ascii=False))
+
+def revoke_agent_permission(action: str, thread_id: str = None) -> None:
+    grants = list_agent_grants()
+    changed = False
+    if action in grants['always']:
+        grants['always'].remove(action)
+        changed = True
+    if thread_id and action in grants['threads'].get(thread_id, []):
+        grants['threads'][thread_id].remove(action)
+        changed = True
+    if changed:
+        set_setting('agent_permissions', json.dumps(grants, ensure_ascii=False))
 
 
 # ══════════════════════════════════════════
@@ -1828,7 +1964,6 @@ def perimer_rappels_depasses():
     )
     conn.commit()
     conn.close()
-
 
 def clear_all_memory():
     """Vide toutes les entrées mémoire + rebuild FTS5."""

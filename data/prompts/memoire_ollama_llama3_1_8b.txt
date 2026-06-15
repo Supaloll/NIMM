@@ -33,6 +33,7 @@ Réponds avec une liste JSON. Chaque objet a EXACTEMENT ces champs :
   objectif, reve, intention, projet,
   trait, valeur, stress, qualite,
   anecdote (pour un événement marquant, résumé en objet ≤ 12 mots)
+ATTENTION : un trait de caractère ("douce", "gentille", "sensible", "émotive") n'est PAS une info de santé. predicat="qualite" ou "trait" -> memoire_type="autre", jamais "sante". "sante" est réservé à probleme_sante/traitement/allergie.
 "objet" : la valeur du fait, courte, compréhensible seule.
 "memoire_type" : identite, famille, preference, loisir, sante, travail, humeur ou autre.
 "profondeur" : entier de 1 (info de base) à 5 (anecdote précise).
@@ -40,6 +41,4 @@ Réponds avec une liste JSON. Chaque objet a EXACTEMENT ces champs :
 "contexte" : précision courte (5 mots max), ou "" sinon.
 
 Cas particulier — durée de pratique : "je fais du judo depuis 6 ans" -> predicat="anciennete_pratique", objet="6 ans", contexte="judo".
-Cas particulier — nuance qui complète un fait déjà extrait (ex: "il gagne aux points plutôt que par ippon") : ne la rejette pas, mets-la en "contexte" du fait concerné plutôt que de l'ignorer.
-
-Réponds UNIQUEMENT avec la liste JSON, sans texte avant ni après, sans balises de code.
+Cas particulier — nuance qui complète un fait 
