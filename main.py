@@ -2054,4 +2054,98 @@ async def set_server_mode(req: SettingValue):
 
 # ══════════════════════════════════════════
 # GALERIE IMAGES
-# ═══════════════════════�
+# ══════════════════════════════════════════
+
+_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'images')
+os.makedirs(_IMAGES_DIR, exist_ok=True)
+
+class ImageSaveRequest(BaseModel):
+    b64:       str = ''
+    url:       str = ''
+    prompt:    str = ''
+    thread_id: str = ''
+
+class ImageRenameRequest(BaseModel):
+    filename: str
+
+@app.post("/api/images/save")
+async def images_save(req: ImageSaveRequest):
+    """Sauvegarde une image (b64 ou url) sur disque + DB. Retourne id + filename."""
+    import re as _re
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:20]
+    filename = f"nimm_{ts}.png"
+    filepath = os.path.join(_IMAGES_DIR, filename)
+    try:
+        if req.b64:
+            data = req.b64
+            if ',' in data:
+                data = data.split(',', 1)[1]
+            with open(filepath, 'wb') as f:
+                f.write(_base64.b64decode(data))
+        elif req.url:
+            async with _httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(req.url)
+                r.raise_for_status()
+                with open(filepath, 'wb') as f:
+                    f.write(r.content)
+        else:
+            raise HTTPException(400, "b64 ou url requis")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Erreur sauvegarde image : {e}")
+    img_id = save_image(filename, req.prompt, req.thread_id)
+    return {"id": img_id, "filename": filename}
+
+@app.get("/api/images")
+async def images_list():
+    """Liste toutes les images sauvegardées."""
+    return get_images()
+
+@app.get("/api/images/file/{filename}")
+async def images_file(filename: str):
+    """Sert le fichier image depuis data/images/."""
+    # Sécurité : nom de fichier simple, pas de traversée de chemin
+    if '/' in filename or '\\' in filename or '..' in filename:
+        raise HTTPException(400, "Nom de fichier invalide")
+    filepath = os.path.join(_IMAGES_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(404, "Image non trouvée")
+    return FileResponse(filepath, media_type="image/png")
+
+@app.patch("/api/images/{img_id}")
+async def images_rename(img_id: int, req: ImageRenameRequest):
+    """Renomme une image sur disque et en DB."""
+    images = get_images()
+    current = next((i for i in images if i['id'] == img_id), None)
+    if not current:
+        raise HTTPException(404, "Image non trouvée")
+    new_filename = req.filename.strip()
+    if not new_filename.endswith('.png'):
+        new_filename += '.png'
+    old_path = os.path.join(_IMAGES_DIR, current['filename'])
+    new_path = os.path.join(_IMAGES_DIR, new_filename)
+    if os.path.exists(old_path):
+        os.rename(old_path, new_path)
+    rename_image(img_id, new_filename)
+    return {"status": "ok", "filename": new_filename}
+
+@app.delete("/api/images/{img_id}")
+async def images_delete(img_id: int):
+    """Supprime une image (DB + disque)."""
+    filename = delete_image(img_id)
+    if not filename:
+        raise HTTPException(404, "Image non trouvée")
+    filepath = os.path.join(_IMAGES_DIR, filename)
+    if os.path.exists(filepath):
+        os.remove(filepath)
+    return {"status": "ok"}
+
+# ══════════════════════════════════════════
+# LANCEMENT DIRECT
+# ══════════════════════════════════════════
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+

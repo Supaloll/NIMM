@@ -1178,4 +1178,36 @@
             Ajoute du contenu à la zone de référence : indique des URL (une par ligne) ou colle un texte.
             Ce contenu reste séparé de la mémoire personnelle.
         </p>
-        <div style="display:flex;gap:8px;margin-bottom:10px;" role="radiogroup" aria-label="Type 
+        <div style="display:flex;gap:8px;margin-bottom:10px;" role="radiogroup" aria-label="Type de source">
+            <button id="enrich-mode-url" class="btn-secondary" role="radio" aria-checked="true">URL (une par ligne)</button>
+            <button id="enrich-mode-text" class="btn-secondary" role="radio" aria-checked="false">Texte collé</button>
+            <button id="enrich-mode-file" class="btn-secondary" role="radio" aria-checked="false">Fichier</button>
+        </div>
+        <div id="enrich-title-row" class="hidden" style="margin-bottom:8px;">
+            <label for="enrich-title" class="sr-only">Titre du contenu collé</label>
+            <input type="text" id="enrich-title" placeholder="Titre (facultatif)"
+                   style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
+        </div>
+        <div id="enrich-file-row" class="hidden" style="margin-bottom:8px;">
+            <label for="enrich-file" class="sr-only">Fichier à ingérer</label>
+            <input type="file" id="enrich-file" accept=".pdf,.docx,.rtf,.odt,.epub,.html,.htm,.txt,.md,.csv,.png,.jpg,.jpeg,.webp"
+                   style="width:100%;color:var(--text);">
+            <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:0.88rem;color:var(--text-muted);">
+                <input type="checkbox" id="enrich-force-ocr"> Forcer l'OCR (PDF scanné ou mixte)
+            </label>
+        </div>
+        <label for="enrich-input" class="sr-only">Contenu à ingérer</label>
+        <textarea id="enrich-input" rows="4" placeholder="https://exemple.org/article&#10;https://autre.org/page"
+                  style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;"></textarea>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+            <button id="enrich-submit" class="btn-primary" style="flex:1;">Ingérer</button>
+        </div>
+        <p id="enrich-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:8px 0;"></p>
+        <h4 style="margin:14px 0 6px;">Contenus en mémoire</h4>
+        <div id="enrich-list" aria-live="polite"></div>
+    </div>
+</div>
+
+<script src="/static/app.js?v=20260613-2"></script>
+</body>
+</html>
