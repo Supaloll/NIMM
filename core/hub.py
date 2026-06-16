@@ -2629,10 +2629,6 @@ async def process_message_stream(
 
     add_message(thread_id, 'assistant', reply)
 
-    # Signal de troncature (max_tokens atteint)
-    if _finish_out.get('reason') in ('length', 'max_tokens'):
-        yield "data: [TRUNCATED]\n\n"
-
     # Mood — stocker le dominant pour le prochain tour
     if dominant:
         set_setting(f'dominant_{thread_id}', dominant)
@@ -2662,4 +2658,9 @@ async def process_message_stream(
                         'Translate the user prompt to English if needed, then enrich it with visual details '
                         '(style, lighting, composition, mood). '
                         'Return ONLY the enriched prompt, nothing else. Max 120 words.'
-                  
+                    ),
+                    max_tokens=150,
+                    temperature=0.7,
+                    api_keys=_img_api_keys,
+                )
+         

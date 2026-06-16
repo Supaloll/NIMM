@@ -6804,4 +6804,519 @@ document.addEventListener('click', () => {
     document.querySelectorAll('.thread-dropdown.open').forEach(d => d.classList.remove('open'));
 });
 
-// ════════�
+// ══════════════════════════════════════════
+// ENRICHISSEMENT WEB (ingestion → zone de référence)
+// ══════════════════════════════════════════
+(function () {
+    var mode = 'url'; // 'url' | 'text' | 'file'
+
+    function setMode(m) {
+        mode = m;
+        var ids = { url: 'enrich-mode-url', text: 'enrich-mode-text', file: 'enrich-mode-file' };
+        Object.keys(ids).forEach(function (k) {
+            var b = document.getElementById(ids[k]);
+            if (b) b.setAttribute('aria-checked', k === m ? 'true' : 'false');
+        });
+        var titleRow = document.getElementById('enrich-title-row');
+        var fileRow = document.getElementById('enrich-file-row');
+        var input = document.getElementById('enrich-input');
+        if (titleRow) titleRow.classList.toggle('hidden', m !== 'text');
+        if (fileRow) fileRow.classList.toggle('hidden', m !== 'file');
+        if (input) {
+            input.classList.toggle('hidden', m === 'file');
+            input.placeholder = m === 'url'
+                ? 'https://exemple.org/article\nhttps://autre.org/page'
+                : "Colle ici le texte de l'article…";
+        }
+    }
+
+    function esc(s) {
+        return (s || '').replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    async function loadEnrich() {
+        var list = document.getElementById('enrich-list');
+        if (!list) return;
+        list.textContent = 'Chargement…';
+        try {
+            var refs = await fetch('/api/enrich/list').then(function (r) { return r.json(); });
+            if (!refs.length) { list.textContent = 'Aucun contenu pour le moment.'; return; }
+            list.innerHTML = '';
+            refs.forEach(function (r) {
+                var item = document.createElement('div');
+                item.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);';
+                var src = (r.source && r.source !== 'recherche')
+                    ? (r.source.indexOf('http') === 0 ? 'URL' : r.source)
+                    : 'recherche';
+                var meta = esc(src) + (r.expiration ? ' · expire le ' + esc((r.expiration || '').slice(0, 10)) : ' · permanent');
+                var info = document.createElement('div');
+                info.innerHTML = '<div style="font-weight:500;">' + esc(r.titre || '(sans titre)') + '</div>' +
+                                 '<div style="font-size:0.8rem;color:var(--text-muted);">' + meta + '</div>';
+                var del = document.createElement('button');
+                del.textContent = '🗑️';
+                del.setAttribute('aria-label', 'Supprimer ' + (r.titre || 'ce contenu'));
+                del.style.cssText = 'background:transparent;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;';
+                del.addEventListener('click', async function () {
+                    await fetch('/api/enrich/' + r.id, { method: 'DELETE' });
+                    loadEnrich();
+                });
+                item.appendChild(info);
+                item.appendChild(del);
+                list.appendChild(item);
+            });
+        } catch (e) {
+            list.textContent = 'Erreur de chargement.';
+        }
+    }
+
+    async function submitEnrich() {
+        var input = document.getElementById('enrich-input');
+        var status = document.getElementById('enrich-status');
+        status.textContent = 'Ingestion en cours…';
+        try {
+            if (mode === 'file') {
+                var fileEl = document.getElementById('enrich-file');
+                var f = fileEl && fileEl.files && fileEl.files[0];
+                if (!f) { status.textContent = 'Aucun fichier sélectionné.'; return; }
+                var fd = new FormData();
+                fd.append('file', f, f.name);
+                var forceOcr = document.getElementById('enrich-force-ocr');
+                fd.append('force_ocr', (forceOcr && forceOcr.checked) ? 'true' : 'false');
+                var resF = await fetch('/api/enrich/file', { method: 'POST', body: fd })
+                    .then(function (r) { return r.json(); });
+                status.textContent = resF.ok
+                    ? ('Fichier ajouté : ' + (resF.titre || f.name) + (resF.passages ? ' (' + resF.passages + ' passages)' : ''))
+                    : ('Échec : ' + (resF.erreur || ''));
+                fileEl.value = '';
+            } else if (mode === 'url') {
+                var raw = (input.value || '').trim();
+                if (!raw) { status.textContent = 'Rien à ingérer.'; return; }
+                var urls = raw.split('\n').map(function (u) { return u.trim(); }).filter(Boolean);
+                var ok = 0, fail = 0, last = '';
+                for (var i = 0; i < urls.length; i++) {
+                    var res = await fetch('/api/enrich/url', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: urls[i] })
+                    }).then(function (r) { return r.json(); });
+                    if (res.ok) { ok++; } else { fail++; last = res.erreur || ''; }
+                }
+                status.textContent = ok + ' page(s) ajoutée(s)' + (fail ? ', ' + fail + ' échec(s). ' + last : '.');
+                input.value = '';
+            } else {
+                var raw2 = (input.value || '').trim();
+                if (!raw2) { status.textContent = 'Rien à ingérer.'; return; }
+                var titre = (document.getElementById('enrich-title').value || '').trim();
+                var res2 = await fetch('/api/enrich/text', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ titre: titre, texte: raw2 })
+                }).then(function (r) { return r.json(); });
+                status.textContent = res2.ok
+                    ? ('Texte ajouté' + (res2.passages ? ' (' + res2.passages + ' passages)' : '') + '.')
+                    : ('Échec : ' + (res2.erreur || ''));
+                input.value = '';
+            }
+            loadEnrich();
+        } catch (e) {
+            status.textContent = 'Erreur réseau.';
+        }
+    }
+
+    var enrichModal = document.getElementById('enrich-modal');
+    var enrichTrigger = null;
+    if (enrichModal) {
+        // Restaure le focus sur le déclencheur à la fermeture — quel que soit le chemin
+        // (bouton ✕, clic sur le fond, Échap), tous basculant la classe 'hidden'.
+        new MutationObserver(function () {
+            if (enrichModal.classList.contains('hidden') && enrichTrigger) {
+                var t = enrichTrigger; enrichTrigger = null;
+                setTimeout(function () { try { t.focus(); } catch (e) {} }, 0);
+            }
+        }).observe(enrichModal, { attributes: true, attributeFilter: ['class'] });
+    }
+    document.getElementById('toggle-enrich')?.addEventListener('click', function () {
+        enrichTrigger = this;            // pour rendre le focus à la fermeture
+        setMode('url');                  // état neutre à chaque ouverture
+        var st = document.getElementById('enrich-status'); if (st) st.textContent = '';
+        enrichModal.classList.remove('hidden');
+        loadEnrich();
+        setTimeout(function () { document.getElementById('enrich-input')?.focus(); }, 50);
+    });
+    // Fermeture (bouton ✕ .close-modal, clic sur le fond, Échap) : assurée par le
+    // câblage générique des modales de l'application — pas de doublon ici.
+    document.getElementById('enrich-mode-url')?.addEventListener('click', function () { setMode('url'); });
+    document.getElementById('enrich-mode-text')?.addEventListener('click', function () { setMode('text'); });
+    document.getElementById('enrich-mode-file')?.addEventListener('click', function () { setMode('file'); });
+    document.getElementById('enrich-submit')?.addEventListener('click', submitEnrich);
+})();
+
+// ══════════════════════════════════════════
+// AGENT COANIMM
+// ══════════════════════════════════════════
+
+let _coanimmPendingAction = null; // { kind: 'script'|'generated', scriptId?, label, consigne? }
+
+// Ouverture de la modale Agent CoaNIMM
+document.getElementById('toggle-coanimm')?.addEventListener('click', function() {
+    document.getElementById('coanimm-modal').classList.remove('hidden');
+    loadCoanimm();
+});
+
+async function loadCoanimm() {
+    const list = document.getElementById('coanimm-script-list');
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    document.getElementById('coanimm-result').classList.add('hidden');
+    document.getElementById('coanimm-result-code-box')?.classList.add('hidden');
+    list.textContent = 'Chargement…';
+
+    try {
+        const r = await fetch('/api/prompts?type=script');
+        const data = await r.json();
+        const scripts = Object.entries(data.prompts || {});
+
+        if (scripts.length === 0) {
+            list.textContent = 'Aucun script enregistré. Ajoutez-en un depuis la Promptothèque (type « Script Python »).';
+            return;
+        }
+
+        list.innerHTML = '';
+        scripts.forEach(([id, entry]) => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';
+
+            const span = document.createElement('span');
+            span.textContent = entry.label || '(sans titre)';
+            span.style.flex = '1';
+
+            const btn = document.createElement('button');
+            btn.textContent = '▶️ Exécuter';
+            btn.style.cssText = 'background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:0.82rem;cursor:pointer;';
+            btn.addEventListener('click', () => runCoanimmScript(id, entry.label || id, null));
+
+            row.appendChild(span);
+            row.appendChild(btn);
+            list.appendChild(row);
+        });
+    } catch (e) {
+        console.error('[COANIMM] Erreur chargement scripts :', e);
+        list.textContent = 'Erreur lors du chargement des scripts.';
+    }
+}
+
+function _coanimmShowResult(data, label) {
+    const resultBox = document.getElementById('coanimm-result');
+    resultBox.classList.remove('hidden');
+    const statusEl = document.getElementById('coanimm-result-status');
+    const stdoutEl = document.getElementById('coanimm-result-stdout');
+    const stderrEl = document.getElementById('coanimm-result-stderr');
+    const codeBox = document.getElementById('coanimm-result-code-box');
+    const codeEl = document.getElementById('coanimm-result-code');
+
+    if (data.status === 'ok') {
+        statusEl.textContent = `Script « ${label} » terminé (code retour ${data.returncode}).`;
+        stdoutEl.value = data.stdout || '';
+        stderrEl.value = data.stderr || '';
+    } else {
+        statusEl.textContent = `Erreur : ${data.message || 'erreur inconnue.'}`;
+        stdoutEl.value = '';
+        stderrEl.value = '';
+    }
+
+    if (typeof data.code === 'string') {
+        codeEl.value = data.code;
+        codeBox.classList.remove('hidden');
+    } else {
+        codeEl.value = '';
+        codeBox.classList.add('hidden');
+    }
+
+    setTimeout(() => { if (!_isMobile) statusEl.focus(); }, 50);
+}
+
+function _coanimmShowPermission(label) {
+    const permBox = document.getElementById('coanimm-permission');
+    document.getElementById('coanimm-permission-text').textContent =
+        `L'agent CoaNIMM demande l'autorisation d'exécuter : ${label}.`;
+    permBox.classList.remove('hidden');
+    setTimeout(() => { if (!_isMobile) document.getElementById('coanimm-allow-once')?.focus(); }, 50);
+}
+
+async function runCoanimmScript(scriptId, label, confirmScope) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
+
+    try {
+        const r = await fetch('/api/coanimm/run_script', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                script_id: scriptId,
+                thread_id: currentThreadId || null,
+                confirm_scope: confirmScope,
+            }),
+        });
+        const data = await r.json();
+
+        if (data.status === 'permission_required') {
+            _coanimmPendingAction = { kind: 'script', scriptId, label };
+            _coanimmShowPermission(`le script « ${label} »`);
+            return;
+        }
+
+        _coanimmShowResult(data, label);
+    } catch (e) {
+        console.error('[COANIMM] Erreur exécution :', e);
+        document.getElementById('coanimm-result').classList.remove('hidden');
+        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de l\'exécution.';
+        document.getElementById('coanimm-result-stdout').value = '';
+        document.getElementById('coanimm-result-stderr').value = '';
+        document.getElementById('coanimm-result-code-box').classList.add('hidden');
+    }
+}
+
+async function runCoanimmGenerated(consigne, confirmScope) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
+
+    try {
+        const r = await fetch('/api/coanimm/generate_and_run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                consigne,
+                thread_id: currentThreadId || null,
+                confirm_scope: confirmScope,
+            }),
+        });
+        const data = await r.json();
+
+        if (data.status === 'permission_required') {
+            _coanimmPendingAction = { kind: 'generated', consigne, label: 'la consigne libre' };
+            _coanimmShowPermission("la génération et l'exécution d'un script à partir de votre consigne");
+            return;
+        }
+
+        _coanimmShowResult(data, 'généré');
+    } catch (e) {
+        console.error('[COANIMM] Erreur génération/exécution :', e);
+        document.getElementById('coanimm-result').classList.remove('hidden');
+        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de la génération/exécution.';
+        document.getElementById('coanimm-result-stdout').value = '';
+        document.getElementById('coanimm-result-stderr').value = '';
+        document.getElementById('coanimm-result-code-box').classList.add('hidden');
+    }
+}
+
+function _coanimmResumePending(confirmScope) {
+    if (!_coanimmPendingAction) return;
+    const action = _coanimmPendingAction;
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    if (action.kind === 'generated') {
+        runCoanimmGenerated(action.consigne, confirmScope);
+    } else {
+        runCoanimmScript(action.scriptId, action.label, confirmScope);
+    }
+}
+
+document.getElementById('coanimm-allow-once')?.addEventListener('click', () => _coanimmResumePending('once'));
+document.getElementById('coanimm-allow-project')?.addEventListener('click', () => _coanimmResumePending('project'));
+document.getElementById('coanimm-allow-always')?.addEventListener('click', () => _coanimmResumePending('always'));
+document.getElementById('coanimm-deny')?.addEventListener('click', () => {
+    _coanimmPendingAction = null;
+    document.getElementById('coanimm-permission').classList.add('hidden');
+});
+
+document.getElementById('coanimm-generate-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('coanimm-consigne');
+    const consigne = (input?.value || '').trim();
+    if (!consigne) {
+        input?.focus();
+        return;
+    }
+    runCoanimmGenerated(consigne, null);
+});
+
+// ══════════════════════════════════════════
+// RACCOURCIS CLAVIER GLOBAUX (Alt+Maj+lettre)
+// ══════════════════════════════════════════
+(function () {
+    var SHORTCUTS = {
+        'c': 'toggle-history',    // Conversations
+        'a': 'toggle-agenda',     // Agenda
+        'm': 'toggle-memory',     // Mémoire
+        'g': 'toggle-galerie',    // Galerie d'images
+        'e': 'toggle-enrich',     // Enrichissement web
+        'p': 'toggle-settings',   // Paramètres
+        'o': 'toggle-prompt-library',      // Promptothèque
+        'r': 'toggle-search-conversations', // Recherches
+        't': 'toggle-coanimm'              // agenT CoaNIMM
+    };
+    var LABELS = {
+        'toggle-history': 'Alt+Shift+C', 'toggle-agenda': 'Alt+Shift+A',
+        'toggle-memory': 'Alt+Shift+M', 'toggle-galerie': 'Alt+Shift+G',
+        'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P',
+        'toggle-prompt-library': 'Alt+Shift+O',
+        'toggle-search-conversations': 'Alt+Shift+R',
+        'toggle-coanimm': 'Alt+Shift+T'
+    };
+    // Annonce les raccourcis aux lecteurs d'écran.
+    Object.keys(LABELS).forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.setAttribute('aria-keyshortcuts', LABELS[id]);
+    });
+    var input = document.getElementById('user-input');
+    if (input) input.setAttribute('aria-keyshortcuts', 'Alt+Shift+S');
+
+    function focusModal(container) {
+        if (!container || container.classList.contains('hidden')) return;
+        // Cible l'élément de dialogue (ou le conteneur) pour que le lecteur d'écran y entre.
+        var dlg = container.querySelector('[role="dialog"]') || container;
+        dlg.setAttribute('tabindex', '-1');
+        dlg.focus();
+    }
+    document.addEventListener('keydown', function (e) {
+        if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
+        var k = (e.key || '').toLowerCase();
+        if (k === 's') {  // focus zone de saisie
+            e.preventDefault();
+            document.getElementById('user-input')?.focus();
+            return;
+        }
+        var id = SHORTCUTS[k];
+        if (id) {
+            var btn = document.getElementById(id);
+            if (btn) {
+                e.preventDefault();
+                btn.click();
+                // Déplace le focus dans le panneau ouvert (sinon le lecteur d'écran reste en arrière).
+                var targetId = (id === 'toggle-history') ? 'history-panel' : id.replace('toggle-', '') + '-modal';
+                setTimeout(function () { focusModal(document.getElementById(targetId)); }, 90);
+            }
+        }
+    });
+})();
+
+// ══════════════════════════════════════════
+// MODE LOCAL (inférence Ollama + OCR Tesseract)
+// ══════════════════════════════════════════
+(function () {
+    var toggle = document.getElementById('local-mode-toggle');
+    var modelField = document.getElementById('local-mode-model');
+    var msg = document.getElementById('local-mode-msg');
+    if (!toggle) return;
+
+    function updateMsg() {
+        if (!msg) return;
+        msg.textContent = toggle.checked
+            ? 'Activé : inférence et OCR sur la machine (plus lent, sans clé). Web actif.'
+            : '';
+    }
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/local-mode').then(function (r) { return r.json(); });
+            toggle.checked = !!d.enabled;
+            if (modelField) modelField.value = d.ollama_model || '';
+            updateMsg();
+        } catch (e) {}
+    }
+    async function save() {
+        try {
+            await fetch('/api/settings/local-mode', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: toggle.checked,
+                    ollama_model: modelField ? modelField.value.trim() : undefined
+                })
+            });
+            updateMsg();
+        } catch (e) {}
+    }
+    toggle.addEventListener('change', save);
+    if (modelField) modelField.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+// ── Genre de l'utilisateur (formulations genrées des relations) ──
+(function () {
+    var sel = document.getElementById('user-genre-select');
+    if (!sel) return;
+    async function load() {
+        try { var d = await fetch('/api/settings/user-genre').then(function (r) { return r.json(); }); sel.value = d.genre || ''; } catch (e) {}
+    }
+    sel.addEventListener('change', async function () {
+        try {
+            await fetch('/api/settings/user-genre', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ genre: sel.value })
+            });
+        } catch (e) {}
+    });
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+// -- Dictee vocale (STT Whisper) --
+(function () {
+    var toggle    = document.getElementById('stt-enabled-toggle');
+    var modelSel  = document.getElementById('stt-model-select');
+    var modelRow  = document.getElementById('stt-model-row');
+    if (!toggle) return;
+
+    function applyVisibility(enabled) {
+        // Bouton micro desktop
+        if (micBtn) micBtn.style.display = enabled ? '' : 'none';
+        // Bouton micro mobile
+        var mobileBtn = document.getElementById('mobile-mic-btn');
+        if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
+        // Afficher/masquer le selecteur de modele
+        if (modelRow) modelRow.style.display = enabled ? '' : 'none';
+    }
+
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/stt').then(function (r) { return r.json(); });
+            toggle.checked = !!d.enabled;
+            if (modelSel) modelSel.value = d.model || 'base';
+            applyVisibility(!!d.enabled);
+        } catch (e) {}
+    }
+
+    async function save() {
+        try {
+            await fetch('/api/settings/stt', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: toggle.checked,
+                    model:   modelSel ? modelSel.value : 'base'
+                })
+            });
+            applyVisibility(toggle.checked);
+        } catch (e) {}
+    }
+
+    toggle.addEventListener('change', save);
+    if (modelSel) modelSel.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+// ── Moteur de recherche web (Brave / Tavily) ──
+(function () {
+    var sel = document.getElementById('search-provider-select');
+    if (!sel) return;
+    async function load() {
+        try { var d = await fetch('/api/settings/search-provider').then(function (r) { return r.json(); }); sel.value = d.provider || 'auto'; } catch (e) {}
+    }
+    sel.addEventListener('change', async function () {
+        try {
+            await fetch('/api/settings/search-provider', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: sel.value })
+            });
+        } catch (e) {}
+    });
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+setupSettingsTabs();
+init();

@@ -439,7 +439,6 @@ async def continue_thread_route(thread_id: str):
 
     async def _stream():
         accumulated = ''
-        finish_out  = {}
         try:
             async for token in engine.call_llm_stream(
                 messages=continuation_msgs,
@@ -449,7 +448,6 @@ async def continue_thread_route(thread_id: str):
                 max_tokens=settings.get('max_tokens', 1024),
                 temperature=settings.get('temperature', 0.7),
                 api_keys=api_keys,
-                _finish_out=finish_out,
             ):
                 accumulated += token
                 yield f"data: {token}\n\n"
@@ -457,8 +455,6 @@ async def continue_thread_route(thread_id: str):
             yield f"data: [ERREUR: {e}]\n\n"
         if accumulated:
             append_to_last_assistant(thread_id, accumulated)
-        if finish_out.get('reason') in ('length', 'max_tokens'):
-            yield "data: [TRUNCATED]\n\n"
         yield "data: [DONE]\n\n"
 
     return SR(
@@ -2056,4 +2052,6 @@ async def set_server_mode(req: SettingValue):
     return {"status": "ok"}
 
 
-# ═══════════════
+# ══════════════════════════════════════════
+# GALERIE IMAGES
+# ═══════════════════════�
