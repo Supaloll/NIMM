@@ -1282,6 +1282,17 @@ def get_messages(thread_id: str, limit: int = 200):
     conn.close()
     return [dict(r) for r in rows]
 
+def get_messages_up_to(thread_id: str, up_to: int) -> list:
+    """Retourne les messages d'un fil, du premier jusqu'à la position up_to incluse (0-indexé)."""
+    conn = get_conn()
+    rows = conn.execute(
+        'SELECT role, content FROM messages '
+        'WHERE thread_id = ? ORDER BY id ASC LIMIT ?',
+        (thread_id, up_to + 1)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 def count_messages(thread_id: str) -> int:
     conn = get_conn()
     n = conn.execute(
@@ -1949,18 +1960,4 @@ def create_rappel(description: str, date_echeance: str | None, type_rappel: str)
     conn.close()
     return rid
 
-def update_rappel_date(rappel_id: int, date_echeance: str) -> bool:
-    """Met à jour la date/heure d'un rappel existant."""
-    conn = get_conn()
-    conn.execute(
-        'UPDATE rappels SET date_echeance = ? WHERE id = ?',
-        (date_echeance, rappel_id)
-    )
-    conn.commit()
-    conn.close()
-    return True
-
-def close_rappel(rappel_id: int) -> bool:
-    """Marque un rappel comme clos (utilisateur confirme que c'est passé)."""
-    conn = get_conn()
-    conn
+def update_rappel_date(rappel_id: int, date_echeance: str) ->

@@ -1875,6 +1875,8 @@ async function loadMessages(conversationId) {
         const r    = await fetch(`/api/threads/${conversationId}/messages`);
         const msgs = await r.json();
         renderMessages(msgs);
+        document.getElementById('summary-banner').hidden = true;
+        document.getElementById('summary-btn').hidden = false;
     } catch(e) {
         console.error('[NIMM] Erreur chargement messages :', e);
     }
@@ -1882,6 +1884,7 @@ async function loadMessages(conversationId) {
 
 function renderMessages(messages) {
     messagesDiv.innerHTML = '';
+    _msgCounter = 0;
     _hideFloatTTS();
 
     if (messages.length === 0) {
@@ -1972,6 +1975,7 @@ function appendUserMessage(content, fileName = null) {
 
     actions.appendChild(actMenu);
     actions.appendChild(actBtn);
+    div.dataset.msgIndex = _msgCounter++;
     div.appendChild(bubble);
     div.appendChild(actions);
     messagesDiv.appendChild(div);
@@ -2052,6 +2056,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
         <button class="copy-menu-item" role="menuitem" data-action="tab" aria-label="Envoyer en onglet">→ Onglet</button>
         <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
+        <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
         <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
     `;
     actBtn.setAttribute('aria-haspopup', 'menu');
@@ -2093,6 +2098,10 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         actMenu.style.display = 'none';
         regenerateMessage(div, currentTabId || currentThreadId);
     });
+    actMenu.querySelector('[data-action="fork"]').addEventListener('click', () => {
+        actMenu.style.display = 'none';
+        forkFromMessage(div, currentTabId || currentThreadId);
+    });
     actMenu.querySelector('[data-action="mark"]').addEventListener('click', () => {
         actMenu.style.display = 'none';
         _toggleExportMark(div, content, 'assistant');
@@ -2104,6 +2113,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
     actions.appendChild(actBtn);
     bottom.appendChild(actions);
 
+    div.dataset.msgIndex = _msgCounter++;
     div.appendChild(bottom);
     messagesDiv.appendChild(div);
 
@@ -2522,7 +2532,7 @@ async function _getLocation() {
 // STREAM — MOTEUR COMMUN
 // ══════════════════════════════════════════
 
-async function _triggerStream(content, conversationId) {
+async function _triggerStream(content, conversationId, images = null) {
     // Capturer la position de l'emoji précédent AVANT que showLoader() scrolle
     const _preEmojis = messagesDiv.querySelectorAll('.message.assistant:not(#thinking-loader) .bubble-emoji');
     const _preEmojiRect = _preEmojis.length
@@ -2531,16 +2541,25 @@ async function _triggerStream(content, conversationId) {
     showLoader();
     animateEmojiToLoader(_preEmojiRect);
 
+    // Bouton Stop
+    _streamAbortController = new AbortController();
+    const stopBtn = document.getElementById('stop-btn');
+    const sendBtn = document.getElementById('send-btn');
+    if (stopBtn) { stopBtn.hidden = false; stopBtn.onclick = stopStream; }
+    if (sendBtn) sendBtn.hidden = true;
+
     const _location = await _getLocation();
 
     try {
         const r = await fetch('/api/chat/stream', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal:  _streamAbortController.signal,
             body:    JSON.stringify({
                 message:    content,
                 thread_id:  conversationId,
                 web_search: _webSearchActive,
+                ...(images ? { images } : {}),
                 ...(_location ? { location: _location } : {}),
             })
         });
@@ -2551,6 +2570,7 @@ async function _triggerStream(content, conversationId) {
         // Transformer le loader en bulle de réponse — zéro saut visuel
         const loaderEl = document.getElementById('thinking-loader');
         loaderEl.removeAttribute('id');
+        loaderEl.dataset.msgIndex = _msgCounter++;
         const div    = loaderEl;
         const emoji  = div.querySelector('.bubble-emoji');
         const bubble = div.querySelector('.message-bubble');
@@ -2602,6 +2622,7 @@ async function _triggerStream(content, conversationId) {
             <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
             <button class="copy-menu-item" role="menuitem" data-action="tab" aria-label="Envoyer en onglet">→ Onglet</button>
             <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
+            <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
             <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
         `;
         actBtn.setAttribute('aria-haspopup', 'menu');
@@ -2908,6 +2929,10 @@ async function _triggerStream(content, conversationId) {
             actMenu.style.display = 'none';
             regenerateMessage(div, conversationId);
         });
+        actMenu.querySelector('[data-action="fork"]').addEventListener('click', () => {
+            actMenu.style.display = 'none';
+            forkFromMessage(div, conversationId);
+        });
         actMenu.querySelector('[data-action="mark"]').addEventListener('click', () => {
             actMenu.style.display = 'none';
             _toggleExportMark(div, finalContent, 'assistant');
@@ -2927,6 +2952,13 @@ async function _triggerStream(content, conversationId) {
             _ttsPush(_ttsStreamBuf.trim(), floatBtn);
             _ttsStreamBuf = '';
         }
+
+        // Reset bouton Stop
+        const _stopBtnOk = document.getElementById('stop-btn');
+        const _sendBtnOk = document.getElementById('send-btn');
+        if (_stopBtnOk) _stopBtnOk.hidden = true;
+        if (_sendBtnOk) _sendBtnOk.hidden = false;
+        _streamAbortController = null;
 
         // Auto-titre : si le fil a encore son nom provisoire, le générer maintenant
         if (!currentTabId) {
@@ -2953,6 +2985,18 @@ async function _triggerStream(content, conversationId) {
         }
 
     } catch(e) {
+        // Reset stop/send buttons
+        const _stopBtn = document.getElementById('stop-btn');
+        const _sendBtn = document.getElementById('send-btn');
+        if (_stopBtn) _stopBtn.hidden = true;
+        if (_sendBtn) _sendBtn.hidden = false;
+        _streamAbortController = null;
+
+        if (e.name === 'AbortError') {
+            // Arrêt volontaire — on retire le loader proprement sans message d'erreur
+            removeLoader();
+            return;
+        }
         removeLoader();
         appendAssistantMessage('❌ Erreur de connexion au serveur.', 'neutre', false);
         _srAnnounce('Erreur de connexion au serveur.');
@@ -3009,6 +3053,8 @@ async function regenerateMessage(assistantDiv, conversationId) {
 // ══════════════════════════════════════════
 
 let _exportItems = []; // [{div, role, content}]
+let _streamAbortController = null; // AbortController du stream en cours
+let _msgCounter = 0;               // Index DOM des messages (pour fork)
 
 function _toggleExportMark(div, content, role) {
     const idx = _exportItems.findIndex(i => i.div === div);
@@ -3072,6 +3118,58 @@ async function doExport(format) {
         status.textContent = `Erreur : ${e.message}`;
     } finally {
         btn.disabled = false;
+    }
+}
+
+// ── Stop stream ──
+function stopStream() {
+    _streamAbortController?.abort();
+}
+
+// ── Fork depuis un message assistant ──
+async function forkFromMessage(div, conversationId) {
+    const idx = parseInt(div.dataset.msgIndex ?? '-1');
+    if (idx < 0 || !conversationId) return;
+
+    try {
+        const r = await fetch(`/api/chat/${conversationId}/fork`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ up_to: idx }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const { thread_id, name } = await r.json();
+        // Charger le nouveau fil
+        await loadThreads();
+        await selectThread(thread_id);
+        _srAnnounce(`Nouveau fil fork : ${name}`);
+    } catch(e) {
+        console.error('[NIMM] Fork error:', e);
+        alert('Erreur lors du fork : ' + e.message);
+    }
+}
+
+// ── Résumé à la demande ──
+async function requestSummary(conversationId) {
+    const tid = conversationId || currentTabId || currentThreadId;
+    if (!tid) return;
+    const btn = document.getElementById('summary-btn');
+    const banner = document.getElementById('summary-banner');
+    const textEl = document.getElementById('summary-text');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+    try {
+        const r = await fetch(`/api/threads/${tid}/summary`, { method: 'POST' });
+        if (!r.ok) throw new Error(await r.text());
+        const { summary } = await r.json();
+        textEl.textContent = summary;
+        banner.hidden = false;
+        banner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        _srAnnounce('Résumé disponible : ' + summary);
+    } catch(e) {
+        textEl.textContent = 'Erreur : ' + e.message;
+        banner.hidden = false;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '📋'; }
     }
 }
 
@@ -3210,6 +3308,17 @@ async function sendMessage() {
 // ══════════════════════════════════════════
 
 sendBtn.addEventListener('click', sendMessage);
+
+// ── Bouton Stop ──
+document.getElementById('stop-btn')?.addEventListener('click', stopStream);
+
+// ── Bouton Résumé ──
+document.getElementById('summary-btn')?.addEventListener('click', () => {
+    requestSummary(currentTabId || currentThreadId);
+});
+document.getElementById('summary-close')?.addEventListener('click', () => {
+    document.getElementById('summary-banner').hidden = true;
+});
 
 userInput.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -6631,102 +6740,4 @@ document.addEventListener('click', () => {
         var st = document.getElementById('enrich-status'); if (st) st.textContent = '';
         enrichModal.classList.remove('hidden');
         loadEnrich();
-        setTimeout(function () { document.getElementById('enrich-input')?.focus(); }, 50);
-    });
-    // Fermeture (bouton ✕ .close-modal, clic sur le fond, Échap) : assurée par le
-    // câblage générique des modales de l'application — pas de doublon ici.
-    document.getElementById('enrich-mode-url')?.addEventListener('click', function () { setMode('url'); });
-    document.getElementById('enrich-mode-text')?.addEventListener('click', function () { setMode('text'); });
-    document.getElementById('enrich-mode-file')?.addEventListener('click', function () { setMode('file'); });
-    document.getElementById('enrich-submit')?.addEventListener('click', submitEnrich);
-})();
-
-// ══════════════════════════════════════════
-// AGENT COANIMM
-// ══════════════════════════════════════════
-
-let _coanimmPendingAction = null; // { kind: 'script'|'generated', scriptId?, label, consigne? }
-
-// Ouverture de la modale Agent CoaNIMM
-document.getElementById('toggle-coanimm')?.addEventListener('click', function() {
-    document.getElementById('coanimm-modal').classList.remove('hidden');
-    loadCoanimm();
-});
-
-async function loadCoanimm() {
-    const list = document.getElementById('coanimm-script-list');
-    document.getElementById('coanimm-permission').classList.add('hidden');
-    document.getElementById('coanimm-result').classList.add('hidden');
-    document.getElementById('coanimm-result-code-box')?.classList.add('hidden');
-    list.textContent = 'Chargement…';
-
-    try {
-        const r = await fetch('/api/prompts?type=script');
-        const data = await r.json();
-        const scripts = Object.entries(data.prompts || {});
-
-        if (scripts.length === 0) {
-            list.textContent = 'Aucun script enregistré. Ajoutez-en un depuis la Promptothèque (type « Script Python »).';
-            return;
-        }
-
-        list.innerHTML = '';
-        scripts.forEach(([id, entry]) => {
-            const row = document.createElement('div');
-            row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';
-
-            const span = document.createElement('span');
-            span.textContent = entry.label || '(sans titre)';
-            span.style.flex = '1';
-
-            const btn = document.createElement('button');
-            btn.textContent = '▶️ Exécuter';
-            btn.style.cssText = 'background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:0.82rem;cursor:pointer;';
-            btn.addEventListener('click', () => runCoanimmScript(id, entry.label || id, null));
-
-            row.appendChild(span);
-            row.appendChild(btn);
-            list.appendChild(row);
-        });
-    } catch (e) {
-        console.error('[COANIMM] Erreur chargement scripts :', e);
-        list.textContent = 'Erreur lors du chargement des scripts.';
-    }
-}
-
-function _coanimmShowResult(data, label) {
-    const resultBox = document.getElementById('coanimm-result');
-    resultBox.classList.remove('hidden');
-    const statusEl = document.getElementById('coanimm-result-status');
-    const stdoutEl = document.getElementById('coanimm-result-stdout');
-    const stderrEl = document.getElementById('coanimm-result-stderr');
-    const codeBox = document.getElementById('coanimm-result-code-box');
-    const codeEl = document.getElementById('coanimm-result-code');
-
-    if (data.status === 'ok') {
-        statusEl.textContent = `Script « ${label} » terminé (code retour ${data.returncode}).`;
-        stdoutEl.value = data.stdout || '';
-        stderrEl.value = data.stderr || '';
-    } else {
-        statusEl.textContent = `Erreur : ${data.message || 'erreur inconnue.'}`;
-        stdoutEl.value = '';
-        stderrEl.value = '';
-    }
-
-    if (typeof data.code === 'string') {
-        codeEl.value = data.code;
-        codeBox.classList.remove('hidden');
-    } else {
-        codeEl.value = '';
-        codeBox.classList.add('hidden');
-    }
-
-    setTimeout(() => { if (!_isMobile) statusEl.focus(); }, 50);
-}
-
-function _coanimmShowPermission(label) {
-    const permBox = document.getElementById('coanimm-permission');
-    document.getElementById('coanimm-permission-text').textContent =
-        `L'agent CoaNIMM demande l'autorisation d'exécuter : ${label}.`;
-    permBox.classList.remove('hidden');
-    setTimeout(() => { if (!_isMobile) document.getEl
+        setTime

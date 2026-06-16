@@ -390,6 +390,58 @@ async def search_text_route(q: str = "", k: int = 20):
     from core.database import search_messages_text
     return {"resultats": search_messages_text(q, k)}
 
+class ForkRequest(BaseModel):
+    up_to: int  # index 0-based du message inclus dans le fork
+
+@app.post("/api/chat/{thread_id}/fork")
+async def fork_thread_route(thread_id: str, req: ForkRequest):
+    """Crée un nouveau fil en copiant les messages 0..up_to du fil source."""
+    import uuid
+    from core.database import get_messages_up_to, get_thread, create_thread, add_message
+    src = get_thread(thread_id)
+    src_name = src.get('name', 'Conversation') if src else 'Conversation'
+    new_id   = str(uuid.uuid4())
+    new_name = f"↕ {src_name}"
+    create_thread(new_id, new_name)
+    msgs = get_messages_up_to(thread_id, req.up_to)
+    for m in msgs:
+        add_message(new_id, m['role'], m['content'])
+    return {"thread_id": new_id, "name": new_name}
+
+@app.post("/api/threads/{thread_id}/summary")
+async def summary_route(thread_id: str):
+    """Génère un résumé du fil courant via le LLM configuré."""
+    from core.database import get_messages
+    import core.hub as hub
+    import core.engine as engine
+
+    msgs = get_messages(thread_id, limit=60)
+    if not msgs:
+        return {"summary": "Ce fil est vide."}
+
+    conv_text = "\n".join(
+        f"{'Moi' if m['role']=='user' else 'NIMM'} : {m['content'][:400]}"
+        for m in msgs
+    )
+    settings  = hub.load_settings(thread_id)
+    provider, model = hub.get_task_provider_model('coanimm', settings)
+    try:
+        summary = await engine.call_llm(
+            messages=[{'role': 'user', 'content': conv_text}],
+            provider=provider,
+            model=model,
+            system_prompt=(
+                "Résume cette conversation en 4 à 6 phrases courtes, en français, "
+                "en texte brut sans mise en forme. Commence directement par les points essentiels."
+            ),
+            max_tokens=300,
+            temperature=0.3,
+            api_keys=settings['api_keys'],
+        )
+    except Exception as e:
+        summary = f"Erreur de génération : {e}"
+    return {"summary": summary}
+
 class ExportRequest(BaseModel):
     items: list   # [{role, content}]
     format: str   # txt | docx | pdf | rtf | odt | epub | mp3
@@ -2002,43 +2054,4 @@ async def images_file(filename: str):
     if '/' in filename or '\\' in filename or '..' in filename:
         raise HTTPException(400, "Nom de fichier invalide")
     filepath = os.path.join(_IMAGES_DIR, filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(404, "Image non trouvée")
-    return FileResponse(filepath, media_type="image/png")
-
-@app.patch("/api/images/{img_id}")
-async def images_rename(img_id: int, req: ImageRenameRequest):
-    """Renomme une image sur disque et en DB."""
-    images = get_images()
-    current = next((i for i in images if i['id'] == img_id), None)
-    if not current:
-        raise HTTPException(404, "Image non trouvée")
-    new_filename = req.filename.strip()
-    if not new_filename.endswith('.png'):
-        new_filename += '.png'
-    old_path = os.path.join(_IMAGES_DIR, current['filename'])
-    new_path = os.path.join(_IMAGES_DIR, new_filename)
-    if os.path.exists(old_path):
-        os.rename(old_path, new_path)
-    rename_image(img_id, new_filename)
-    return {"status": "ok", "filename": new_filename}
-
-@app.delete("/api/images/{img_id}")
-async def images_delete(img_id: int):
-    """Supprime une image (DB + disque)."""
-    filename = delete_image(img_id)
-    if not filename:
-        raise HTTPException(404, "Image non trouvée")
-    filepath = os.path.join(_IMAGES_DIR, filename)
-    if os.path.exists(filepath):
-        os.remove(filepath)
-    return {"status": "ok"}
-
-# ══════════════════════════════════════════
-# LANCEMENT DIRECT
-# ══════════════════════════════════════════
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
-                                                                                                                                                                                                                                                                                                                                                                                                              
+    if not os.path.exi
