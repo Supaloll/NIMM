@@ -219,6 +219,17 @@ ALIASES = {
     'meïssane':  'Maïssane',
 }
 
+# ── Relations horizontales (symétriques) — le retournement est valide
+# Toute relation absente de cette liste est considérée verticale (chirale)
+# et ne génère pas de réciproque automatique.
+PREDICATS_SYMETRIQUES = {
+    'conjoint', 'epoux', 'epouse', 'mari', 'femme',
+    'compagnon', 'compagne', 'partenaire',
+    'ami', 'amie', 'ami_proche', 'copain', 'copine',
+    'collegue',
+    'frere_ou_soeur',
+}
+
 # ── Relations symétriques — prédicat original → prédicat inverse
 PREDICATS_INVERSES = {
     # Relations conjugales
@@ -680,9 +691,14 @@ def _genrer_fratrie(predicat_neutre: str) -> str:
     return predicat_neutre
 
 def _save_symmetric(record: dict, existing: list):
-    """Crée le souvenir symétrique d'une relation si applicable."""
+    """Crée le souvenir symétrique d'une relation si applicable.
+    Seules les relations horizontales (symétriques) génèrent une réciproque.
+    Les relations verticales (chirales) sont ignorées — le LLM extrait les deux sens."""
     predicat = record.get('predicat', '')
     if predicat not in PREDICATS_INVERSES:
+        return
+    if predicat not in PREDICATS_SYMETRIQUES:
+        print(f"[MEMORY] ↕️ Relation verticale ignorée : '{predicat}' (chirale, pas de réciproque)")
         return
     sujet = record.get('sujet', '').strip()
     objet = record.get('objet', '').strip()

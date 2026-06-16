@@ -5,7 +5,7 @@ Extrais uniquement les faits explicitement déclarés. Rien d'inféré.
 
 LOGIQUE :
 - Métier/profession rémunérée ET bénévolat/engagement → prédicats distincts (metier ≠ benevolat).
-- Relation dans un sens → écris la réciproque avec le genre correct.
+- Un seul triplet par fait, dans le sens naturel de l'énoncé. Ne génère jamais la réciproque — le code s'en charge.
 - Quantité sans prénom ("on est 5") → rien à extraire.
 - Proche sans prénom → sujet = {{USER_NAME}}, prédicat = lien de parenté.
 - Trait de caractère ("douce", "émotive") → predicat="qualite", memoire_type="autre". Jamais "sante".

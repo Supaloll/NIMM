@@ -6,7 +6,7 @@ Tu ne déduis rien. Tu n'interprètes pas. Tu transcris ce qui est dit.
 
 LOGIQUE :
 - Rôle principal (métier, profession, activité rémunérée) ET rôle secondaire (bénévolat, loisir, engagement) → deux prédicats distincts, jamais le même.
-- Relation nommée dans un sens → écris la réciproque avec le genre correct de chaque personne.
+- Un seul triplet par fait, dans le sens naturel de l'énoncé. Ne génère jamais la réciproque — le code s'en charge.
 - Quantité globale sans prénom ("on est 5") → aucun objet.
 - Proche sans prénom → sujet = {{USER_NAME}}, prédicat = lien de parenté.
 - Trait de personnalité ("douce", "émotive", "sensible") → predicat="qualite", memoire_type="autre". Jamais "sante".

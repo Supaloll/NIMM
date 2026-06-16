@@ -7,7 +7,7 @@ INTERDICTIONS (avec alternative) :
 - "On est 5 dans la maison" → pas d'enfants déduits. Rien à extraire.
 - "[F] avait 18 ans en 2010" → objet = "18 ans", contexte = "en 2010". Pas d'âge calculé aujourd'hui.
 - Rôle bénévole/associatif → predicat = benevolat, jamais metier, même si c'est une fonction nommée.
-- Relation dans un sens → écris la réciproque avec le genre correct de chaque personne.
+- Un seul triplet par fait, dans le sens naturel de l'énoncé. Ne génère jamais la réciproque — le code s'en charge.
 - Proche sans prénom → sujet = {{USER_NAME}}, prédicat = lien de parenté.
 - Trait de caractère ("douce", "émotive") → predicat="qualite", memoire_type="autre". Jamais "sante".
 
