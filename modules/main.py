@@ -372,151 +372,6 @@ async def chat_stream(req: ChatRequest):
         }
     )
 
-@app.delete("/api/chat/{thread_id}/last_assistant")
-async def delete_last_assistant_route(thread_id: str):
-    """Supprime le dernier message assistant avant régénération."""
-    from core.database import delete_last_assistant
-    return {"deleted": delete_last_assistant(thread_id)}
-
-@app.delete("/api/chat/{thread_id}/last_pair")
-async def delete_last_pair_route(thread_id: str):
-    """Supprime la dernière paire user+assistant avant modification d'un message."""
-    from core.database import delete_last_pair
-    return delete_last_pair(thread_id)
-
-@app.get("/api/search/text")
-async def search_text_route(q: str = "", k: int = 20):
-    """Recherche textuelle brute (mot exact) dans l'historique des messages."""
-    from core.database import search_messages_text
-    return {"resultats": search_messages_text(q, k)}
-
-class ForkRequest(BaseModel):
-    up_to: int  # index 0-based du message inclus dans le fork
-
-@app.post("/api/chat/{thread_id}/fork")
-async def fork_thread_route(thread_id: str, req: ForkRequest):
-    """Crée un nouveau fil en copiant les messages 0..up_to du fil source."""
-    import uuid
-    from core.database import get_messages_up_to, get_thread, create_thread, add_message
-    src = get_thread(thread_id)
-    src_name = src.get('name', 'Conversation') if src else 'Conversation'
-    new_id   = str(uuid.uuid4())
-    new_name = f"↕ {src_name}"
-    create_thread(new_id, new_name)
-    msgs = get_messages_up_to(thread_id, req.up_to)
-    for m in msgs:
-        add_message(new_id, m['role'], m['content'])
-    return {"thread_id": new_id, "name": new_name}
-
-@app.post("/api/chat/{thread_id}/continue")
-async def continue_thread_route(thread_id: str):
-    """Continue le dernier message assistant tronqué par max_tokens."""
-    from fastapi.responses import StreamingResponse as SR
-    from core.database import get_messages, append_to_last_assistant
-    import core.hub as hub
-    import core.engine as engine
-
-    msgs = get_messages(thread_id)
-    if not msgs:
-        raise HTTPException(404, "Fil vide.")
-
-    settings = hub.load_settings(thread_id)
-    provider  = settings.get('provider', '')
-    model     = settings.get('model')
-    api_keys  = settings.get('api_keys', {})
-
-    try:
-        if settings.get('personality_mode') == 'potards':
-            mask = {'system_prompt': hub.build_potards_prompt(settings.get('potards', {}))}
-        else:
-            mask = hub.load_mask(settings.get('mask_id', ''))
-    except Exception:
-        mask = {'system_prompt': 'Tu es un assistant utile.'}
-
-    system_prompt = mask.get('system_prompt', '')
-    # Ajouter un user turn de continuation — non sauvegardé en DB
-    continuation_msgs = msgs + [{'role': 'user', 'content': 'Continue.'}]
-
-    async def _stream():
-        accumulated = ''
-        try:
-            async for token in engine.call_llm_stream(
-                messages=continuation_msgs,
-                provider=provider,
-                model=model,
-                system_prompt=system_prompt,
-                max_tokens=settings.get('max_tokens', 1024),
-                temperature=settings.get('temperature', 0.7),
-                api_keys=api_keys,
-            ):
-                accumulated += token
-                yield f"data: {token}\n\n"
-        except Exception as e:
-            yield f"data: [ERREUR: {e}]\n\n"
-        if accumulated:
-            append_to_last_assistant(thread_id, accumulated)
-        yield "data: [DONE]\n\n"
-
-    return SR(
-        _stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-@app.post("/api/threads/{thread_id}/summary")
-async def summary_route(thread_id: str):
-    """Génère un résumé du fil courant via le LLM configuré."""
-    from core.database import get_messages
-    import core.hub as hub
-    import core.engine as engine
-
-    msgs = get_messages(thread_id, limit=60)
-    if not msgs:
-        return {"summary": "Ce fil est vide."}
-
-    conv_text = "\n".join(
-        f"{'Moi' if m['role']=='user' else 'NIMM'} : {m['content'][:400]}"
-        for m in msgs
-    )
-    settings  = hub.load_settings(thread_id)
-    provider, model = hub.get_task_provider_model('coanimm', settings)
-    try:
-        summary = await engine.call_llm(
-            messages=[{'role': 'user', 'content': conv_text}],
-            provider=provider,
-            model=model,
-            system_prompt=(
-                "Résume cette conversation en 4 à 6 phrases courtes, en français, "
-                "en texte brut sans mise en forme. Commence directement par les points essentiels."
-            ),
-            max_tokens=300,
-            temperature=0.3,
-            api_keys=settings['api_keys'],
-        )
-    except Exception as e:
-        summary = f"Erreur de génération : {e}"
-    return {"summary": summary}
-
-class ExportRequest(BaseModel):
-    items: list   # [{role, content}]
-    format: str   # txt | docx | pdf | rtf | odt | epub | mp3
-
-@app.post("/api/export")
-async def export_route(req: ExportRequest):
-    """Génère un fichier exporté (txt, docx, pdf, rtf, odt, epub, mp3)."""
-    from modules.export_nimm import export_messages
-    from fastapi.responses import Response
-    try:
-        data, filename, mime = await export_messages(req.items, req.format)
-        return Response(
-            content=data,
-            media_type=mime,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-    except (ValueError, RuntimeError) as e:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail=str(e))
-
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     set_user_context(req.user_id or get_current_user())
@@ -1043,6 +898,24 @@ async def delete_prompt_route(prompt_id: str):
 # COANIMM — agent d'exécution
 # ══════════════════════════════════════════
 
+class CoanimmPlanRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/plan")
+async def coanimm_plan(req: CoanimmPlanRequest):
+    """Génère un plan en langage naturel décrivant ce que CoaNIMM va faire,
+    sans exécuter de code. Utilisé pour validation par l'utilisateur."""
+    from modules.coanimm import generate_plan
+    if not req.consigne.strip():
+        return {'status': 'error', 'message': 'La consigne est vide.'}
+    try:
+        plan = await generate_plan(req.consigne, req.thread_id)
+        return {'status': 'ok', 'plan': plan}
+    except Exception as e:
+        detail = str(e) or type(e).__name__
+        return {'status': 'error', 'message': f"Erreur lors de la planification : {detail}"}
+
 class CoanimmRunScriptRequest(BaseModel):
     script_id: str
     args: Optional[List[str]] = None
@@ -1058,6 +931,42 @@ async def coanimm_run_script(req: CoanimmRunScriptRequest):
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
     return run_script(req.script_id, req.args, req.thread_id, req.confirm_scope)
+
+
+class CoanimmGenerateRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None  # 'once' | 'project' | 'always'
+
+class CoanimmRunCodeDirectRequest(BaseModel):
+    code: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/run_code_direct")
+async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
+    """Exécute du code Python brut (modifié par l'utilisateur) dans le bac à sable CoaNIMM.
+    Utilise le même niveau de permission que la génération libre."""
+    from modules.coanimm import execute_code, GENERATED_ACTION
+    import core.database as _db
+    if not req.code.strip():
+        return {'status': 'error', 'message': 'Le code est vide.'}
+    if not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+        return {
+            'status': 'permission_required',
+            'action': GENERATED_ACTION,
+            'label': "re-exécution de code modifié",
+        }
+    return execute_code(req.code, req.thread_id)
+
+@app.post("/api/coanimm/generate_and_run")
+async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
+    """Génère un script Python à partir d'une consigne en langage naturel, puis
+    l'exécute dans le bac à sable CoaNIMM. Renvoie 'permission_required' si
+    l'utilisateur n'a pas encore accordé l'exécution."""
+    from modules.coanimm import run_generated
+    if req.confirm_scope not in (None, 'once', 'project', 'always'):
+        raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
+    return await run_generated(req.consigne, req.thread_id, req.confirm_scope)
 
 @app.get("/api/search")
 async def search_conversations_route(q: str = "", k: int = 8):
@@ -2141,11 +2050,4 @@ async def images_delete(img_id: int):
         os.remove(filepath)
     return {"status": "ok"}
 
-# ══════════════════════════════════════════
-# LANCEMENT DIRECT
-# ══════════════════════════════════════════
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
-
+#

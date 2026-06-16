@@ -51,12 +51,45 @@ function _bip(freq = 440, duration = 80, gain = 0.08) {
     } catch(e) {}
 }
 
-// ── Accessibilité : Échap ferme toutes les modales ──
+// ── Accessibilité : Échap ferme les modales + arrête le stream ──
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
+        const stopBtn = document.getElementById('stop-btn');
+        if (stopBtn && !stopBtn.hidden) stopStream();
     }
 });
+
+// ── Gestion focus/clavier pour les menus déroulants ──
+// Appelée à chaque ouverture d'un menu : focus le premier item,
+// puis gère flèches, Échap et Tab.
+function _menuKeyboard(toggleBtn, menu, hideFn) {
+    // Focus immédiat sur le premier item
+    const items = () => [...menu.querySelectorAll('[role="menuitem"]:not([disabled])')];
+    const first = items()[0];
+    if (first) first.focus();
+
+    // Navigation clavier — un seul listener par instance de menu
+    if (menu.dataset.kbReady) return;
+    menu.dataset.kbReady = '1';
+    menu.addEventListener('keydown', (e) => {
+        const all = items();
+        const idx = all.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            all[(idx + 1) % all.length]?.focus();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            all[(idx - 1 + all.length) % all.length]?.focus();
+        } else if (e.key === 'Escape') {
+            e.stopPropagation();
+            hideFn();
+            toggleBtn?.focus();
+        } else if (e.key === 'Tab') {
+            hideFn();
+        }
+    });
+}
 
 // ══════════════════════════════════════════
 // RECHERCHE WEB — Bouton toggle 🌍
@@ -1027,6 +1060,9 @@ function renderSidebar() {
             e.stopPropagation();
             document.querySelectorAll('.thread-dropdown.open').forEach(d => d.classList.remove('open'));
             dropdown.classList.toggle('open');
+            if (dropdown.classList.contains('open')) {
+                _menuKeyboard(menuBtn, dropdown, () => dropdown.classList.remove('open'));
+            }
         });
 
         const dropdown = document.createElement('div');
@@ -1841,6 +1877,8 @@ async function loadMessages(conversationId) {
         const r    = await fetch(`/api/threads/${conversationId}/messages`);
         const msgs = await r.json();
         renderMessages(msgs);
+        document.getElementById('summary-banner').hidden = true;
+        document.getElementById('summary-btn').hidden = false;
     } catch(e) {
         console.error('[NIMM] Erreur chargement messages :', e);
     }
@@ -1848,6 +1886,7 @@ async function loadMessages(conversationId) {
 
 function renderMessages(messages) {
     messagesDiv.innerHTML = '';
+    _msgCounter = 0;
     _hideFloatTTS();
 
     if (messages.length === 0) {
@@ -1890,7 +1929,57 @@ function appendUserMessage(content, fileName = null) {
         bubble.appendChild(chip);
     }
 
+    // ── Menu ⋯ sur les messages utilisateur ──
+    const actions  = document.createElement('div');
+    actions.className = 'message-actions';
+
+    const actBtn = document.createElement('button');
+    actBtn.className = 'copy-btn msg-action-btn';
+    actBtn.setAttribute('aria-label', 'Ma saisie');
+    actBtn.setAttribute('aria-haspopup', 'menu');
+    actBtn.setAttribute('aria-expanded', 'false');
+    actBtn.innerHTML = SVG_ACT || '⋯';
+
+    const actMenu = document.createElement('div');
+    actMenu.className = 'copy-menu';
+    actMenu.setAttribute('role', 'menu');
+    actMenu.style.display = 'none';
+    actMenu.innerHTML = `
+        <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
+        <button class="copy-menu-item" role="menuitem" data-action="edit">✏️ Modifier</button>
+    `;
+
+    actBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.copy-menu').forEach(m => m.style.display = 'none');
+        document.querySelectorAll('.msg-action-btn').forEach(b => b.setAttribute('aria-expanded', 'false'));
+        if (actMenu.style.display === 'none' || actMenu.style.display === '') {
+            actMenu.style.display = 'flex';
+            actBtn.setAttribute('aria-expanded', 'true');
+            _menuKeyboard(actBtn, actMenu, () => {
+                actMenu.style.display = 'none';
+                actBtn.setAttribute('aria-expanded', 'false');
+            });
+        } else {
+            actMenu.style.display = 'none';
+            actBtn.setAttribute('aria-expanded', 'false');
+        }
+    });
+
+    actMenu.querySelector('[data-action="copy"]').addEventListener('click', () => {
+        actMenu.style.display = 'none';
+        navigator.clipboard.writeText(content).catch(() => {});
+    });
+    actMenu.querySelector('[data-action="edit"]').addEventListener('click', () => {
+        actMenu.style.display = 'none';
+        editLastUserMessage(div, currentTabId || currentThreadId);
+    });
+
+    actions.appendChild(actMenu);
+    actions.appendChild(actBtn);
+    div.dataset.msgIndex = _msgCounter++;
     div.appendChild(bubble);
+    div.appendChild(actions);
     messagesDiv.appendChild(div);
 }
 
@@ -1959,7 +2048,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
     actBtn.className = 'msg-action-btn';
     actBtn.innerHTML = SVG_ACT;
     actBtn.title     = 'Actions';
-    actBtn.setAttribute('aria-label', 'Copier, envoyer en onglet ou régénérer');
+    actBtn.setAttribute('aria-label', 'La réponse');
 
     const actMenu = document.createElement('div');
     actMenu.className     = 'copy-menu';
@@ -1969,6 +2058,8 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
         <button class="copy-menu-item" role="menuitem" data-action="tab" aria-label="Envoyer en onglet">→ Onglet</button>
         <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
+        <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
+        <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
     `;
     actBtn.setAttribute('aria-haspopup', 'menu');
     actBtn.setAttribute('aria-expanded', 'false');
@@ -1982,6 +2073,10 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
             _positionMenu(actBtn, actMenu);
             actMenu.style.display = 'flex';
             actBtn.setAttribute('aria-expanded', 'true');
+            _menuKeyboard(actBtn, actMenu, () => {
+                actMenu.style.display = 'none';
+                actBtn.setAttribute('aria-expanded', 'false');
+            });
         } else {
             actMenu.style.display = 'none';
             actBtn.setAttribute('aria-expanded', 'false');
@@ -2005,11 +2100,22 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         actMenu.style.display = 'none';
         regenerateMessage(div, currentTabId || currentThreadId);
     });
+    actMenu.querySelector('[data-action="fork"]').addEventListener('click', () => {
+        actMenu.style.display = 'none';
+        forkFromMessage(div, currentTabId || currentThreadId);
+    });
+    actMenu.querySelector('[data-action="mark"]').addEventListener('click', () => {
+        actMenu.style.display = 'none';
+        _toggleExportMark(div, content, 'assistant');
+        const btn = actMenu.querySelector('[data-action="mark"]');
+        btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
+    });
 
     document.addEventListener('click', () => actMenu.style.display = 'none');
     actions.appendChild(actBtn);
     bottom.appendChild(actions);
 
+    div.dataset.msgIndex = _msgCounter++;
     div.appendChild(bottom);
     messagesDiv.appendChild(div);
 
@@ -2428,7 +2534,7 @@ async function _getLocation() {
 // STREAM — MOTEUR COMMUN
 // ══════════════════════════════════════════
 
-async function _triggerStream(content, conversationId) {
+async function _triggerStream(content, conversationId, images = null) {
     // Capturer la position de l'emoji précédent AVANT que showLoader() scrolle
     const _preEmojis = messagesDiv.querySelectorAll('.message.assistant:not(#thinking-loader) .bubble-emoji');
     const _preEmojiRect = _preEmojis.length
@@ -2437,16 +2543,25 @@ async function _triggerStream(content, conversationId) {
     showLoader();
     animateEmojiToLoader(_preEmojiRect);
 
+    // Bouton Stop
+    _streamAbortController = new AbortController();
+    const stopBtn = document.getElementById('stop-btn');
+    const sendBtn = document.getElementById('send-btn');
+    if (stopBtn) { stopBtn.hidden = false; stopBtn.onclick = stopStream; }
+    if (sendBtn) sendBtn.hidden = true;
+
     const _location = await _getLocation();
 
     try {
         const r = await fetch('/api/chat/stream', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal:  _streamAbortController.signal,
             body:    JSON.stringify({
                 message:    content,
                 thread_id:  conversationId,
                 web_search: _webSearchActive,
+                ...(images ? { images } : {}),
                 ...(_location ? { location: _location } : {}),
             })
         });
@@ -2457,6 +2572,7 @@ async function _triggerStream(content, conversationId) {
         // Transformer le loader en bulle de réponse — zéro saut visuel
         const loaderEl = document.getElementById('thinking-loader');
         loaderEl.removeAttribute('id');
+        loaderEl.dataset.msgIndex = _msgCounter++;
         const div    = loaderEl;
         const emoji  = div.querySelector('.bubble-emoji');
         const bubble = div.querySelector('.message-bubble');
@@ -2498,7 +2614,7 @@ async function _triggerStream(content, conversationId) {
         actBtn.className = 'msg-action-btn';
         actBtn.innerHTML = SVG_ACT;
         actBtn.title     = 'Actions';
-        actBtn.setAttribute('aria-label', 'Copier, envoyer en onglet ou régénérer');
+        actBtn.setAttribute('aria-label', 'La réponse');
 
         const actMenu = document.createElement('div');
         actMenu.className     = 'copy-menu';
@@ -2508,6 +2624,8 @@ async function _triggerStream(content, conversationId) {
             <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
             <button class="copy-menu-item" role="menuitem" data-action="tab" aria-label="Envoyer en onglet">→ Onglet</button>
             <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
+            <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
+            <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
         `;
         actBtn.setAttribute('aria-haspopup', 'menu');
         actBtn.setAttribute('aria-expanded', 'false');
@@ -2520,6 +2638,10 @@ async function _triggerStream(content, conversationId) {
                 _positionMenu(actBtn, actMenu);
                 actMenu.style.display = 'flex';
                 actBtn.setAttribute('aria-expanded', 'true');
+                _menuKeyboard(actBtn, actMenu, () => {
+                    actMenu.style.display = 'none';
+                    actBtn.setAttribute('aria-expanded', 'false');
+                });
             } else {
                 actMenu.style.display = 'none';
                 actBtn.setAttribute('aria-expanded', 'false');
@@ -2532,9 +2654,10 @@ async function _triggerStream(content, conversationId) {
         bottom.appendChild(msgActions);
         div.appendChild(bottom);
 
-        let fullText  = '';
-        let dominant  = 'neutre';
-        let moodScore = 5;
+        let fullText        = '';
+        let dominant        = 'neutre';
+        let moodScore       = 5;
+        let _streamTruncated = false;
 
         // Rendu par paragraphes avec effet scramble
         let _renderedUpTo = 0;          // nb de paragraphes déjà rendus+animés
@@ -2624,6 +2747,8 @@ async function _triggerStream(content, conversationId) {
                 const data = line.slice(6);
 
                 if (data === '[DONE]') break;
+
+                if (data === '[TRUNCATED]') { _streamTruncated = true; continue; }
 
                 if (data.startsWith('[META]')) {
                     try {
@@ -2783,10 +2908,17 @@ async function _triggerStream(content, conversationId) {
         // Vider les stream-para provisoires avant que _renderBubble réécrive la bulle
         bubble.innerHTML = '';
         _renderBubble(bubble, fullText);
+        bubble.dataset.rawText = fullText; // conservé pour continuation
         if (!_userScrolledUp) messagesDiv.scrollTop = messagesDiv.scrollHeight;
         const finalContent = bubble.textContent;
         _updateFloatTTS(finalContent, div);
         _srAnnounce('NIMM t\'a répondu.');
+
+        // Bouton Continuer si réponse tronquée (max_tokens)
+        if (_streamTruncated) {
+            _streamTruncated = false;
+            addContinueButton(div, conversationId);
+        }
 
         // Brancher le bouton TTS individuel de cette bulle
         streamTtsBtn.addEventListener('click', (e) => {
@@ -2809,6 +2941,16 @@ async function _triggerStream(content, conversationId) {
             actMenu.style.display = 'none';
             regenerateMessage(div, conversationId);
         });
+        actMenu.querySelector('[data-action="fork"]').addEventListener('click', () => {
+            actMenu.style.display = 'none';
+            forkFromMessage(div, conversationId);
+        });
+        actMenu.querySelector('[data-action="mark"]').addEventListener('click', () => {
+            actMenu.style.display = 'none';
+            _toggleExportMark(div, finalContent, 'assistant');
+            const btn = actMenu.querySelector('[data-action="mark"]');
+            btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
+        });
 
         // Appliquer l'expression finale
         stopBlink();
@@ -2822,6 +2964,13 @@ async function _triggerStream(content, conversationId) {
             _ttsPush(_ttsStreamBuf.trim(), floatBtn);
             _ttsStreamBuf = '';
         }
+
+        // Reset bouton Stop
+        const _stopBtnOk = document.getElementById('stop-btn');
+        const _sendBtnOk = document.getElementById('send-btn');
+        if (_stopBtnOk) _stopBtnOk.hidden = true;
+        if (_sendBtnOk) _sendBtnOk.hidden = false;
+        _streamAbortController = null;
 
         // Auto-titre : si le fil a encore son nom provisoire, le générer maintenant
         if (!currentTabId) {
@@ -2848,6 +2997,18 @@ async function _triggerStream(content, conversationId) {
         }
 
     } catch(e) {
+        // Reset stop/send buttons
+        const _stopBtn = document.getElementById('stop-btn');
+        const _sendBtn = document.getElementById('send-btn');
+        if (_stopBtn) _stopBtn.hidden = true;
+        if (_sendBtn) _sendBtn.hidden = false;
+        _streamAbortController = null;
+
+        if (e.name === 'AbortError') {
+            // Arrêt volontaire — on retire le loader proprement sans message d'erreur
+            removeLoader();
+            return;
+        }
         removeLoader();
         appendAssistantMessage('❌ Erreur de connexion au serveur.', 'neutre', false);
         _srAnnounce('Erreur de connexion au serveur.');
@@ -2855,17 +3016,272 @@ async function _triggerStream(content, conversationId) {
     }
 }
 
+async function editLastUserMessage(userDiv, conversationId) {
+    const tid = conversationId || currentTabId || currentThreadId;
+    if (!tid) return;
+
+    // Récupérer le texte du message
+    const bubble = userDiv.querySelector('.message-bubble');
+    if (!bubble) return;
+    const content = bubble.textContent.trim();
+
+    // Supprimer la paire (user + assistant suivant) en DB
+    await fetch(`/api/chat/${tid}/last_pair`, { method: 'DELETE' }).catch(() => {});
+
+    // Retirer depuis le DOM : bulle user + bulle assistant suivante
+    const nextSibling = userDiv.nextElementSibling;
+    if (nextSibling && nextSibling.classList.contains('message') && nextSibling.classList.contains('assistant')) {
+        nextSibling.remove();
+    }
+    userDiv.remove();
+
+    // Remettre le contenu dans le champ de saisie
+    userInput.value = content;
+    userInput.style.height = 'auto';
+    userInput.style.height = userInput.scrollHeight + 'px';
+    userInput.focus();
+}
+
 async function regenerateMessage(assistantDiv, conversationId) {
+    const tid = conversationId || currentTabId || currentThreadId;
+
     // Récupérer le dernier message utilisateur depuis le DOM
     const userBubbles = messagesDiv.querySelectorAll('.message.user .message-bubble');
     if (!userBubbles.length) return;
     const lastUserContent = userBubbles[userBubbles.length - 1].textContent.trim();
 
+    // Supprimer le dernier message assistant en DB
+    if (tid) await fetch(`/api/chat/${tid}/last_assistant`, { method: 'DELETE' }).catch(() => {});
+
     // Retirer la bulle assistant courante
     assistantDiv.remove();
 
     // Relancer le stream sur le même message utilisateur
-    await _triggerStream(lastUserContent, conversationId || currentTabId || currentThreadId);
+    await _triggerStream(lastUserContent, tid);
+}
+
+// ══════════════════════════════════════════
+// EXPORT — marquage + génération de fichiers
+// ══════════════════════════════════════════
+
+let _exportItems = []; // [{div, role, content}]
+let _streamAbortController = null; // AbortController du stream en cours
+let _msgCounter = 0;               // Index DOM des messages (pour fork)
+
+function _toggleExportMark(div, content, role) {
+    const idx = _exportItems.findIndex(i => i.div === div);
+    if (idx >= 0) {
+        _exportItems.splice(idx, 1);
+        delete div.dataset.exportMarked;
+        div.style.outline = '';
+    } else {
+        _exportItems.push({ div, role, content });
+        div.dataset.exportMarked = '1';
+        div.style.outline = '2px solid var(--accent, #6ea8fe)';
+    }
+    _updateExportBadge();
+}
+
+function _updateExportBadge() {
+    const btn = document.getElementById('export-float-btn');
+    if (!btn) return;
+    if (_exportItems.length > 0) {
+        btn.textContent = `📤 Exporter (${_exportItems.length})`;
+        btn.style.display = 'flex';
+    } else {
+        btn.style.display = 'none';
+    }
+}
+
+function openExportModal() {
+    const modal = document.getElementById('export-modal');
+    modal.classList.remove('hidden');
+    document.getElementById('export-count').textContent =
+        `${_exportItems.length} message${_exportItems.length > 1 ? 's' : ''} marqué${_exportItems.length > 1 ? 's' : ''}.`;
+    document.getElementById('export-status').textContent = '';
+    document.getElementById('export-do-btn').disabled = false;
+    modal.querySelector('.close-modal').focus();
+}
+
+async function doExport(format) {
+    if (_exportItems.length === 0) return;
+    const items = _exportItems.map(i => ({ role: i.role, content: i.content }));
+    const btn = document.getElementById('export-do-btn');
+    const status = document.getElementById('export-status');
+    btn.disabled = true;
+    status.textContent = 'Génération en cours…';
+    try {
+        const r = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items, format }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const blob = await r.blob();
+        const disposition = r.headers.get('Content-Disposition') || '';
+        const match = disposition.match(/filename="?([^";]+)"?/);
+        const filename = match ? match[1] : `export_nimm.${format}`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.click();
+        URL.revokeObjectURL(url);
+        status.textContent = `Fichier "${filename}" téléchargé.`;
+    } catch (e) {
+        status.textContent = `Erreur : ${e.message}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ── Stop stream ──
+function stopStream() {
+    _streamAbortController?.abort();
+}
+
+// ── Continuation automatique (réponse tronquée par max_tokens) ──
+function addContinueButton(assistantDiv, conversationId) {
+    const bubble = assistantDiv.querySelector('.message-bubble');
+    if (!bubble) return;
+    const btn = document.createElement('button');
+    btn.className = 'continue-btn';
+    btn.textContent = 'Continuer ▶';
+    btn.setAttribute('aria-label', 'Continuer la réponse');
+    btn.style.cssText = 'display:inline-block;margin-top:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:3px 12px;cursor:pointer;color:var(--text-muted);font-size:0.82rem;';
+    btn.addEventListener('click', () => continueLastMessage(assistantDiv, conversationId));
+    bubble.appendChild(btn);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+async function continueLastMessage(assistantDiv, conversationId) {
+    const tid = conversationId || currentTabId || currentThreadId;
+    if (!tid) return;
+    const bubble = assistantDiv.querySelector('.message-bubble');
+    if (!bubble) return;
+
+    // Retirer le bouton
+    bubble.querySelector('.continue-btn')?.remove();
+
+    // Curseur clignotant pendant la continuation
+    const cursor = document.createElement('span');
+    cursor.textContent = ' ▌';
+    cursor.setAttribute('aria-hidden', 'true');
+    bubble.appendChild(cursor);
+
+    _streamAbortController = new AbortController();
+    const stopBtn = document.getElementById('stop-btn');
+    const sendBtn = document.getElementById('send-btn');
+    if (stopBtn) { stopBtn.hidden = false; stopBtn.onclick = stopStream; }
+    if (sendBtn) sendBtn.hidden = true;
+
+    let accumulated = '';
+    let truncated   = false;
+
+    try {
+        const r = await fetch(`/api/chat/${tid}/continue`, {
+            method: 'POST',
+            signal: _streamAbortController.signal,
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+        const reader  = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop();
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6);
+                if (data === '[DONE]') break;
+                if (data === '[TRUNCATED]') { truncated = true; continue; }
+                if (data.startsWith('[') ) continue; // [META], [ERREUR], [IMAGE…]
+                accumulated += data.replace(/\\n/g, '\n');
+            }
+        }
+    } catch(e) {
+        cursor.remove();
+        if (e.name !== 'AbortError') {
+            const errSpan = document.createElement('em');
+            errSpan.style.color = 'var(--text-muted)';
+            errSpan.textContent = ' [Erreur de continuation]';
+            bubble.appendChild(errSpan);
+        }
+        _streamAbortController = null;
+        if (stopBtn) stopBtn.hidden = true;
+        if (sendBtn) sendBtn.hidden = false;
+        return;
+    }
+
+    cursor.remove();
+
+    // Re-render avec le texte complet (original + continuation)
+    if (accumulated) {
+        const prevRaw = bubble.dataset.rawText || '';
+        const newRaw  = prevRaw + accumulated;
+        bubble.innerHTML = '';
+        _renderBubble(bubble, newRaw);
+        bubble.dataset.rawText = newRaw;
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    _streamAbortController = null;
+    if (stopBtn) stopBtn.hidden = true;
+    if (sendBtn) sendBtn.hidden = false;
+
+    if (truncated) {
+        addContinueButton(assistantDiv, conversationId);
+    }
+}
+
+// ── Fork depuis un message assistant ──
+async function forkFromMessage(div, conversationId) {
+    const idx = parseInt(div.dataset.msgIndex ?? '-1');
+    if (idx < 0 || !conversationId) return;
+
+    try {
+        const r = await fetch(`/api/chat/${conversationId}/fork`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ up_to: idx }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const { thread_id, name } = await r.json();
+        // Charger le nouveau fil
+        await loadThreads();
+        await selectThread(thread_id);
+        _srAnnounce(`Nouveau fil fork : ${name}`);
+    } catch(e) {
+        console.error('[NIMM] Fork error:', e);
+        alert('Erreur lors du fork : ' + e.message);
+    }
+}
+
+// ── Résumé à la demande ──
+async function requestSummary(conversationId) {
+    const tid = conversationId || currentTabId || currentThreadId;
+    if (!tid) return;
+    const btn = document.getElementById('summary-btn');
+    const banner = document.getElementById('summary-banner');
+    const textEl = document.getElementById('summary-text');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+    try {
+        const r = await fetch(`/api/threads/${tid}/summary`, { method: 'POST' });
+        if (!r.ok) throw new Error(await r.text());
+        const { summary } = await r.json();
+        textEl.textContent = summary;
+        banner.hidden = false;
+        banner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        _srAnnounce('Résumé disponible : ' + summary);
+    } catch(e) {
+        textEl.textContent = 'Erreur : ' + e.message;
+        banner.hidden = false;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '📋'; }
+    }
 }
 
 // ══════════════════════════════════════════
@@ -2878,6 +3294,7 @@ async function sendMessage() {
 
     userInput.value = '';
     userInput.style.height = '44px';
+    _clearDraft();
 
     let conversationId = currentTabId || currentThreadId;
     if (!conversationId) {
@@ -3004,6 +3421,104 @@ async function sendMessage() {
 
 sendBtn.addEventListener('click', sendMessage);
 
+// ── Bouton Stop ──
+document.getElementById('stop-btn')?.addEventListener('click', stopStream);
+
+// ── Bouton Résumé ──
+document.getElementById('summary-btn')?.addEventListener('click', () => {
+    requestSummary(currentTabId || currentThreadId);
+});
+document.getElementById('summary-close')?.addEventListener('click', () => {
+    document.getElementById('summary-banner').hidden = true;
+});
+
+// ══════════════════════════════════════════
+// RACCOURCIS CLAVIER GLOBAUX
+// ══════════════════════════════════════════
+
+document.addEventListener('keydown', (e) => {
+    // Ctrl+Entrée → envoyer (depuis n'importe où, y compris le textarea)
+    if (e.ctrlKey && !e.altKey && e.key === 'Enter') {
+        e.preventDefault();
+        sendMessage();
+        return;
+    }
+    // Alt+lettre → actions (uniquement si le focus n'est pas dans un champ de saisie)
+    const inField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)
+        || document.activeElement?.isContentEditable;
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !inField) {
+        switch (e.key.toLowerCase()) {
+            case 'r': {   // Alt+R : régénérer le dernier message assistant
+                e.preventDefault();
+                const lastAssist = [...messagesDiv.querySelectorAll('.message.assistant')].pop();
+                if (lastAssist) regenerateMessage(lastAssist, currentTabId || currentThreadId);
+                break;
+            }
+            case 's': {   // Alt+S : résumé du fil
+                e.preventDefault();
+                requestSummary(currentTabId || currentThreadId);
+                break;
+            }
+            case 'e': {   // Alt+E : ouvrir le modal export
+                e.preventDefault();
+                openExportModal();
+                break;
+            }
+            case 'n': {   // Alt+N : nouveau fil
+                e.preventDefault();
+                document.getElementById('new-thread-btn')?.click();
+                break;
+            }
+        }
+    }
+});
+
+// ══════════════════════════════════════════
+// BROUILLON AUTOSAUVEGARDÉ
+// ══════════════════════════════════════════
+
+const _DRAFT_KEY = 'nimm_draft';
+
+function _saveDraft() {
+    const val = userInput.value;
+    if (val.trim()) {
+        localStorage.setItem(_DRAFT_KEY, val);
+        _showDraftIndicator('💾');
+    } else {
+        localStorage.removeItem(_DRAFT_KEY);
+        _hideDraftIndicator();
+    }
+}
+
+function _clearDraft() {
+    localStorage.removeItem(_DRAFT_KEY);
+    _hideDraftIndicator();
+}
+
+function _restoreDraft() {
+    const saved = localStorage.getItem(_DRAFT_KEY);
+    if (saved && !userInput.value.trim()) {
+        userInput.value = saved;
+        userInput.style.height = '44px';
+        userInput.style.height = Math.min(userInput.scrollHeight, 240) + 'px';
+        _showDraftIndicator('Brouillon restauré');
+        setTimeout(_hideDraftIndicator, 3000);
+    }
+}
+
+function _showDraftIndicator(text) {
+    const el = document.getElementById('draft-indicator');
+    if (el) { el.textContent = text; el.hidden = false; }
+}
+
+function _hideDraftIndicator() {
+    const el = document.getElementById('draft-indicator');
+    if (el) el.hidden = true;
+}
+
+// Restaurer le brouillon au démarrage
+_restoreDraft();
+
 userInput.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
         if (isMobile()) return; // mobile : Enter = saut de ligne, envoi via bouton uniquement
@@ -3020,6 +3535,8 @@ userInput.addEventListener('input', () => {
     if (nlBtn && !nlBtn.dataset.sttOnly) {
         nlBtn.classList.add('hidden');
     }
+    // Autosauvegarde du brouillon
+    _saveDraft();
 });
 
 // ══════════════════════════════════════════
@@ -4938,6 +5455,76 @@ document.getElementById('search-conversations-input').addEventListener('input', 
     const valeur = e.target.value;
     _searchConversationsTimer = setTimeout(() => runConversationSearch(valeur), 400);
 });
+
+// ── Recherche textuelle exacte, section "Recherches" ──
+let _searchTextTimer = null;
+
+document.getElementById('search-text-input')?.addEventListener('input', (e) => {
+    clearTimeout(_searchTextTimer);
+    const val = e.target.value;
+    _searchTextTimer = setTimeout(() => runTextSearch(val), 350);
+});
+
+async function runTextSearch(query) {
+    const list = document.getElementById('search-text-results');
+    query = (query || '').trim();
+    if (!query) {
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Tapez un mot pour chercher dans le texte exact de vos messages.</p>';
+        return;
+    }
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Recherche…</p>';
+    try {
+        const res = await fetch(`/api/search/text?q=${encodeURIComponent(query)}&k=20`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { resultats } = await res.json();
+        if (!resultats || !resultats.length) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun résultat.</p>';
+            return;
+        }
+        list.innerHTML = '';
+        resultats.forEach(r => list.appendChild(_renderTextResult(r, query)));
+    } catch (err) {
+        console.error('[RECHERCHE TEXTE] Erreur :', err);
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur lors de la recherche.</p>';
+    }
+}
+
+function _renderTextResult(r, query) {
+    const div = document.createElement('button');
+    div.className = 'biblio-entry';
+    div.style.cssText = 'display:block;width:100%;text-align:left;padding:10px 14px;background:none;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;color:var(--text);';
+
+    const titre = document.createElement('div');
+    titre.style.cssText = 'font-weight:600;font-size:0.9rem;margin-bottom:4px;';
+    const role = r.role === 'user' ? 'Vous' : 'NIMM';
+    titre.textContent = `${r.thread_name || '(fil sans nom)'} — ${role}`;
+
+    // Extrait avec le mot recherché mis en évidence (texte brut, accessible)
+    const content = r.content || '';
+    const idx = content.toLowerCase().indexOf(query.toLowerCase());
+    let extrait = content;
+    if (idx !== -1) {
+        const debut = Math.max(0, idx - 60);
+        const fin   = Math.min(content.length, idx + query.length + 60);
+        extrait = (debut > 0 ? '…' : '') + content.slice(debut, fin) + (fin < content.length ? '…' : '');
+    } else {
+        extrait = content.slice(0, 140) + (content.length > 140 ? '…' : '');
+    }
+
+    const texte = document.createElement('div');
+    texte.style.cssText = 'font-size:0.82rem;color:var(--text-muted);white-space:pre-wrap;';
+    texte.textContent = extrait;
+
+    div.appendChild(titre);
+    div.appendChild(texte);
+
+    div.addEventListener('click', async () => {
+        document.getElementById('search-conversations-modal').classList.add('hidden');
+        await selectThread(r.thread_id);
+    });
+
+    return div;
+}
 
 // ── Recherche mémoire (triplets), section "Recherches" ──
 let _memorySearchGlobalCache = null;

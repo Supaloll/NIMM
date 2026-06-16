@@ -20,6 +20,9 @@ nimm/
 │   ├── pdf_reader.py        — Extraction texte PDF
 │   ├── quiz.py              — Rattrapage tags %%QUIZ%% non balisés (wrap_bare_quiz)
 │   ├── bibliotheque.py      — Génération fiches archivage + recall thématique
+│   ├── coanimm.py           — Agent exécution code Python (run_script, run_generated, generate_plan, explore_directory)
+│   ├── enrichissement.py    — Ingestion documents web/fichiers → zone de référence RAG
+│   ├── export_nimm.py       — Export messages marqués (txt, docx, pdf, rtf, odt, epub, mp3)
 │   └── masks/               — Personnalités LLM (fichiers JSON)
 ├── frontend/
 │   ├── index.html
@@ -441,6 +444,9 @@ Les triggers SQLite maintiennent la cohérence entre tables principales et table
 - `create_rappel(...)` · `get_rappels_actifs()` · `update_rappel_date(...)` · `close_rappel(id)` · `perimer_rappels_depasses()`
 - `add_carnet_note(...)` · `get_carnet_notes(thread_id)` · `count_carnet_notes(thread_id)` · `delete_carnet_note(thread_id, note_number)`
 - `get_setting(key, default)` · `set_setting(key, value)`
+- `search_messages_text(query, limit)` — recherche LIKE sur `messages.content` (recherche exacte)
+- `delete_last_assistant(thread_id)` — supprime le dernier message `role='assistant'` d'un fil
+- `delete_last_pair(thread_id)` — supprime la dernière paire user+assistant (pour ré-édition)
 
 ---
 
@@ -505,6 +511,31 @@ insère le passage sélectionné en référence dans le champ de saisie.
 ### Menu contextuel
 Clic droit (ou appui long mobile) sur un message → actions : copier · citer · supprimer.
 
+### Menus d'action par message
+
+**Menu "Ma saisie"** (sur chaque message utilisateur) — aria-label `Ma saisie` :
+- 📋 Copier — copie le texte dans le presse-papier
+- ✏️ Modifier — appelle `editLastUserMessage()` : supprime la dernière paire en DB (`DELETE /api/chat/{id}/last_pair`), remet le texte dans le champ de saisie
+
+**Menu "La réponse"** (sur chaque message assistant) — aria-label `La réponse` :
+- 📋 Copier — copie le texte
+- → Onglet — envoie le contenu dans un nouveau fil (tab)
+- 🔄 Régénérer — supprime le dernier message assistant en DB (`DELETE /api/chat/{id}/last_assistant`) puis re-stream le dernier message utilisateur
+- ⭐ Marquer pour export — ajoute/retire le message de `_exportItems[]` ; contour visuel sur la bulle
+
+Tous les menus sont accessibles au clavier grâce à `_menuKeyboard()` : focus auto sur le premier item à l'ouverture, navigation Flèche Haut/Bas, Échap pour fermer.
+
+### Export messages
+- Bouton flottant `#export-float-btn` (coin bas-droit) apparaît dès qu'un message est marqué — indique le nombre d'éléments
+- Modal `#export-modal` : sélecteur de format + bouton "Tout démarquer"
+- Appel `POST /api/export` → `modules/export_nimm.py` → téléchargement direct
+- Formats : **TXT** (texte brut), **DOCX** (python-docx), **PDF** (fpdf2), **RTF** (manuel), **ODT** (zip XML), **EPUB** (zip XHTML), **MP3** (edge-tts, voix fr-FR-DeniseNeural)
+
+### Recherche messages (modale Recherches)
+Deux niveaux complémentaires dans la même modale :
+- **Par sens** — embeddings (sentence-transformers), retrouve l'idée sans les mots exacts
+- **Texte exact** — SQLite `LIKE` via `search_messages_text()`, retrouve le mot tel quel
+
 ### Upload
 Bouton trombone → upload de fichier (PDF…) via `/api/upload`.
 Contenu extrait et injecté dans le contexte du message suivant.
@@ -520,6 +551,8 @@ Contenu extrait et injecté dans le contexte du message suivant.
 | Coûts | Bouton sidebar | Suivi tokens/coût par provider (cost_wallets) |
 | Suppression | Icône poubelle | Confirmation avant suppression d'un fil |
 | Font picker | Paramètres | Choix de la police d'affichage |
+| Export | Bouton flottant | Sélection format + déclenchement export |
+| Recherches | Bouton sidebar | Recherche sémantique + texte exact + bibliothèque + mémoire |
 
 ### Clés API
 `_saveApiKeys()` — sauvegarde automatique sur `keydown` + `blur`.
@@ -540,6 +573,60 @@ Animation "bretzel" pendant la génération de réponse.
 - PWA installée sur Android (mode standalone, sans barre d'adresse)
 - Sur PC : accès local via `http://localhost:8080` (inchangé)
 - Géolocalisation : `_getLocation()` dans app.js — GPS + Nominatim (gratuit, sans clé API) → position injectée dans le system prompt à chaque message
+
+---
+
+## CoaNIMM (coanimm.py)
+
+Agent d'exécution Python sandboxé — déclenché depuis le panneau CoaNIMM (sidebar).
+
+### Deux modes d'exécution
+
+| Mode | Fonction | Déclencheur |
+|---|---|---|
+| Script Promptothèque | `run_script(script_id, …)` | Sélection dans la liste des scripts enregistrés |
+| Génération libre | `run_generated(consigne, …)` | Consigne en langage naturel |
+
+### Flow Plan→Explore→Execute (run_generated)
+
+1. **Planification** (`generate_plan()`) — LLM génère un plan en texte brut (sans markdown, lisible braille) et indique si une exploration disque est nécessaire (`EXPLORER: oui/non`)
+2. **Exploration** optionnelle (`explore_directory()`, permission `EXPLORE_ACTION='explorer_disque'`) — liste arborescente du dossier workspace, injectée dans le contexte de génération
+3. **Génération + exécution** (`run_generated()`, permission `GENERATED_ACTION='exec_generated_code'`) — LLM produit un script Python ; retry automatique si `SyntaxError`
+
+### Système de permissions (deux niveaux)
+
+- `EXPLORE_ACTION = 'explorer_disque'` — lecture seule du disque
+- `GENERATED_ACTION = 'exec_generated_code'` — écriture / exécution
+
+Si l'accord n'est pas déjà en base, le backend retourne `{'status': 'permission_required', 'action': …}` ; le frontend affiche le panneau de permission avec 3 niveaux : une fois / pour ce fil / toujours.
+
+### Sandbox
+
+Répertoire dédié par fil : `data/coanimm_workspace/{nom_fil}_{thread_id[:8]}/`.
+Scripts exécutés avec `PYTHONIOENCODING=utf-8` (emojis dans stdout).
+Timeout : 30 secondes.
+
+### PLANNING_SYSTEM_PROMPT
+
+Texte brut uniquement (interdictions explicites de tout markdown, balises, astérisques, backticks). Format de réponse : ligne `EXPLORER: oui|non` + plan en 3–8 phrases numérotées.
+
+---
+
+## Export (export_nimm.py)
+
+`async export_messages(items, fmt)` → `(bytes, filename, mime_type)`
+
+| Format | Mécanisme | Dépendance |
+|---|---|---|
+| TXT | chaîne UTF-8 | aucune |
+| RTF | construction manuelle (escape unicode `\uN?`) | aucune |
+| ODT | zip XML (ODF 1.3) | aucune |
+| EPUB | zip XHTML (EPUB 3) | aucune |
+| DOCX | python-docx | `python-docx` (déjà présent) |
+| PDF | fpdf2 | `fpdf2` (ajouté requirements.txt) |
+| MP3 | edge-tts, voix `fr-FR-DeniseNeural` | `edge-tts` (déjà présent) |
+
+Route : `POST /api/export` — retourne le fichier en téléchargement direct.
 
 ---
 
@@ -652,28 +739,9 @@ Décision du 09/06/2026 — objectif : supporter les fils très longs (style de 
 
 ---
 
-### [FUTUR] Module export document (suggéré par Nando)
-Permettre à NIMM de générer des documents complets et accessibles (PDF, DOCX, PPTX)
-depuis une conversation.
-
-**Deux modes envisagés :**
-- Sélection manuelle : l'utilisateur désigne des blocs de la conversation à inclure
-- Instruction directe : "Fais-moi un PowerPoint sur X, 5 slides" — NIMM compose seul
-
-**Images :**
-- Incluses automatiquement (générées par NIMM ou trouvées via recherche web)
-- Positionnées selon instruction de l'utilisateur
-- NIMM gère les proportions selon le format cible (slide vs page A4)
-
-**Contrainte accessibilité :** interface pilotable entièrement au clavier / lecteur d'écran (NVDA)
-
-**Architecture envisagée :**
-- Détection d'intention dans `intent_gate.py`
-- Orchestration dans `core/hub.py`
-- Nouveau module `modules/export_doc.py`
-- Librairies candidates : `python-docx` (DOCX), `python-pptx` (PPTX), `weasyprint` (PDF)
-
-**Statut :** backlog — à affiner avec Nando selon ses besoins réels
+### [LIVRÉ 16/06/2026] Export messages marqués
+Marquer des réponses depuis le menu "La réponse" → export `POST /api/export` → 7 formats.
+Phase 2 possible : instruction directe ("fais-moi un DOCX sur X") via CoaNIMM ou intent_gate.
 
 ### [PRIORITÉ] Migration Git pour Éric et Nando
 Éric et Nando ont NIMM installé depuis un ZIP (`NIMM-main`). Le `git pull` automatique dans `LANCER_NIMM.bat` ne fonctionne pas chez eux — pas de lien Git.
@@ -696,11 +764,4 @@ Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les p
 | 11/06/2026 (phase 3) | **Interrogation des documents ingérés (RAG) + découpage**. [database.py] table `reference_chunk` (passages + embeddings, liés à `web_reference`) ; `save_web_reference` renvoie l'id ; suppression en cascade des passages. [enrichissement.py] `_chunk_text` (passages ~1100 car. avec chevauchement) ; `ingest_text` indexe chaque passage ; `search_documents(query)` = recherche par sens dans les passages, avec source. [hub.py] outil `search_documents` (déclaration `NIMM_TOOLS` + aiguillage + règle de déclenchement), pour répondre « d'après mes documents… » avec citation. [main.py] `/api/enrich/text` en thread (vectorisation). Le contenu ingéré devient réellement interrogeable, toujours séparé de la mémoire personnelle. |
 | 12/06/2026 | **Mode local + accessibilité**. [hub.py/main.py/front] interrupteur « Mode local » (réglages) : bascule l'inférence vers **Ollama** (modèle configurable, défaut `llama3.1:8b`) et l'OCR vers **Tesseract** ; la recherche web reste active. Endpoints `/api/settings/local-mode`, `load_settings` expose `local_mode`. [app.js] a11y : les raccourcis clavier déplacent désormais le focus **dans** la modale ouverte (le lecteur d'écran suit) ; activation clavier des fils corrigée (le `keydown` ciblait le `div` au lieu du `span` porteur du clic → Entrée/Espace charge enfin le fil). |
 | 12/06/2026 (chiralité) | **Relations genrées selon le genre défini par la personne**. [memory.py] la réciproque de fratrie concernant l'utilisateur (`frere_ou_soeur`) est genrée `frère`/`sœur` d'après le réglage `user_genre`, que la personne définit elle-même (`_est_utilisateur`, `_genrer_fratrie`) ; le conjoint reste « conjoint » (déjà neutre). [main.py] endpoints `/api/settings/user-genre`. [front] sélecteur « Comment vous définissez-vous ? » (Non précisé / Masculin / Féminin). Non défini → neutre conservé ; anciens souvenirs non réécrits. |
-| 12/06/2026 (correctifs) | **Ingestion en thread + accessibilité des fils**. [main.py] les ingestions (texte/URL/fichier) propagent le contexte utilisateur au thread via `contextvars.copy_context()` — corrige l'échec « Aucun utilisateur défini » à l'ouverture de la connexion DB sur gros fichiers. [app.js] chaque fil est désormais **un seul bouton activable** (clic sur toute la ligne sauf le menu, Entrée/Espace) : supprime le double énoncé du nom (le `span` n'est plus cliquable séparément). [index.html] titre de la liste renommé « Liste des conversations », distinct de « Conversation ». [enrichissement.py] remontées d'erreur d'ingestion nettoyées (messages clairs en français, détail technique au journal — plus d'exception brute affichée). |
-| 13/06/2026 | **Mistral en reconnaissance d'images + intégration MÀJ Laurent**. [engine.py] `_call_openai_compat` injecte les images (format OpenAI `image_url`) et `call_llm` les transmet (openai/mistral/openrouter/deepseek) ; `call_vision` accepte `mistral`. [index.html] « Mistral (Pixtral) » ajouté au sélecteur de vision (défaut `mistral-small-latest`, multimodal, UE) — corrige au passage la vision OpenAI/OpenRouter qui perdait les images. Base : MÀJ Laurent intégrée — Whisper (VTT) rendu optionnel (toggle + modèle tiny→large avec RAM, ne charge plus au démarrage si off) et réglages réorganisés par onglets, logique de modale accessible préservée. |
-| 13/06/2026 (Tavily) | **Recherche web : ajout de Tavily**. [websearch.py] `_tavily_search` (résultats déjà nettoyés, sans scraping) + `_choose_engine` (préférence explicite ou auto : Tavily si clé sinon Brave, avec repli) ; logs et coût adaptés au moteur. [main.py] clé `tavily` (modèle + listes) et endpoints `/api/settings/search-provider`. [engine.py] env `TAVILY_API_KEY`. [front] champ de clé Tavily + sélecteur « Moteur de recherche web » (Auto / Tavily / Brave). Le cache web (hub) reste indépendant du moteur. |
-| 13/06/2026 (RAG Ollama) | **RAG par outils en mode local (Ollama)**. [engine.py] `call_llm_stream_with_tools` gère Ollama : `_ollama_tools_turn` (détection d'outils via /api/chat, format d'outils OpenAI accepté tel quel) + convertisseur `_oai_msgs_to_ollama` (tool_calls/tool → format Ollama), réutilisé par `_call_ollama` en phase 2. Le mode local dispose maintenant de la recherche web, l'interrogation des documents et le rappel mémoire par pertinence. **Anthropic et Gemini : même schéma, à suivre.** (Mistral + OpenAI-compat fonctionnaient déjà.) |
-| 13/06/2026 (RAG Anthropic) | **RAG par outils pour Anthropic (Claude)**. [engine.py] `_anthropic_tools_turn` (phase 1) + convertisseurs `_oai_tools_to_anthropic` (schéma→input_schema) et `_oai_msgs_to_anthropic` (tool_calls→blocs tool_use, messages tool→tool_result regroupés dans un message user), réutilisés par `_call_anthropic` en phase 2. Reste **Gemini** (voir entrée du 14/06/2026). |
-| 13/06/2026 (correctif 400) | **Garde-fou modèle/fournisseur** — corrige le « 400 Bad Request » au changement de fournisseur. [engine.py] `_resolve_model(provider, model)` : si le modèle sélectionné appartient visiblement à un autre fournisseur (préfixe claude/deepseek/gpt/mistral/gemini…), on retombe sur le modèle par défaut du fournisseur courant ; tags Ollama et modèles OpenRouter laissés intacts. Appliqué dans `call_llm`, `call_llm_stream`, `ca
-| 15/06/2026 | **Prompts d'extraction memoire par provider**. Trois fichiers crees dans `data/prompts/` : `memoire_deepseek.txt` (shadow prompting + chain notation, exemples anonymises [H]/[F]), `memoire_anthropic.txt` (structure logique, exemples epures pour Haiku), `memoire_mistral.txt` (garde-fous contre les inferences, interdictions avec alternative). Injection `{{DATE}}` et `{{LOCATION}}` dans `extract_memories_from_window()`. Cache-busting : `20260615`. |
-| 16/06/2026 | **Migration JSON v2 des prompts + turbo_test**. [data/prompts/] Tous les prompts provider migres du format `%%MEM%%` vers JSON structure : `memoire_deepseek.txt`, `memoire_anthropic.txt`, `memoire_mistral.txt` réécrits avec registre obligatoire (neutre/emotionnel/figure/intention/hypothese), predicats canoniques etendus (ecole, competence, employeur, benevolat, anciennete_debut, prenom_pere/mere...), regles autonomie/nuance/anecdote. `memoire_gemini.txt` cree (provider non actif, prompt pret). `memoire_default.txt` conserve tel quel (deja en JSON). [turbo_test.py] Nouveau script a la racine : teste la vraie route v2 d'extraction (charge prompt, injecte variables, appelle API, parse JSON, compare faits attendus, rapport score). Supporte DeepSeek/Anthropic/Mistral/Gemini. Parser robuste 3 tentatives (tableau unique, tableaux multiples fusionnes, objets isoles) — corrige le comportement Mistral Small. Detection modele incompatible avec le provider (evite 404). **Scores obtenus** : DeepSeek 25/31 (80%), Anthropic Haiku 24/31 (77%), Mistral Medium 25/31 (80%). Mistral Small 15/31 (48%) — probleme de format resolu par le parser robuste et changement vers Medium. Les 6 manques recurrents sont des ambiguites semantiques du script de test (livres audio classe sous lecture, grade marron sous competence, origine sous nationalite) — le fond de l'extraction est correct. |
+| 12/06/2026 (correctifs) | **Ingestion en thread + accessibilité des fils**. [main.py] les ingestions (texte/URL/fichier) propagent le contexte utilisateur au thread via `contextvars.copy_context()` — corrige l'échec « Aucun utilisateur défini » à l'ouverture de la connexion DB sur gros fichiers. [app.js] chaque fil est désormais **un seul bouton activable** (clic sur toute la ligne sauf le menu, Entrée/Espace) : supprime le double énoncé du nom (

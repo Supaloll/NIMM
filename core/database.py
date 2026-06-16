@@ -1282,6 +1282,17 @@ def get_messages(thread_id: str, limit: int = 200):
     conn.close()
     return [dict(r) for r in rows]
 
+def get_messages_up_to(thread_id: str, up_to: int) -> list:
+    """Retourne les messages d'un fil, du premier jusqu'à la position up_to incluse (0-indexé)."""
+    conn = get_conn()
+    rows = conn.execute(
+        'SELECT role, content FROM messages '
+        'WHERE thread_id = ? ORDER BY id ASC LIMIT ?',
+        (thread_id, up_to + 1)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 def count_messages(thread_id: str) -> int:
     conn = get_conn()
     n = conn.execute(
@@ -1331,6 +1342,81 @@ def count_memories() -> int:
     n = conn.execute('SELECT COUNT(*) FROM memory').fetchone()[0]
     conn.close()
     return n
+
+
+def search_messages_text(query: str, limit: int = 20) -> list:
+    """Recherche textuelle brute dans tous les messages (LIKE insensible à la casse).
+    Retourne les messages correspondants, les plus récents en premier."""
+    if not query or not query.strip():
+        return []
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT m.id, m.thread_id, m.role, m.content, m.created_at, t.name AS thread_name "
+        "FROM messages m JOIN threads t ON t.thread_id = m.thread_id "
+        "WHERE LOWER(m.content) LIKE LOWER(?) "
+        "ORDER BY m.id DESC LIMIT ?",
+        (f'%{query.strip()}%', limit)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_last_assistant(thread_id: str) -> bool:
+    """Supprime uniquement le dernier message assistant (régénération sans modifier le message user)."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id FROM messages WHERE thread_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+        (thread_id,)
+    ).fetchone()
+    deleted = False
+    if row:
+        conn.execute("DELETE FROM messages WHERE id = ?", (row['id'],))
+        conn.commit()
+        deleted = True
+    conn.close()
+    return deleted
+
+
+def delete_last_pair(thread_id: str) -> dict:
+    """Supprime la dernière paire user+assistant (modification d'un message utilisateur)."""
+    conn = get_conn()
+    deleted = {'assistant': False, 'user': False}
+    row = conn.execute(
+        "SELECT id FROM messages WHERE thread_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+        (thread_id,)
+    ).fetchone()
+    if row:
+        conn.execute("DELETE FROM messages WHERE id = ?", (row['id'],))
+        deleted['assistant'] = True
+    row = conn.execute(
+        "SELECT id FROM messages WHERE thread_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
+        (thread_id,)
+    ).fetchone()
+    if row:
+        conn.execute("DELETE FROM messages WHERE id = ?", (row['id'],))
+        deleted['user'] = True
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def append_to_last_assistant(thread_id: str, extra: str) -> bool:
+    """Ajoute du texte à la suite du dernier message assistant (continuation après max_tokens)."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, content FROM messages WHERE thread_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+        (thread_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return False
+    conn.execute(
+        "UPDATE messages SET content = ? WHERE id = ?",
+        (row['content'] + extra, row['id'])
+    )
+    conn.commit()
+    conn.close()
+    return True
 
 
 # ══════════════════════════════════════════

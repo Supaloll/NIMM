@@ -41,6 +41,8 @@ Tourne entièrement sur ta machine — tes conversations ne quittent jamais ton 
 - 📄 **Lecture de fichiers** — PDF et images analysés directement dans le chat
 - 📅 **Agenda** — rappels et échéances, signalés automatiquement dans la conversation
 - 🔎 **Recherche par sens** — retrouve un souvenir même sans les mots exacts (optionnel)
+- ✏️ **Modifier / Régénérer** — réédite ton dernier message ou demande une nouvelle réponse
+- 📤 **Export** — marque des réponses et exporte-les en TXT, DOCX, PDF, RTF, ODT, EPUB ou MP3
 
 ---
 

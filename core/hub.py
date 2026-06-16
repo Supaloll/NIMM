@@ -978,6 +978,11 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               Appeler si l\'utilisateur évoque « mes documents », « les articles\n'
         '                               que je t\'ai donnés », « ce que j\'ai ajouté », ou pose une question\n'
         '                               portant sur ces contenus. Citer la source des passages utilisés.\n'
+        '• run_code(code, description) → exécuter du code Python dans un environnement sandboxé.\n'
+        '                               Appeler quand l\'utilisateur demande un calcul, une analyse de données,\n'
+        '                               la génération d\'un fichier (CSV, image, graphique), ou toute tâche\n'
+        '                               qui bénéficierait d\'une exécution réelle plutôt qu\'une réponse textuelle.\n'
+        '                               Les fichiers générés (images, CSV…) sont automatiquement capturés.\n'
         'Appliquer la règle SONDE du lexique.\n'
     )
 
@@ -1350,6 +1355,36 @@ NIMM_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "run_code",
+            "description": (
+                "Génère et exécute du code Python pour réaliser une tâche précise. "
+                "Utilise cet outil quand la réponse nécessite un CALCUL, une MANIPULATION DE DONNÉES, "
+                "une CONVERSION, un TRAITEMENT DE FICHIER ou toute opération que le code ferait mieux que du texte. "
+                "Exemples : calcul de budget, tri de liste, génération de tableau, calcul de dates, statistiques. "
+                "NE PAS utiliser pour : recherche d'information, rappels de mémoire, questions générales. "
+                "Le code Python s'exécute dans un répertoire de travail isolé. "
+                "Si le code génère un fichier image, il sera ajouté automatiquement à la galerie. "
+                "Si le code génère un fichier texte/CSV, son contenu sera inclus dans ta réponse."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Code Python complet à exécuter. N'utilise que la bibliothèque standard et les modules déjà installés (datetime, math, json, csv, os, re, collections…). Les fichiers de sortie doivent être écrits dans le répertoire courant."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description courte de ce que fait le code (pour transparence vis-à-vis de l'utilisateur)"
+                    }
+                },
+                "required": ["code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_documents",
             "description": (
                 "Recherche dans les DOCUMENTS que l'utilisateur a lui-même ingérés "
@@ -1416,7 +1451,7 @@ async def classify_perissabilite_jours(query: str, content: str = ""):
         return None
 
 
-async def _execute_tool(name: str, args: dict) -> str:
+async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     """
     Exécute un outil demandé par le LLM et retourne le résultat en texte.
     Appelé par process_message_stream() pendant la phase tool calling.
@@ -1493,6 +1528,44 @@ async def _execute_tool(name: str, args: dict) -> str:
         except Exception as e:
             print(f"[HUB] ⚠️ Erreur search_documents : {e}")
             return '[Erreur lors de la recherche documentaire]'
+
+    elif name == 'run_code':
+        code = args.get('code', '').strip()
+        description = args.get('description', '').strip()
+        if not code:
+            return '[run_code] Aucun code fourni.'
+        # Vérification de permission (même système que CoaNIMM UI)
+        from core.database import agent_permission_granted
+        action = 'run_code_tool'
+        if not agent_permission_granted(action, thread_id):
+            return (
+                "[run_code] Exécution de code non autorisée. "
+                "Dis à l'utilisateur qu'il peut autoriser l'exécution de code Python dans "
+                "les paramètres CoaNIMM (une fois, pour ce fil, ou toujours). "
+                "Il pourra ensuite répéter sa demande."
+            )
+        try:
+            from modules.coanimm import execute_code
+            result = execute_code(code, thread_id)
+            parts = []
+            if description:
+                parts.append(f"[Code exécuté : {description}]")
+            if result.get('stdout', '').strip():
+                parts.append(result['stdout'].strip())
+            if result.get('returncode', 0) != 0 and result.get('stderr', '').strip():
+                parts.append(f"[stderr] {result['stderr'].strip()[:500]}")
+            if result.get('status') == 'error':
+                parts.append(f"[Erreur] {result.get('message', '')}")
+            if result.get('files_info'):
+                parts.append(result['files_info'])
+            if not parts:
+                parts.append('[Code exécuté sans sortie]')
+            txt = '\n'.join(parts)
+            print(f"[HUB] 🤖 Tool run_code → {len(txt)} chars, {result.get('files_count',0)} fichier(s) généré(s)")
+            return txt
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur run_code : {e}")
+            return f'[Erreur lors de l\'exécution du code : {e}]'
 
     return f'[Outil inconnu : {name}]'
 
@@ -2168,7 +2241,7 @@ async def process_message(
                     # Exécuter les outils demandés
                     messages.append(event['assistant_msg'])
                     for call in event['calls']:
-                        tool_result = await _execute_tool(call['name'], call['args'])
+                        tool_result = await _execute_tool(call['name'], call['args'], thread_id)
                         print(f"[HUB] 🔍 Tool {call['name']}({call['args'].get('query','')!r}) → {len(tool_result)} chars")
                         messages.append({
                             'role':         'tool',
@@ -2468,7 +2541,7 @@ async def process_message_stream(
                     messages.append(event['assistant_msg'])
 
                     for call in event['calls']:
-                        tool_result = await _execute_tool(call['name'], call['args'])
+                        tool_result = await _execute_tool(call['name'], call['args'], thread_id)
                         messages.append({
                             'role':         'tool',
                             'tool_call_id': call['id'],
