@@ -421,13 +421,40 @@
         <div class="settings-divider"></div>
 
         <details class="settings-section-details">
-        <summary class="settings-section-title">🎙️ Voix</summary>
+        <summary class="settings-section-title">🎙️ Dictée et synthèse vocale</summary>
 
         <div class="setting-group">
             <label>🔊 Voix TTS</label>
             <div style="display:flex;gap:8px;align-items:center;">
                 <select id="voice-select" style="flex:1;" aria-label="Voix de synthèse vocale"></select>
                 <button id="preview-voice-btn" aria-label="Écouter un aperçu de la voix sélectionnée"><span aria-hidden="true">▶</span> Écouter</button>
+            </div>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <!-- ── DICTÉE VOCALE ── -->
+        <div class="setting-group">
+            <label>🎙️ Dictée vocale (Whisper)</label>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="stt-enabled-toggle" aria-label="Activer la dictée vocale Whisper">
+                    <span class="toggle-slider"></span>
+                </label>
+                <span style="font-size:0.78rem;color:var(--text-muted);">
+                    Active le bouton micro et charge Whisper au démarrage.<br>
+                    <em>Désactiver libère la RAM si vous n'utilisez pas la dictée.</em>
+                </span>
+            </div>
+            <div id="stt-model-row" style="margin-top:8px;">
+                <label for="stt-model-select" style="display:block;font-size:0.78rem;color:var(--text-muted);margin-bottom:4px;">Modèle Whisper</label>
+                <select id="stt-model-select" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
+                    <option value="tiny">tiny — 390 Mo</option>
+                    <option value="base">base — 1 Go</option>
+                    <option value="small">small — 2 Go</option>
+                    <option value="medium">medium — 5 Go</option>
+                    <option value="large">large — 10 Go</option>
+                </select>
             </div>
         </div>
 
@@ -517,33 +544,6 @@
 
         <div class="settings-divider"></div>
 
-        <!-- ── DICTÉE VOCALE ── -->
-        <div class="setting-group">
-            <label>🎙️ Dictée vocale (Whisper)</label>
-            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
-                <label class="toggle-switch">
-                    <input type="checkbox" id="stt-enabled-toggle" aria-label="Activer la dictée vocale Whisper">
-                    <span class="toggle-slider"></span>
-                </label>
-                <span style="font-size:0.78rem;color:var(--text-muted);">
-                    Active le bouton micro et charge Whisper au démarrage.<br>
-                    <em>Désactiver libère la RAM si vous n'utilisez pas la dictée.</em>
-                </span>
-            </div>
-            <div id="stt-model-row" style="margin-top:8px;">
-                <label for="stt-model-select" style="display:block;font-size:0.78rem;color:var(--text-muted);margin-bottom:4px;">Modèle Whisper</label>
-                <select id="stt-model-select" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
-                    <option value="tiny">tiny — 390 Mo</option>
-                    <option value="base">base — 1 Go</option>
-                    <option value="small">small — 2 Go</option>
-                    <option value="medium">medium — 5 Go</option>
-                    <option value="large">large — 10 Go</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="settings-divider"></div>
-
         <!-- ── CURSEUR MÉMOIRE ── -->
         <div class="setting-group">
             <label>🧠 Niveau de mémorisation</label>
@@ -555,17 +555,6 @@
             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
                 Contrôle ce qui est retenu de vos conversations.
             </div>
-        </div>
-
-        <div class="settings-divider"></div>
-
-        <!-- ── MISE À JOUR ── -->
-        <div class="setting-group">
-            <label>🔄 Mise à jour</label>
-            <button id="btn-update" style="margin-top:8px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;">
-                Vérifier et installer les mises à jour
-            </button>
-            <div id="update-status" style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);"></div>
         </div>
 
         </details>
@@ -615,6 +604,17 @@
         </div>
 
         </details>
+
+        <div class="settings-divider"></div>
+
+        <!-- ── MISE À JOUR ── -->
+        <div class="setting-group" style="padding:4px 0 8px;">
+            <label>🔄 Mise à jour</label>
+            <button id="btn-update" style="margin-top:8px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;">
+                Vérifier et installer les mises à jour
+            </button>
+            <div id="update-status" style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);"></div>
+        </div>
 
         </div><!-- /settings-tab-params -->
 
@@ -1205,6 +1205,44 @@
         <p id="enrich-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:8px 0;"></p>
         <h4 style="margin:14px 0 6px;">Contenus en mémoire</h4>
         <div id="enrich-list" aria-live="polite"></div>
+    </div>
+</div>
+
+<!-- BOUTON FLOTTANT EXPORT -->
+<button id="export-float-btn" aria-live="polite" aria-label="Exporter les messages marqués"
+        style="display:none;position:fixed;bottom:90px;right:20px;z-index:900;
+               background:var(--accent,#6ea8fe);color:#fff;border:none;border-radius:24px;
+               padding:10px 18px;font-size:0.92rem;cursor:pointer;align-items:center;gap:8px;
+               box-shadow:0 4px 16px rgba(0,0,0,0.25);"
+        onclick="openExportModal()">📤 Exporter (0)</button>
+
+<!-- MODALE EXPORT -->
+<div id="export-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="export-modal-title" style="max-width:480px;">
+        <div class="modal-header">
+            <h3 id="export-modal-title"><span aria-hidden="true">📤 </span>Exporter les messages</h3>
+            <button class="close-modal" aria-label="Fermer" onclick="document.getElementById('export-modal').classList.add('hidden')">&#x2715;</button>
+        </div>
+        <p id="export-count" style="color:var(--text-muted);font-size:0.92rem;margin:4px 0 14px;"></p>
+        <div style="margin-bottom:14px;">
+            <label for="export-format" style="display:block;font-size:0.88rem;color:var(--text-muted);margin-bottom:6px;">Format</label>
+            <select id="export-format" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;">
+                <option value="txt">Texte brut (.txt)</option>
+                <option value="rtf">Rich Text (.rtf)</option>
+                <option value="odt">OpenDocument (.odt)</option>
+                <option value="epub">EPUB (.epub)</option>
+                <option value="docx">Word (.docx)</option>
+                <option value="pdf">PDF (.pdf)</option>
+                <option value="mp3">Audio MP3 (.mp3)</option>
+            </select>
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button id="export-do-btn" class="btn-primary" style="flex:1;"
+                    onclick="doExport(document.getElementById('export-format').value)">Exporter</button>
+            <button class="btn-secondary"
+                    onclick="document.getElementById('export-modal').classList.add('hidden')">Annuler</button>
+        </div>
+        <p id="export-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:10px 0 0;"></p>
     </div>
 </div>
 
