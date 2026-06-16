@@ -5,38 +5,63 @@ Ta seule mission : lire la conversation et extraire les faits déclarés explici
 Tu ne déduis rien. Tu n'interprètes pas. Tu transcris ce qui est dit.
 
 LOGIQUE :
-- SI rôle principal (métier, profession, activité rémunérée) ET rôle secondaire (bénévolat, loisir, engagement) → deux prédicats distincts, jamais le même.
-- SI relation nommée dans un sens → tu écris la réciproque, en respectant le genre connu de chaque personne.
-- SI quantité globale sans prénom ("on est 5") → aucun tag.
-- SI prénom d'un proche inconnu → sujet = {{USER_NAME}}, prédicat = lien de parenté.
+- Rôle principal (métier, profession, activité rémunérée) ET rôle secondaire (bénévolat, loisir, engagement) → deux prédicats distincts, jamais le même.
+- Relation nommée dans un sens → écris la réciproque avec le genre correct de chaque personne.
+- Quantité globale sans prénom ("on est 5") → aucun objet.
+- Proche sans prénom → sujet = {{USER_NAME}}, prédicat = lien de parenté.
+- Trait de personnalité ("douce", "émotive", "sensible") → predicat="qualite", memoire_type="autre". Jamais "sante".
+- Émotion rapportée calmement ("j'étais fier") → registre="neutre". "emotionnel" réservé au ton à vif (majuscules, colère manifeste).
+
+INTERDICTIONS :
+- Objet vide, fragment sans sens autonome, score numérique seul.
+- Sujet = rôle ("père", "fils", "utilisateur", "je", "il", "elle").
+- Inférer un âge actuel depuis une date passée → objet = âge déclaré, contexte = circonstance.
+- Personne publique, historique, fictionnelle, ou mentionnée sans lien relationnel explicite avec {{USER_NAME}}.
 
 EXEMPLES :
 Échange : "Je suis chauffeur poids lourd. [F] fait de la couture, elle est aussi secrétaire bénévole au club de judo."
-→ %%MEM:trait|{{USER_NAME}}|metier|chauffeur poids lourd||identite|1|permanent%%
-→ %%MEM:trait|[F]|metier|couturière||identite|1|permanent%%
-→ %%MEM:activite|[F]|benevolat|secrétaire club de judo||activite|3|persistant%%
+→ {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"metier","objet":"chauffeur poids lourd","memoire_type":"travail","profondeur":1,"type_temporal":"permanent","contexte":""}
+→ {"registre":"neutre","type":"trait","sujet":"[F]","predicat":"metier","objet":"couturière","memoire_type":"travail","profondeur":1,"type_temporal":"permanent","contexte":""}
+→ {"registre":"neutre","type":"activite","sujet":"[F]","predicat":"benevolat","objet":"secrétaire club de judo","memoire_type":"autre","profondeur":3,"type_temporal":"persistant","contexte":""}
 
 Échange : "J'ai une sœur qui s'appelle [F]. Son mari c'est [H]."
-→ %%MEM:relation|{{USER_NAME}}|soeur|[F]||identite|1|permanent%%
-→ %%MEM:relation|[F]|conjoint|[H]||identite|1|permanent%%
-→ %%MEM:relation|[F]|frère|{{USER_NAME}}||identite|1|permanent%%
+→ {"registre":"neutre","type":"relation","sujet":"{{USER_NAME}}","predicat":"soeur","objet":"[F]","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
+→ {"registre":"neutre","type":"relation","sujet":"[F]","predicat":"conjoint","objet":"[H]","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
+→ {"registre":"neutre","type":"relation","sujet":"[F]","predicat":"frere","objet":"{{USER_NAME}}","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
 
 Échange : "On est 5 dans la maison."
-→ (aucun tag — quantité sans prénom)
+→ (aucun objet — quantité sans prénom)
 
 Échange : "J'accorde beaucoup d'importance à mon indépendance."
-→ %%MEM:trait|{{USER_NAME}}|valeur|indépendance||identite|2|permanent%%
+→ {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"valeur","objet":"indépendance","memoire_type":"autre","profondeur":2,"type_temporal":"permanent","contexte":""}
 
-FORMAT STRICT :
-%%MEM:type|sujet|prédicat|objet|contexte|mem_type|profondeur|temporal%%
-- type      : trait / relation / activite
-- sujet     : prénom exact — jamais "je", "il", "elle", "utilisateur", "père", "fils"
-- prédicat  : 1 mot, snake_case
-- objet     : valeur concrète, jamais vide
-- contexte  : 5 mots max, vide si aucun
-- mem_type  : identite / activite
-- profondeur: 1 (stable) à 5 (anecdotique)
-- temporal  : permanent / persistant / episodique
+REGISTRE — obligatoire, 1 valeur parmi ces 5 :
+  neutre      : déclaration factuelle calme, même si elle raconte une émotion passée
+  emotionnel  : ton à vif au moment d'écrire (colère, majuscules, frustration forte)
+  figure      : humour, ironie, second degré
+  intention   : souhait ou projet réel
+  hypothese   : irréel pur, fiction, condition impossible
+Priorité si ambiguïté : figure > emotionnel > intention > neutre > hypothese
+
+PRÉDICATS CANONIQUES :
+  identité : prenom · age · sexe · nationalite · date_naissance
+  famille  : conjoint · enfant · parent · frere · soeur · prenom_pere · prenom_mere
+  travail  : metier · employeur · diplome · competence · anciennete_debut · benevolat
+  santé    : probleme_sante · traitement · allergie
+  goûts    : aime · n_aime_pas · musique_preferee · serie_preferee
+  loisirs  : sport · lecture · loisir · anciennete_pratique
+  lieu     : domicile · vehicule
+  projets  : objectif · reve · intention · projet
+  caractère: trait · valeur · stress · qualite · anecdote
+
+RÈGLE AUTONOMIE : le triplet doit se comprendre sans relire la conversation.
+RÈGLE NUANCE : une précision qui complète un fait extractible (ex: "gagne aux points plutôt que par ippon") → mets-la en "contexte" du fait concerné, ne l'ignore pas.
+RÈGLE ANECDOTE : un moment narratif marquant → predicat="anecdote", objet ≤ 12 mots, profondeur=5, type_temporal="episodique".
+
+FORMAT DE CHAQUE OBJET :
+{"registre":"...","type":"...","sujet":"...","predicat":"...","objet":"...","memoire_type":"...","profondeur":N,"type_temporal":"...","contexte":"..."}
+
+Réponds UNIQUEMENT avec le tableau JSON. Aucun texte avant ou après. Aucune balise ```.
 
 Conversation :
 {{CONV_TEXT}}

@@ -4,30 +4,45 @@ Utilisateur : {{USER_NAME}} — Date : {{DATE}} — Lieu : {{LOCATION}}
 Extrais uniquement les faits explicitement déclarés. Rien d'inféré.
 
 LOGIQUE :
-- Rôle principal (métier/profession) ≠ rôle secondaire (bénévolat/engagement) → prédicats distincts.
-- Relation nommée dans un sens → écris la réciproque avec le genre correct de chaque personne.
-- Quantité sans prénom ("on est 5") → aucun tag.
+- Métier/profession rémunérée ET bénévolat/engagement → prédicats distincts (metier ≠ benevolat).
+- Relation dans un sens → écris la réciproque avec le genre correct.
+- Quantité sans prénom ("on est 5") → rien à extraire.
 - Proche sans prénom → sujet = {{USER_NAME}}, prédicat = lien de parenté.
+- Trait de caractère ("douce", "émotive") → predicat="qualite", memoire_type="autre". Jamais "sante".
+- Émotion rapportée calmement → registre="neutre". "emotionnel" réservé au ton à vif.
 
-EXEMPLES :
-Échange : "Je suis infirmière. [H] fait du bénévolat à la croix rouge."
-→ %%MEM:trait|{{USER_NAME}}|metier|infirmière||identite|1|permanent%%
-→ %%MEM:activite|[H]|benevolat|croix rouge||activite|3|persistant%%
+REGISTRE — 1 valeur obligatoire parmi :
+  neutre     : fait calme, même si le contenu évoque une émotion passée
+  emotionnel : ton à vif au moment d'écrire (colère, majuscules)
+  figure     : humour, ironie, second degré
+  intention  : souhait ou projet réel
+  hypothese  : irréel pur, fiction
 
-Échange : "Mon frère s'appelle [H]."
-→ %%MEM:relation|{{USER_NAME}}|frere|[H]||identite|1|permanent%%
-→ %%MEM:relation|[H]|soeur|{{USER_NAME}}||identite|1|permanent%%
+PRÉDICATS CANONIQUES :
+  date_naissance · age · nationalite · domicile · metier · diplome · anciennete_debut
+  conjoint · enfant · parent · frere · soeur · prenom_pere · prenom_mere
+  sport · loisir · lecture · benevolat · anciennete_pratique
+  probleme_sante · traitement · allergie
+  aime · n_aime_pas · objectif · valeur · trait · qualite · anecdote
+  ecole · competence · employeur
 
-FORMAT :
-%%MEM:type|sujet|prédicat|objet|contexte|mem_type|profondeur|temporal%%
-- type : trait / relation / activite
-- sujet : prénom exact — jamais "je", "il", "elle", "utilisateur", "père", "fils"
-- prédicat : 1 mot snake_case
-- objet : valeur concrète, jamais vide
-- contexte : 5 mots max, vide si aucun
-- mem_type : identite / activite
-- profondeur : 1 (stable) à 5 (anecdotique)
-- temporal : permanent / persistant / episodique
+FORMAT — chaque fait = un objet JSON :
+{"registre":"...","type":"...","sujet":"...","predicat":"...","objet":"...","memoire_type":"...","profondeur":N,"type_temporal":"...","contexte":"..."}
+
+- sujet       : prénom réel uniquement — jamais "je", "il", "elle", "utilisateur", rôle ou lien
+- type        : trait | relation | evenement
+- objet       : valeur concrète, compréhensible seule, jamais vide
+- memoire_type : identite | famille | preference | loisir | sante | travail | autre
+- profondeur  : 1 (fait de base) à 5 (anecdote)
+- type_temporal : permanent | persistant | episodique | engagement
+- contexte    : précision courte 5 mots max, ou ""
+
+RÈGLES :
+- Le triplet doit se comprendre sans relire la conversation.
+- Une nuance qui complète un fait extractible → mets-la en "contexte", ne l'ignore pas.
+- Moment narratif marquant → predicat="anecdote", objet ≤ 12 mots, profondeur=5, type_temporal="episodique".
+
+Réponds UNIQUEMENT avec le tableau JSON. Aucun texte avant ou après. Aucune balise ```.
 
 Conversation :
 {{CONV_TEXT}}
