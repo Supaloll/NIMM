@@ -2663,4 +2663,35 @@ async def process_message_stream(
                     temperature=0.7,
                     api_keys=_img_api_keys,
                 )
-         
+            except Exception as _enrich_err:
+                print(f"[HUB] Enrichissement prompt image échoué (prompt original conservé) : {_enrich_err}")
+            print(f"[HUB] 🎨 Génération image (tag) → provider={_img_provider} prompt={image_prompt[:80]}")
+            _img_result = await generate_image(image_prompt, _img_provider, _img_api_keys)
+            _img_url     = _img_result.get('url', '')
+            _img_b64     = _img_result.get('b64', '')
+            _img_revised = _img_result.get('revised_prompt', image_prompt)
+            # Sauvegarder en DB pour que le LLM voie l'image dans l'historique
+            _img_assistant_content = f"[Système — image générée]\nPrompt : {_img_revised}"
+            add_message(thread_id, 'assistant', _img_assistant_content)
+            # Envoyer l'event image au frontend
+            _img_payload = _json_img.dumps({
+                'url':            _img_url,
+                'b64':            _img_b64,
+                'prompt':         image_prompt,
+                'revised_prompt': _img_revised,
+            })
+            yield f"data: [IMAGE_GEN]{_img_payload}\n\n"
+        except Exception as e:
+            print(f"[HUB] Erreur génération image (tag) : {e}")
+            yield f"data: [IMAGE_GEN_ERR]{str(e)}\n\n"
+
+    # 11. Envoyer les métadonnées finales
+    import json as _json
+    radar = '🟢' if count_memories() > 0 else '⚪'
+    meta = _json.dumps({
+        'dominant':    _dominant_word(dominant),
+        'mood_vector': _dominant_to_vector(dominant),
+        'radar':       radar,
+    })
+    yield f"data: [META]{meta}\n\n"
+    yield "data: [DONE]\n\n"
