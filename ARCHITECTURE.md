@@ -20,6 +20,9 @@ nimm/
 │   ├── pdf_reader.py        — Extraction texte PDF
 │   ├── quiz.py              — Rattrapage tags %%QUIZ%% non balisés (wrap_bare_quiz)
 │   ├── bibliotheque.py      — Génération fiches archivage + recall thématique
+│   ├── coanimm.py           — Agent exécution code Python (run_script, run_generated, generate_plan, explore_directory)
+│   ├── enrichissement.py    — Ingestion documents web/fichiers → zone de référence RAG
+│   ├── export_nimm.py       — Export messages marqués (txt, docx, pdf, rtf, odt, epub, mp3)
 │   └── masks/               — Personnalités LLM (fichiers JSON)
 ├── frontend/
 │   ├── index.html
@@ -350,15 +353,13 @@ Appelé par `search_bibliotheque` (tool calling). Recherche FTS5 → injecte dan
 
 ## Tool calling
 
-Le LLM reçoit 6 outils et décide lui-même s'il en a besoin :
+Le LLM reçoit 4 outils et décide lui-même s'il en a besoin :
 
 ```
 search_memory(query)        → recall() dans memory.py
 search_bibliotheque(query)  → recall_bibliotheque() dans hub.py
 search_anecdotes(query)     → recall_anecdotes() dans memory.py
-search_web(query)           → websearch.search() via Brave/Tavily
-search_documents(query)     → enrichissement.search_documents() — RAG sur documents ingérés
-run_code(code, description) → coanimm.execute_code() — exécution Python sandboxée
+search_web(query)           → websearch.search() via Brave Search
 ```
 
 **Règles de déclenchement** (dans le system prompt) :
@@ -366,11 +367,9 @@ run_code(code, description) → coanimm.execute_code() — exécution Python san
 - Référence à une discussion passée → `search_bibliotheque`
 - Référence à un moment vécu, souvenir partagé → `search_anecdotes`
 - Information datée par nature (actualité, météo, prix) → `search_web`
-- L'utilisateur évoque « mes documents » ou un contenu ingéré → `search_documents`
-- Calcul, analyse de données, génération de fichier → `run_code`
 - Question générale, factuelle, technique → aucun outil
 
-`_execute_tool(name, args, thread_id)` est **async**. `search_web` ne doit jamais être appelé pour analyser un document fourni dans le message. `run_code` vérifie la permission `run_code_tool` via `agent_permission_granted()` avant toute exécution.
+`_execute_tool()` est **async**. `search_web` ne doit jamais être appelé pour analyser un document fourni dans le message.
 
 **Cache des recherches (`search_with_cache`, table `web_reference`)** : `search_web`
 passe par `search_with_cache()`, qui réutilise un résultat déjà obtenu pour une
@@ -432,10 +431,6 @@ Fichier : `data/nimm.db`. Accès via `core/database.py` uniquement (Hub-and-Spok
 | `carnet` | Notes de bord LLM (thread_id, note_number, content, created_at). |
 | `interets` | Centres d'intérêt détectés (topic, score, timestamp). |
 | `cost_wallets` | Suivi des coûts API par provider (provider, tokens_in, tokens_out, cost). |
-| `web_reference` | Cache des recherches web + documents ingérés (enrichissement). Colonnes : `query` `query_norm` `content` `embedding` `captured_at` `expiration` `source`. |
-| `reference_chunk` | Passages découpés des documents ingérés (RAG). Colonnes : `ref_id` (FK web_reference), `chunk_index`, `content`, `embedding`. Suppression en cascade. |
-| `images` | Images générées par NIMM (galerie). Colonnes : `filename`, `prompt`, `thread_id`, `created_at`. |
-| `agent_permissions` | Autorisations CoaNIMM (action, scope once/project/always, thread_id, granted_at). |
 | `settings` | Paramètres clé/valeur globaux (provider, model, embeddings_enabled, locks…). |
 
 **FTS5** (recherche plein texte) : activé sur `anecdotes` et `bibliotheque`.
@@ -449,6 +444,9 @@ Les triggers SQLite maintiennent la cohérence entre tables principales et table
 - `create_rappel(...)` · `get_rappels_actifs()` · `update_rappel_date(...)` · `close_rappel(id)` · `perimer_rappels_depasses()`
 - `add_carnet_note(...)` · `get_carnet_notes(thread_id)` · `count_carnet_notes(thread_id)` · `delete_carnet_note(thread_id, note_number)`
 - `get_setting(key, default)` · `set_setting(key, value)`
+- `search_messages_text(query, limit)` — recherche LIKE sur `messages.content` (recherche exacte)
+- `delete_last_assistant(thread_id)` — supprime le dernier message `role='assistant'` d'un fil
+- `delete_last_pair(thread_id)` — supprime la dernière paire user+assistant (pour ré-édition)
 
 ---
 
@@ -513,6 +511,31 @@ insère le passage sélectionné en référence dans le champ de saisie.
 ### Menu contextuel
 Clic droit (ou appui long mobile) sur un message → actions : copier · citer · supprimer.
 
+### Menus d'action par message
+
+**Menu "Ma saisie"** (sur chaque message utilisateur) — aria-label `Ma saisie` :
+- 📋 Copier — copie le texte dans le presse-papier
+- ✏️ Modifier — appelle `editLastUserMessage()` : supprime la dernière paire en DB (`DELETE /api/chat/{id}/last_pair`), remet le texte dans le champ de saisie
+
+**Menu "La réponse"** (sur chaque message assistant) — aria-label `La réponse` :
+- 📋 Copier — copie le texte
+- → Onglet — envoie le contenu dans un nouveau fil (tab)
+- 🔄 Régénérer — supprime le dernier message assistant en DB (`DELETE /api/chat/{id}/last_assistant`) puis re-stream le dernier message utilisateur
+- ⭐ Marquer pour export — ajoute/retire le message de `_exportItems[]` ; contour visuel sur la bulle
+
+Tous les menus sont accessibles au clavier grâce à `_menuKeyboard()` : focus auto sur le premier item à l'ouverture, navigation Flèche Haut/Bas, Échap pour fermer.
+
+### Export messages
+- Bouton flottant `#export-float-btn` (coin bas-droit) apparaît dès qu'un message est marqué — indique le nombre d'éléments
+- Modal `#export-modal` : sélecteur de format + bouton "Tout démarquer"
+- Appel `POST /api/export` → `modules/export_nimm.py` → téléchargement direct
+- Formats : **TXT** (texte brut), **DOCX** (python-docx), **PDF** (fpdf2), **RTF** (manuel), **ODT** (zip XML), **EPUB** (zip XHTML), **MP3** (edge-tts, voix fr-FR-DeniseNeural)
+
+### Recherche messages (modale Recherches)
+Deux niveaux complémentaires dans la même modale :
+- **Par sens** — embeddings (sentence-transformers), retrouve l'idée sans les mots exacts
+- **Texte exact** — SQLite `LIKE` via `search_messages_text()`, retrouve le mot tel quel
+
 ### Upload
 Bouton trombone → upload de fichier (PDF…) via `/api/upload`.
 Contenu extrait et injecté dans le contexte du message suivant.
@@ -528,6 +551,8 @@ Contenu extrait et injecté dans le contexte du message suivant.
 | Coûts | Bouton sidebar | Suivi tokens/coût par provider (cost_wallets) |
 | Suppression | Icône poubelle | Confirmation avant suppression d'un fil |
 | Font picker | Paramètres | Choix de la police d'affichage |
+| Export | Bouton flottant | Sélection format + déclenchement export |
+| Recherches | Bouton sidebar | Recherche sémantique + texte exact + bibliothèque + mémoire |
 
 ### Clés API
 `_saveApiKeys()` — sauvegarde automatique sur `keydown` + `blur`.
@@ -551,68 +576,57 @@ Animation "bretzel" pendant la génération de réponse.
 
 ---
 
-## Enrichissement web (enrichissement.py)
-
-Ingestion de contenu externe dans la zone de référence (séparée de la mémoire personnelle).
-
-**Portes d'entrée :**
-- Texte collé → normalisé, vectorisé, indexé
-- URL → extraction trafilatura (étage léger) ; repli Playwright (Chromium headless) si < seuil de texte
-- Fichier (PDF, DOCX, RTF, ODT, EPUB, HTML, image, TXT/MD/CSV) → routeur `ingest_file`
-
-**Pipeline d'ingestion :**
-1. Extraction de texte (adapté au type de fichier)
-2. `_chunk_text` : découpage en passages ~1100 car. avec chevauchement
-3. Vectorisation de chaque passage (embeddings)
-4. Stockage dans `web_reference` (document) + `reference_chunk` (passages)
-
-**OCR :**
-- Mistral OCR (`mistral-ocr-latest`) si clé API disponible (qualité supérieure)
-- Tesseract en local sinon (sans clé, repli langue `eng` si `fra` absent)
-- Drapeau `force_ocr` : court-circuite l'extraction texte du PDF (pour les PDF scannés/mixtes)
-
-**Recherche (`search_documents`)** : similarité vectorielle sur `reference_chunk`, retourne passages + source. Appelée par `_execute_tool('search_documents')` dans hub.py.
-
-**Frontend :** panneau « 🌐 Enrichissement web » — bouton bascule + modale avec 3 modes (texte, URL, fichier).
-
----
-
 ## CoaNIMM (coanimm.py)
 
-Agent d'exécution Python sandboxé, piloté par l'utilisateur ou par le LLM via tool calling.
+Agent d'exécution Python sandboxé — déclenché depuis le panneau CoaNIMM (sidebar).
 
-**Workspace :** `data/coanimm_workspace/<nom_fil>_<id[:8]>/` — un dossier par fil de conversation.
+### Deux modes d'exécution
 
-**Deux modes d'accès :**
-- `run_script(script_id, args, thread_id, confirm_scope)` — exécute un script de la Promptothèque (type=`script`)
-- `run_generated(consigne, thread_id, confirm_scope)` — génère un script par LLM puis l'exécute
-- `execute_code(code, thread_id)` — exécution directe par tool calling (hub.py → `run_code`)
+| Mode | Fonction | Déclencheur |
+|---|---|---|
+| Script Promptothèque | `run_script(script_id, …)` | Sélection dans la liste des scripts enregistrés |
+| Génération libre | `run_generated(consigne, …)` | Consigne en langage naturel |
 
-**Permissions** (table `agent_permissions`, via `db.agent_permission_granted` / `db.grant_agent_permission`) :
-- `once` : exécute sans enregistrer
-- `project` : autorise pour le fil courant (`thread_id`)
-- `always` : autorise pour tous les fils
+### Flow Plan→Explore→Execute (run_generated)
 
-**Capture des fichiers de sortie (`execute_code`) :**
-- `_scan_new_files(workdir, before)` : diff de l'annuaire avant/après exécution (ignore les `.py` temp)
-- `_route_new_files(new_files, thread_id)` :
-  - Images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`) → `db.save_image()` (galerie NIMM)
-  - Texte/CSV ≤ 4000 car. → inline dans la réponse outil
-  - Fichiers plus volumineux → mention de taille uniquement
+1. **Planification** (`generate_plan()`) — LLM génère un plan en texte brut (sans markdown, lisible braille) et indique si une exploration disque est nécessaire (`EXPLORER: oui/non`)
+2. **Exploration** optionnelle (`explore_directory()`, permission `EXPLORE_ACTION='explorer_disque'`) — liste arborescente du dossier workspace, injectée dans le contexte de génération
+3. **Génération + exécution** (`run_generated()`, permission `GENERATED_ACTION='exec_generated_code'`) — LLM produit un script Python ; retry automatique si `SyntaxError`
 
-**Environnement d'exécution :** `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1` (évite les `UnicodeEncodeError` sur Windows avec emojis). Timeout : 30 secondes.
+### Système de permissions (deux niveaux)
+
+- `EXPLORE_ACTION = 'explorer_disque'` — lecture seule du disque
+- `GENERATED_ACTION = 'exec_generated_code'` — écriture / exécution
+
+Si l'accord n'est pas déjà en base, le backend retourne `{'status': 'permission_required', 'action': …}` ; le frontend affiche le panneau de permission avec 3 niveaux : une fois / pour ce fil / toujours.
+
+### Sandbox
+
+Répertoire dédié par fil : `data/coanimm_workspace/{nom_fil}_{thread_id[:8]}/`.
+Scripts exécutés avec `PYTHONIOENCODING=utf-8` (emojis dans stdout).
+Timeout : 30 secondes.
+
+### PLANNING_SYSTEM_PROMPT
+
+Texte brut uniquement (interdictions explicites de tout markdown, balises, astérisques, backticks). Format de réponse : ligne `EXPLORER: oui|non` + plan en 3–8 phrases numérotées.
 
 ---
 
-## Recherche par sens dans l'historique (recherche.py)
+## Export (export_nimm.py)
 
-Module de recherche sémantique dans les messages (`messages`) et les notes Carnet (`carnet`).
+`async export_messages(items, fmt)` → `(bytes, filename, mime_type)`
 
-**Endpoint :** `POST /api/recherche` — requête en langage naturel → passages pertinents du fil.
+| Format | Mécanisme | Dépendance |
+|---|---|---|
+| TXT | chaîne UTF-8 | aucune |
+| RTF | construction manuelle (escape unicode `\uN?`) | aucune |
+| ODT | zip XML (ODF 1.3) | aucune |
+| EPUB | zip XHTML (EPUB 3) | aucune |
+| DOCX | python-docx | `python-docx` (déjà présent) |
+| PDF | fpdf2 | `fpdf2` (ajouté requirements.txt) |
+| MP3 | edge-tts, voix `fr-FR-DeniseNeural` | `edge-tts` (déjà présent) |
 
-**Pipeline :** vectorisation de la requête → similarité cosinus sur les embeddings des messages stockés → retour des passages les plus proches avec score.
-
-**Usage :** retrouver un souvenir ou une information mentionnée dans une conversation passée, même sans les mots exacts.
+Route : `POST /api/export` — retourne le fichier en téléchargement direct.
 
 ---
 
@@ -725,28 +739,9 @@ Décision du 09/06/2026 — objectif : supporter les fils très longs (style de 
 
 ---
 
-### [FUTUR] Module export document (suggéré par Nando)
-Permettre à NIMM de générer des documents complets et accessibles (PDF, DOCX, PPTX)
-depuis une conversation.
-
-**Deux modes envisagés :**
-- Sélection manuelle : l'utilisateur désigne des blocs de la conversation à inclure
-- Instruction directe : "Fais-moi un PowerPoint sur X, 5 slides" — NIMM compose seul
-
-**Images :**
-- Incluses automatiquement (générées par NIMM ou trouvées via recherche web)
-- Positionnées selon instruction de l'utilisateur
-- NIMM gère les proportions selon le format cible (slide vs page A4)
-
-**Contrainte accessibilité :** interface pilotable entièrement au clavier / lecteur d'écran (NVDA)
-
-**Architecture envisagée :**
-- Détection d'intention dans `intent_gate.py`
-- Orchestration dans `core/hub.py`
-- Nouveau module `modules/export_doc.py`
-- Librairies candidates : `python-docx` (DOCX), `python-pptx` (PPTX), `weasyprint` (PDF)
-
-**Statut :** backlog — à affiner avec Nando selon ses besoins réels
+### [LIVRÉ 16/06/2026] Export messages marqués
+Marquer des réponses depuis le menu "La réponse" → export `POST /api/export` → 7 formats.
+Phase 2 possible : instruction directe ("fais-moi un DOCX sur X") via CoaNIMM ou intent_gate.
 
 ### [PRIORITÉ] Migration Git pour Éric et Nando
 Éric et Nando ont NIMM installé depuis un ZIP (`NIMM-main`). Le `git pull` automatique dans `LANCER_NIMM.bat` ne fonctionne pas chez eux — pas de lien Git.
@@ -769,4 +764,4 @@ Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les p
 | 11/06/2026 (phase 3) | **Interrogation des documents ingérés (RAG) + découpage**. [database.py] table `reference_chunk` (passages + embeddings, liés à `web_reference`) ; `save_web_reference` renvoie l'id ; suppression en cascade des passages. [enrichissement.py] `_chunk_text` (passages ~1100 car. avec chevauchement) ; `ingest_text` indexe chaque passage ; `search_documents(query)` = recherche par sens dans les passages, avec source. [hub.py] outil `search_documents` (déclaration `NIMM_TOOLS` + aiguillage + règle de déclenchement), pour répondre « d'après mes documents… » avec citation. [main.py] `/api/enrich/text` en thread (vectorisation). Le contenu ingéré devient réellement interrogeable, toujours séparé de la mémoire personnelle. |
 | 12/06/2026 | **Mode local + accessibilité**. [hub.py/main.py/front] interrupteur « Mode local » (réglages) : bascule l'inférence vers **Ollama** (modèle configurable, défaut `llama3.1:8b`) et l'OCR vers **Tesseract** ; la recherche web reste active. Endpoints `/api/settings/local-mode`, `load_settings` expose `local_mode`. [app.js] a11y : les raccourcis clavier déplacent désormais le focus **dans** la modale ouverte (le lecteur d'écran suit) ; activation clavier des fils corrigée (le `keydown` ciblait le `div` au lieu du `span` porteur du clic → Entrée/Espace charge enfin le fil). |
 | 12/06/2026 (chiralité) | **Relations genrées selon le genre défini par la personne**. [memory.py] la réciproque de fratrie concernant l'utilisateur (`frere_ou_soeur`) est genrée `frère`/`sœur` d'après le réglage `user_genre`, que la personne définit elle-même (`_est_utilisateur`, `_genrer_fratrie`) ; le conjoint reste « conjoint » (déjà neutre). [main.py] endpoints `/api/settings/user-genre`. [front] sélecteur « Comment vous définissez-vous ? » (Non précisé / Masculin / Féminin). Non défini → neutre conservé ; anciens souvenirs non réécrits. |
-| 12/06/2026 (correctifs) | **Ingestion en thread + accessibilité des fils**. [main.py] les ingestions (texte/URL/fichier) propagent le contexte utilisateur au thread via `contextvars.copy_context()` — corrige l'échec « Aucun utilisateur défini » à l'ouverture de la connexion DB sur gros fichiers. [app.js] chaque fil est désormais **un seul bouton
+| 12/06/2026 (correctifs) | **Ingestion en thread + accessibilité des fils**. [main.py] les ingestions (texte/URL/fichier) propagent le contexte utilisateur au thread via `contextvars.copy_context()` — corrige l'échec « Aucun utilisateur défini » à l'ouverture de la connexion DB sur gros fichiers. [app.js] chaque fil est désormais **un seul bouton activable** (clic sur toute la ligne sauf le menu, Entrée/Espace) : supprime le double énoncé du nom (
