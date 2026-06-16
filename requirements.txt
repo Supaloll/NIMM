@@ -20,6 +20,7 @@ edge-tts>=6.1.9
 # ── Fichiers ──
 pypdf>=4.0.0
 python-docx>=1.1.0
+fpdf2>=2.7.0
 
 # ── Enrichissement web (ingestion d'articles/pages) ──
 trafilatura>=1.8.0
@@ -51,4 +52,4 @@ playwright>=1.44.0
 python-dotenv>=1.0.0
 
 # ── Matching flou ──
-rapidfuzz>=3.0.0
+rapi

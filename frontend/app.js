@@ -1930,7 +1930,7 @@ function appendUserMessage(content, fileName = null) {
 
     const actBtn = document.createElement('button');
     actBtn.className = 'copy-btn msg-action-btn';
-    actBtn.setAttribute('aria-label', 'Options du message');
+    actBtn.setAttribute('aria-label', 'Ma saisie');
     actBtn.setAttribute('aria-haspopup', 'menu');
     actBtn.setAttribute('aria-expanded', 'false');
     actBtn.innerHTML = SVG_ACT || '⋯';
@@ -2042,7 +2042,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
     actBtn.className = 'msg-action-btn';
     actBtn.innerHTML = SVG_ACT;
     actBtn.title     = 'Actions';
-    actBtn.setAttribute('aria-label', 'Copier, envoyer en onglet ou régénérer');
+    actBtn.setAttribute('aria-label', 'La réponse');
 
     const actMenu = document.createElement('div');
     actMenu.className     = 'copy-menu';
@@ -2052,6 +2052,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
         <button class="copy-menu-item" role="menuitem" data-action="tab" aria-label="Envoyer en onglet">→ Onglet</button>
         <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
+        <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
     `;
     actBtn.setAttribute('aria-haspopup', 'menu');
     actBtn.setAttribute('aria-expanded', 'false');
@@ -2091,6 +2092,12 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
     actMenu.querySelector('[data-action="regen"]').addEventListener('click', () => {
         actMenu.style.display = 'none';
         regenerateMessage(div, currentTabId || currentThreadId);
+    });
+    actMenu.querySelector('[data-action="mark"]').addEventListener('click', () => {
+        actMenu.style.display = 'none';
+        _toggleExportMark(div, content, 'assistant');
+        const btn = actMenu.querySelector('[data-action="mark"]');
+        btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
     });
 
     document.addEventListener('click', () => actMenu.style.display = 'none');
@@ -2585,7 +2592,7 @@ async function _triggerStream(content, conversationId) {
         actBtn.className = 'msg-action-btn';
         actBtn.innerHTML = SVG_ACT;
         actBtn.title     = 'Actions';
-        actBtn.setAttribute('aria-label', 'Copier, envoyer en onglet ou régénérer');
+        actBtn.setAttribute('aria-label', 'La réponse');
 
         const actMenu = document.createElement('div');
         actMenu.className     = 'copy-menu';
@@ -2595,6 +2602,7 @@ async function _triggerStream(content, conversationId) {
             <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
             <button class="copy-menu-item" role="menuitem" data-action="tab" aria-label="Envoyer en onglet">→ Onglet</button>
             <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
+            <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
         `;
         actBtn.setAttribute('aria-haspopup', 'menu');
         actBtn.setAttribute('aria-expanded', 'false');
@@ -2900,6 +2908,12 @@ async function _triggerStream(content, conversationId) {
             actMenu.style.display = 'none';
             regenerateMessage(div, conversationId);
         });
+        actMenu.querySelector('[data-action="mark"]').addEventListener('click', () => {
+            actMenu.style.display = 'none';
+            _toggleExportMark(div, finalContent, 'assistant');
+            const btn = actMenu.querySelector('[data-action="mark"]');
+            btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
+        });
 
         // Appliquer l'expression finale
         stopBlink();
@@ -2988,6 +3002,77 @@ async function regenerateMessage(assistantDiv, conversationId) {
 
     // Relancer le stream sur le même message utilisateur
     await _triggerStream(lastUserContent, tid);
+}
+
+// ══════════════════════════════════════════
+// EXPORT — marquage + génération de fichiers
+// ══════════════════════════════════════════
+
+let _exportItems = []; // [{div, role, content}]
+
+function _toggleExportMark(div, content, role) {
+    const idx = _exportItems.findIndex(i => i.div === div);
+    if (idx >= 0) {
+        _exportItems.splice(idx, 1);
+        delete div.dataset.exportMarked;
+        div.style.outline = '';
+    } else {
+        _exportItems.push({ div, role, content });
+        div.dataset.exportMarked = '1';
+        div.style.outline = '2px solid var(--accent, #6ea8fe)';
+    }
+    _updateExportBadge();
+}
+
+function _updateExportBadge() {
+    const btn = document.getElementById('export-float-btn');
+    if (!btn) return;
+    if (_exportItems.length > 0) {
+        btn.textContent = `📤 Exporter (${_exportItems.length})`;
+        btn.style.display = 'flex';
+    } else {
+        btn.style.display = 'none';
+    }
+}
+
+function openExportModal() {
+    const modal = document.getElementById('export-modal');
+    modal.classList.remove('hidden');
+    document.getElementById('export-count').textContent =
+        `${_exportItems.length} message${_exportItems.length > 1 ? 's' : ''} marqué${_exportItems.length > 1 ? 's' : ''}.`;
+    document.getElementById('export-status').textContent = '';
+    document.getElementById('export-do-btn').disabled = false;
+    modal.querySelector('.close-modal').focus();
+}
+
+async function doExport(format) {
+    if (_exportItems.length === 0) return;
+    const items = _exportItems.map(i => ({ role: i.role, content: i.content }));
+    const btn = document.getElementById('export-do-btn');
+    const status = document.getElementById('export-status');
+    btn.disabled = true;
+    status.textContent = 'Génération en cours…';
+    try {
+        const r = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items, format }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const blob = await r.blob();
+        const disposition = r.headers.get('Content-Disposition') || '';
+        const match = disposition.match(/filename="?([^";]+)"?/);
+        const filename = match ? match[1] : `export_nimm.${format}`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.click();
+        URL.revokeObjectURL(url);
+        status.textContent = `Fichier "${filename}" téléchargé.`;
+    } catch (e) {
+        status.textContent = `Erreur : ${e.message}`;
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 // ══════════════════════════════════════════
@@ -6644,90 +6729,4 @@ function _coanimmShowPermission(label) {
     document.getElementById('coanimm-permission-text').textContent =
         `L'agent CoaNIMM demande l'autorisation d'exécuter : ${label}.`;
     permBox.classList.remove('hidden');
-    setTimeout(() => { if (!_isMobile) document.getElementById('coanimm-allow-once')?.focus(); }, 50);
-}
-
-async function runCoanimmScript(scriptId, label, confirmScope) {
-    document.getElementById('coanimm-permission').classList.add('hidden');
-
-    try {
-        const r = await fetch('/api/coanimm/run_script', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                script_id: scriptId,
-                thread_id: currentThreadId || null,
-                confirm_scope: confirmScope,
-            }),
-        });
-        const data = await r.json();
-
-        if (data.status === 'permission_required') {
-            _coanimmPendingAction = { kind: 'script', scriptId, label };
-            _coanimmShowPermission(`le script « ${label} »`);
-            return;
-        }
-
-        _coanimmShowResult(data, label);
-    } catch (e) {
-        console.error('[COANIMM] Erreur exécution :', e);
-        document.getElementById('coanimm-result').classList.remove('hidden');
-        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de l\'exécution.';
-        document.getElementById('coanimm-result-stdout').value = '';
-        document.getElementById('coanimm-result-stderr').value = '';
-        document.getElementById('coanimm-result-code-box').classList.add('hidden');
-    }
-}
-
-async function runCoanimmGenerated(consigne, confirmScope) {
-    document.getElementById('coanimm-permission').classList.add('hidden');
-
-    try {
-        const r = await fetch('/api/coanimm/generate_and_run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                consigne,
-                thread_id: currentThreadId || null,
-                confirm_scope: confirmScope,
-            }),
-        });
-        const data = await r.json();
-
-        if (data.status === 'permission_required') {
-            _coanimmPendingAction = { kind: 'generated', consigne, label: 'la consigne libre' };
-            _coanimmShowPermission("la génération et l'exécution d'un script à partir de votre consigne");
-            return;
-        }
-
-        _coanimmShowResult(data, 'généré');
-    } catch (e) {
-        console.error('[COANIMM] Erreur génération/exécution :', e);
-        document.getElementById('coanimm-result').classList.remove('hidden');
-        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de la génération/exécution.';
-        document.getElementById('coanimm-result-stdout').value = '';
-        document.getElementById('coanimm-result-stderr').value = '';
-        document.getElementById('coanimm-result-code-box').classList.add('hidden');
-    }
-}
-
-function _coanimmResumePending(confirmScope) {
-    if (!_coanimmPendingAction) return;
-    const action = _coanimmPendingAction;
-    document.getElementById('coanimm-permission').classList.add('hidden');
-    if (action.kind === 'generated') {
-        runCoanimmGenerated(action.consigne, confirmScope);
-    } else {
-        runCoanimmScript(action.scriptId, action.label, confirmScope);
-    }
-}
-
-document.getElementById('coanimm-allow-once')?.addEventListener('click', () => _coanimmResumePending('once'));
-document.getElementById('coanimm-allow-project')?.addEventListener('click', () => _coanimmResumePending('project'));
-document.getElementById('coanimm-allow-always')?.addEventListener('click', () => _coanimmResumePending('always'));
-document.getElementById('coanimm-deny')?.addEventListener('click', () => {
-    _coanimmPendingAction = null;
-    document.getElementById('coanimm-permission').classList.add('hidden');
-});
-
-document.getElementById('coanimm-generate-btn')?.addEvent
+    setTimeout(() => { if (!_isMobile) document.getEl
