@@ -955,14 +955,27 @@ function togglePinThread(threadId) {
 function renderSidebar() {
     threadList.innerHTML = '';
 
-    // ── Bouton Recherches, en tête de liste ──
+    // ── Ligne Recherches + Mémoire côte à côte en tête de liste ──
+    const topRow = document.createElement('div');
+    topRow.className = 'sidebar-top-row';
+
     const searchBtn = document.createElement('button');
     searchBtn.id        = 'toggle-search-conversations';
-    searchBtn.className = 'sidebar-section-btn';
+    searchBtn.className = 'sidebar-section-btn sidebar-half-btn';
     searchBtn.title     = 'Recherches (raccourci : Alt+Maj+R)';
     searchBtn.setAttribute('aria-label', 'Recherches');
     searchBtn.innerHTML = '<span aria-hidden="true">🔎</span> Recherches';
-    threadList.appendChild(searchBtn);
+    topRow.appendChild(searchBtn);
+
+    const memoryTopBtn = document.createElement('button');
+    memoryTopBtn.id        = 'toggle-memory';
+    memoryTopBtn.className = 'sidebar-section-btn sidebar-half-btn';
+    memoryTopBtn.title     = 'Mémoire (raccourci : Alt+Maj+M)';
+    memoryTopBtn.setAttribute('aria-label', 'Mémoire');
+    memoryTopBtn.innerHTML = '<span aria-hidden="true">🧠</span> Mémoire';
+    topRow.appendChild(memoryTopBtn);
+
+    threadList.appendChild(topRow);
 
     // ── Ligne Nouveau chat + Nouvel onglet (60/40) ──
     const newChatRow = document.createElement('div');
@@ -1238,13 +1251,6 @@ function renderSidebar() {
     promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Promptothèque';
     threadList.appendChild(promptBtn);
 
-    const memoryBtn = document.createElement('button');
-    memoryBtn.id        = 'toggle-memory';
-    memoryBtn.className = 'sidebar-section-btn';
-    memoryBtn.title     = 'Mémoire (raccourci : Alt+Maj+M)';
-    memoryBtn.setAttribute('aria-label', 'Mémoire');
-    memoryBtn.innerHTML = '<span aria-hidden="true">🧠</span> Mémoire';
-    threadList.appendChild(memoryBtn);
 }
 
 async function selectThread(threadId) {
@@ -3479,16 +3485,15 @@ document.addEventListener('keydown', (e) => {
 
 const _DRAFT_KEY = 'nimm_draft';
 
-function _saveDraft() {
-    const val = userInput.value;
-    if (val.trim()) {
-        localStorage.setItem(_DRAFT_KEY, val);
-        _showDraftIndicator('💾');
-    } else {
-        localStorage.removeItem(_DRAFT_KEY);
-        _hideDraftIndicator();
+    function _saveDraft() {
+        const val = userInput.value;
+        if (val.trim()) {
+            localStorage.setItem(_DRAFT_KEY, val);
+        } else {
+            localStorage.removeItem(_DRAFT_KEY);
+            _hideDraftIndicator();
+        }
     }
-}
 
 function _clearDraft() {
     localStorage.removeItem(_DRAFT_KEY);
