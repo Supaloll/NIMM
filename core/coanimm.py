@@ -30,6 +30,11 @@ import core.database as db
 WORKSPACE_DIRNAME = 'coanimm_workspace'
 TIMEOUT_SECONDS = 30
 
+# Extensions reconnues pour le routage automatique des fichiers générés
+_IMAGE_EXTS  = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'}
+_TEXT_EXTS   = {'.txt', '.md', '.csv', '.json', '.html', '.xml', '.log'}
+_MAX_TEXT_INLINE = 4000   # chars max injectés dans le résultat outil
+
 GENERATED_ACTION = 'exec_generated_code'
 
 GENERATE_SYSTEM_PROMPT = (
@@ -176,6 +181,78 @@ async def generate_code(consigne: str, thread_id: str = None) -> str:
     return _strip_code_fences(response)
 
 
+def _scan_new_files(workdir: str, before: set) -> list:
+    """Retourne la liste des fichiers créés dans workdir depuis le snapshot `before`."""
+    try:
+        after = set(os.listdir(workdir))
+    except OSError:
+        return []
+    new = after - before
+    results = []
+    for fname in sorted(new):
+        # Ignorer les scripts temporaires (.py) générés par _execute
+        if fname.endswith('.py'):
+            continue
+        ext = os.path.splitext(fname)[1].lower()
+        fpath = os.path.join(workdir, fname)
+        results.append({'filename': fname, 'path': fpath, 'ext': ext})
+    return results
+
+
+def _route_new_files(new_files: list, thread_id: str = None) -> str:
+    """Route les fichiers générés :
+      - Images → galerie NIMM (save_image en DB)
+      - Texte/CSV (≤ _MAX_TEXT_INLINE chars) → retourné inline
+    Retourne un bloc texte à injecter dans le résultat de l'outil, ou '' si rien."""
+    if not new_files:
+        return ''
+    lines = []
+    for f in new_files:
+        fname = f['filename']
+        ext   = f['ext']
+        fpath = f['path']
+        if ext in _IMAGE_EXTS:
+            try:
+                db.save_image(fname, prompt=f'[CoaNIMM] {fname}', thread_id=thread_id or '')
+                lines.append(f"🖼️ Image générée et ajoutée à la galerie : {fname}")
+            except Exception as e:
+                lines.append(f"⚠️ Image générée ({fname}) mais non sauvegardée en galerie : {e}")
+        elif ext in _TEXT_EXTS:
+            try:
+                size = os.path.getsize(fpath)
+                if size == 0:
+                    lines.append(f"📄 Fichier généré (vide) : {fname}")
+                elif size <= _MAX_TEXT_INLINE:
+                    with open(fpath, encoding='utf-8', errors='replace') as fh:
+                        content = fh.read()
+                    lines.append(f"📄 Fichier généré : {fname}\n```\n{content}\n```")
+                else:
+                    lines.append(f"📄 Fichier généré (trop volumineux pour affichage inline, {size} octets) : {fname}")
+            except Exception as e:
+                lines.append(f"📄 Fichier généré ({fname}) — lecture impossible : {e}")
+        else:
+            lines.append(f"📎 Fichier généré : {fname}")
+    return '\n'.join(lines)
+
+
+def execute_code(code: str, thread_id: str = None) -> dict:
+    """Exécute du code Python généré par le LLM (via tool calling).
+
+    Capture automatiquement les fichiers créés dans le workspace :
+    - Images → galerie NIMM
+    - Texte/CSV → retournés inline dans le résultat
+
+    Retourne {'status':'ok'|'error', 'stdout':..., 'stderr':..., 'files_info':..., ...}
+    """
+    workdir = _workspace_dir(thread_id)
+    before  = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
+    result  = _execute(code, None, workdir)
+    new_files = _scan_new_files(workdir, before)
+    result['files_info'] = _route_new_files(new_files, thread_id)
+    result['files_count'] = len(new_files)
+    return result
+
+
 async def run_generated(consigne: str, thread_id: str = None, confirm_scope: str = None) -> dict:
     """Génère un script Python à partir de `consigne` puis l'exécute.
 
@@ -214,4 +291,3 @@ async def run_generated(consigne: str, thread_id: str = None, confirm_scope: str
     result = _execute(code, None, workdir)
     result['code'] = code
     return result
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               

@@ -1333,6 +1333,62 @@ def count_memories() -> int:
     return n
 
 
+def search_messages_text(query: str, limit: int = 20) -> list:
+    """Recherche textuelle brute dans tous les messages (LIKE insensible à la casse).
+    Retourne les messages correspondants, les plus récents en premier."""
+    if not query or not query.strip():
+        return []
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT m.id, m.thread_id, m.role, m.content, m.created_at, t.name AS thread_name "
+        "FROM messages m JOIN threads t ON t.thread_id = m.thread_id "
+        "WHERE LOWER(m.content) LIKE LOWER(?) "
+        "ORDER BY m.id DESC LIMIT ?",
+        (f'%{query.strip()}%', limit)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_last_assistant(thread_id: str) -> bool:
+    """Supprime uniquement le dernier message assistant (régénération sans modifier le message user)."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id FROM messages WHERE thread_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+        (thread_id,)
+    ).fetchone()
+    deleted = False
+    if row:
+        conn.execute("DELETE FROM messages WHERE id = ?", (row['id'],))
+        conn.commit()
+        deleted = True
+    conn.close()
+    return deleted
+
+
+def delete_last_pair(thread_id: str) -> dict:
+    """Supprime la dernière paire user+assistant (modification d'un message utilisateur)."""
+    conn = get_conn()
+    deleted = {'assistant': False, 'user': False}
+    row = conn.execute(
+        "SELECT id FROM messages WHERE thread_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+        (thread_id,)
+    ).fetchone()
+    if row:
+        conn.execute("DELETE FROM messages WHERE id = ?", (row['id'],))
+        deleted['assistant'] = True
+    row = conn.execute(
+        "SELECT id FROM messages WHERE thread_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
+        (thread_id,)
+    ).fetchone()
+    if row:
+        conn.execute("DELETE FROM messages WHERE id = ?", (row['id'],))
+        deleted['user'] = True
+    conn.commit()
+    conn.close()
+    return deleted
+
+
 # ══════════════════════════════════════════
 # WORKER MÉMOIRE — fonctions de traçabilité
 # ══════════════════════════════════════════
@@ -1907,69 +1963,4 @@ def update_rappel_date(rappel_id: int, date_echeance: str) -> bool:
 def close_rappel(rappel_id: int) -> bool:
     """Marque un rappel comme clos (utilisateur confirme que c'est passé)."""
     conn = get_conn()
-    conn.execute(
-        "UPDATE rappels SET statut = 'clos' WHERE id = ?",
-        (rappel_id,)
-    )
-    conn.commit()
-    conn.close()
-    return True
-
-def get_rappels_actifs() -> list:
-    """Retourne tous les rappels actifs, triés par date."""
-    conn = get_conn()
-    rows = conn.execute(
-        """SELECT * FROM rappels WHERE statut = 'actif'
-           ORDER BY date_echeance ASC NULLS LAST"""
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-def get_all_rappels() -> list:
-    """Retourne tous les rappels (actifs + clos + périmés)."""
-    conn = get_conn()
-    rows = conn.execute(
-        'SELECT * FROM rappels ORDER BY date_echeance ASC NULLS LAST'
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-def marquer_rappel_emis(rappel_id: int, seuil: str):
-    """Ajoute un seuil à rappels_emis. Ex: seuil='j7'."""
-    import json
-    conn = get_conn()
-    row = conn.execute('SELECT rappels_emis FROM rappels WHERE id = ?', (rappel_id,)).fetchone()
-    if row:
-        emis = json.loads(row['rappels_emis'] or '[]')
-        if seuil not in emis:
-            emis.append(seuil)
-        conn.execute(
-            'UPDATE rappels SET rappels_emis = ? WHERE id = ?',
-            (json.dumps(emis), rappel_id)
-        )
-        conn.commit()
-    conn.close()
-
-def perimer_rappels_depasses():
-    """Passe en 'perime' tous les rappels dont la date est dépassée."""
-    from datetime import datetime
-    now = datetime.now().strftime('%Y-%m-%d')
-    conn = get_conn()
-    conn.execute(
-        """UPDATE rappels SET statut = 'perime'
-           WHERE statut = 'actif'
-           AND date_echeance IS NOT NULL
-           AND date_echeance < ?""",
-        (now,)
-    )
-    conn.commit()
-    conn.close()
-
-def clear_all_memory():
-    """Vide toutes les entrées mémoire + rebuild FTS5."""
-    conn = get_conn()
-    conn.execute("DELETE FROM memory")
-    conn.execute("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')")
-    conn.commit()
-    conn.close()
-    print("[DB] Memoire videe + FTS5 rebuilt.")
+    conn

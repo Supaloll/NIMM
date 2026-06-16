@@ -828,6 +828,17 @@
             <p style="color:var(--text-muted);font-size:0.85rem;">Tapez quelques mots pour chercher dans vos conversations.</p>
         </div>
 
+        <h4 style="margin:16px 0 4px;font-size:0.9rem;">Dans vos conversations (texte exact)</h4>
+        <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 8px;">
+            Retrouvez un mot ou une expression telle que vous l'avez écrite.
+        </p>
+        <label for="search-text-input" class="sr-only">Recherche textuelle exacte</label>
+        <input id="search-text-input" type="search" placeholder="Mot ou expression exacte…"
+               style="width:100%;margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.85rem;box-sizing:border-box;">
+        <div id="search-text-results" style="margin-bottom:18px;">
+            <p style="color:var(--text-muted);font-size:0.85rem;">Tapez un mot pour chercher dans le texte exact de vos messages.</p>
+        </div>
+
         <h4 style="margin:0 0 4px;font-size:0.9rem;">Dans vos archives (Bibliothèque)</h4>
         <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 8px;">
             Retrouvez une synthèse archivée (titre, sujet, étiquettes).
@@ -1170,18 +1181,4 @@
                 <input type="checkbox" id="enrich-force-ocr"> Forcer l'OCR (PDF scanné ou mixte)
             </label>
         </div>
-        <label for="enrich-input" class="sr-only">Contenu à ingérer</label>
-        <textarea id="enrich-input" rows="4" placeholder="https://exemple.org/article&#10;https://autre.org/page"
-                  style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;"></textarea>
-        <div style="display:flex;gap:8px;margin-top:10px;">
-            <button id="enrich-submit" class="btn-primary" style="flex:1;">Ingérer</button>
-        </div>
-        <p id="enrich-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:8px 0;"></p>
-        <h4 style="margin:14px 0 6px;">Contenus en mémoire</h4>
-        <div id="enrich-list" aria-live="polite"></div>
-    </div>
-</div>
-
-<script src="/static/app.js?v=20260615"></script>
-</body>
-</html>
+        <label for=

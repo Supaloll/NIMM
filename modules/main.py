@@ -372,24 +372,6 @@ async def chat_stream(req: ChatRequest):
         }
     )
 
-@app.delete("/api/chat/{thread_id}/last_assistant")
-async def delete_last_assistant_route(thread_id: str):
-    """Supprime le dernier message assistant avant régénération."""
-    from core.database import delete_last_assistant
-    return {"deleted": delete_last_assistant(thread_id)}
-
-@app.delete("/api/chat/{thread_id}/last_pair")
-async def delete_last_pair_route(thread_id: str):
-    """Supprime la dernière paire user+assistant avant modification d'un message."""
-    from core.database import delete_last_pair
-    return delete_last_pair(thread_id)
-
-@app.get("/api/search/text")
-async def search_text_route(q: str = "", k: int = 20):
-    """Recherche textuelle brute (mot exact) dans l'historique des messages."""
-    from core.database import search_messages_text
-    return {"resultats": search_messages_text(q, k)}
-
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     set_user_context(req.user_id or get_current_user())
@@ -916,6 +898,24 @@ async def delete_prompt_route(prompt_id: str):
 # COANIMM — agent d'exécution
 # ══════════════════════════════════════════
 
+class CoanimmPlanRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/plan")
+async def coanimm_plan(req: CoanimmPlanRequest):
+    """Génère un plan en langage naturel décrivant ce que CoaNIMM va faire,
+    sans exécuter de code. Utilisé pour validation par l'utilisateur."""
+    from modules.coanimm import generate_plan
+    if not req.consigne.strip():
+        return {'status': 'error', 'message': 'La consigne est vide.'}
+    try:
+        plan = await generate_plan(req.consigne, req.thread_id)
+        return {'status': 'ok', 'plan': plan}
+    except Exception as e:
+        detail = str(e) or type(e).__name__
+        return {'status': 'error', 'message': f"Erreur lors de la planification : {detail}"}
+
 class CoanimmRunScriptRequest(BaseModel):
     script_id: str
     args: Optional[List[str]] = None
@@ -931,6 +931,42 @@ async def coanimm_run_script(req: CoanimmRunScriptRequest):
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
     return run_script(req.script_id, req.args, req.thread_id, req.confirm_scope)
+
+
+class CoanimmGenerateRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None  # 'once' | 'project' | 'always'
+
+class CoanimmRunCodeDirectRequest(BaseModel):
+    code: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/run_code_direct")
+async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
+    """Exécute du code Python brut (modifié par l'utilisateur) dans le bac à sable CoaNIMM.
+    Utilise le même niveau de permission que la génération libre."""
+    from modules.coanimm import execute_code, GENERATED_ACTION
+    import core.database as _db
+    if not req.code.strip():
+        return {'status': 'error', 'message': 'Le code est vide.'}
+    if not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+        return {
+            'status': 'permission_required',
+            'action': GENERATED_ACTION,
+            'label': "re-exécution de code modifié",
+        }
+    return execute_code(req.code, req.thread_id)
+
+@app.post("/api/coanimm/generate_and_run")
+async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
+    """Génère un script Python à partir d'une consigne en langage naturel, puis
+    l'exécute dans le bac à sable CoaNIMM. Renvoie 'permission_required' si
+    l'utilisateur n'a pas encore accordé l'exécution."""
+    from modules.coanimm import run_generated
+    if req.confirm_scope not in (None, 'once', 'project', 'always'):
+        raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
+    return await run_generated(req.consigne, req.thread_id, req.confirm_scope)
 
 @app.get("/api/search")
 async def search_conversations_route(q: str = "", k: int = 8):
@@ -2014,11 +2050,4 @@ async def images_delete(img_id: int):
         os.remove(filepath)
     return {"status": "ok"}
 
-# ══════════════════════════════════════════
-# LANCEMENT DIRECT
-# ══════════════════════════════════════════
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+#

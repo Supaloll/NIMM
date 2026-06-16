@@ -58,6 +58,37 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+// ── Gestion focus/clavier pour les menus déroulants ──
+// Appelée à chaque ouverture d'un menu : focus le premier item,
+// puis gère flèches, Échap et Tab.
+function _menuKeyboard(toggleBtn, menu, hideFn) {
+    // Focus immédiat sur le premier item
+    const items = () => [...menu.querySelectorAll('[role="menuitem"]:not([disabled])')];
+    const first = items()[0];
+    if (first) first.focus();
+
+    // Navigation clavier — un seul listener par instance de menu
+    if (menu.dataset.kbReady) return;
+    menu.dataset.kbReady = '1';
+    menu.addEventListener('keydown', (e) => {
+        const all = items();
+        const idx = all.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            all[(idx + 1) % all.length]?.focus();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            all[(idx - 1 + all.length) % all.length]?.focus();
+        } else if (e.key === 'Escape') {
+            e.stopPropagation();
+            hideFn();
+            toggleBtn?.focus();
+        } else if (e.key === 'Tab') {
+            hideFn();
+        }
+    });
+}
+
 // ══════════════════════════════════════════
 // RECHERCHE WEB — Bouton toggle 🌍
 // ══════════════════════════════════════════
@@ -1027,6 +1058,9 @@ function renderSidebar() {
             e.stopPropagation();
             document.querySelectorAll('.thread-dropdown.open').forEach(d => d.classList.remove('open'));
             dropdown.classList.toggle('open');
+            if (dropdown.classList.contains('open')) {
+                _menuKeyboard(menuBtn, dropdown, () => dropdown.classList.remove('open'));
+            }
         });
 
         const dropdown = document.createElement('div');
@@ -1890,7 +1924,56 @@ function appendUserMessage(content, fileName = null) {
         bubble.appendChild(chip);
     }
 
+    // ── Menu ⋯ sur les messages utilisateur ──
+    const actions  = document.createElement('div');
+    actions.className = 'message-actions';
+
+    const actBtn = document.createElement('button');
+    actBtn.className = 'copy-btn msg-action-btn';
+    actBtn.setAttribute('aria-label', 'Options du message');
+    actBtn.setAttribute('aria-haspopup', 'menu');
+    actBtn.setAttribute('aria-expanded', 'false');
+    actBtn.innerHTML = SVG_ACT || '⋯';
+
+    const actMenu = document.createElement('div');
+    actMenu.className = 'copy-menu';
+    actMenu.setAttribute('role', 'menu');
+    actMenu.style.display = 'none';
+    actMenu.innerHTML = `
+        <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
+        <button class="copy-menu-item" role="menuitem" data-action="edit">✏️ Modifier</button>
+    `;
+
+    actBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.copy-menu').forEach(m => m.style.display = 'none');
+        document.querySelectorAll('.msg-action-btn').forEach(b => b.setAttribute('aria-expanded', 'false'));
+        if (actMenu.style.display === 'none' || actMenu.style.display === '') {
+            actMenu.style.display = 'flex';
+            actBtn.setAttribute('aria-expanded', 'true');
+            _menuKeyboard(actBtn, actMenu, () => {
+                actMenu.style.display = 'none';
+                actBtn.setAttribute('aria-expanded', 'false');
+            });
+        } else {
+            actMenu.style.display = 'none';
+            actBtn.setAttribute('aria-expanded', 'false');
+        }
+    });
+
+    actMenu.querySelector('[data-action="copy"]').addEventListener('click', () => {
+        actMenu.style.display = 'none';
+        navigator.clipboard.writeText(content).catch(() => {});
+    });
+    actMenu.querySelector('[data-action="edit"]').addEventListener('click', () => {
+        actMenu.style.display = 'none';
+        editLastUserMessage(div, currentTabId || currentThreadId);
+    });
+
+    actions.appendChild(actMenu);
+    actions.appendChild(actBtn);
     div.appendChild(bubble);
+    div.appendChild(actions);
     messagesDiv.appendChild(div);
 }
 
@@ -1982,6 +2065,10 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
             _positionMenu(actBtn, actMenu);
             actMenu.style.display = 'flex';
             actBtn.setAttribute('aria-expanded', 'true');
+            _menuKeyboard(actBtn, actMenu, () => {
+                actMenu.style.display = 'none';
+                actBtn.setAttribute('aria-expanded', 'false');
+            });
         } else {
             actMenu.style.display = 'none';
             actBtn.setAttribute('aria-expanded', 'false');
@@ -2520,6 +2607,10 @@ async function _triggerStream(content, conversationId) {
                 _positionMenu(actBtn, actMenu);
                 actMenu.style.display = 'flex';
                 actBtn.setAttribute('aria-expanded', 'true');
+                _menuKeyboard(actBtn, actMenu, () => {
+                    actMenu.style.display = 'none';
+                    actBtn.setAttribute('aria-expanded', 'false');
+                });
             } else {
                 actMenu.style.display = 'none';
                 actBtn.setAttribute('aria-expanded', 'false');
@@ -2855,17 +2946,48 @@ async function _triggerStream(content, conversationId) {
     }
 }
 
+async function editLastUserMessage(userDiv, conversationId) {
+    const tid = conversationId || currentTabId || currentThreadId;
+    if (!tid) return;
+
+    // Récupérer le texte du message
+    const bubble = userDiv.querySelector('.message-bubble');
+    if (!bubble) return;
+    const content = bubble.textContent.trim();
+
+    // Supprimer la paire (user + assistant suivant) en DB
+    await fetch(`/api/chat/${tid}/last_pair`, { method: 'DELETE' }).catch(() => {});
+
+    // Retirer depuis le DOM : bulle user + bulle assistant suivante
+    const nextSibling = userDiv.nextElementSibling;
+    if (nextSibling && nextSibling.classList.contains('message') && nextSibling.classList.contains('assistant')) {
+        nextSibling.remove();
+    }
+    userDiv.remove();
+
+    // Remettre le contenu dans le champ de saisie
+    userInput.value = content;
+    userInput.style.height = 'auto';
+    userInput.style.height = userInput.scrollHeight + 'px';
+    userInput.focus();
+}
+
 async function regenerateMessage(assistantDiv, conversationId) {
+    const tid = conversationId || currentTabId || currentThreadId;
+
     // Récupérer le dernier message utilisateur depuis le DOM
     const userBubbles = messagesDiv.querySelectorAll('.message.user .message-bubble');
     if (!userBubbles.length) return;
     const lastUserContent = userBubbles[userBubbles.length - 1].textContent.trim();
 
+    // Supprimer le dernier message assistant en DB
+    if (tid) await fetch(`/api/chat/${tid}/last_assistant`, { method: 'DELETE' }).catch(() => {});
+
     // Retirer la bulle assistant courante
     assistantDiv.remove();
 
     // Relancer le stream sur le même message utilisateur
-    await _triggerStream(lastUserContent, conversationId || currentTabId || currentThreadId);
+    await _triggerStream(lastUserContent, tid);
 }
 
 // ══════════════════════════════════════════
@@ -4939,6 +5061,76 @@ document.getElementById('search-conversations-input').addEventListener('input', 
     _searchConversationsTimer = setTimeout(() => runConversationSearch(valeur), 400);
 });
 
+// ── Recherche textuelle exacte, section "Recherches" ──
+let _searchTextTimer = null;
+
+document.getElementById('search-text-input')?.addEventListener('input', (e) => {
+    clearTimeout(_searchTextTimer);
+    const val = e.target.value;
+    _searchTextTimer = setTimeout(() => runTextSearch(val), 350);
+});
+
+async function runTextSearch(query) {
+    const list = document.getElementById('search-text-results');
+    query = (query || '').trim();
+    if (!query) {
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Tapez un mot pour chercher dans le texte exact de vos messages.</p>';
+        return;
+    }
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Recherche…</p>';
+    try {
+        const res = await fetch(`/api/search/text?q=${encodeURIComponent(query)}&k=20`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { resultats } = await res.json();
+        if (!resultats || !resultats.length) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">Aucun résultat.</p>';
+            return;
+        }
+        list.innerHTML = '';
+        resultats.forEach(r => list.appendChild(_renderTextResult(r, query)));
+    } catch (err) {
+        console.error('[RECHERCHE TEXTE] Erreur :', err);
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">❌ Erreur lors de la recherche.</p>';
+    }
+}
+
+function _renderTextResult(r, query) {
+    const div = document.createElement('button');
+    div.className = 'biblio-entry';
+    div.style.cssText = 'display:block;width:100%;text-align:left;padding:10px 14px;background:none;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;color:var(--text);';
+
+    const titre = document.createElement('div');
+    titre.style.cssText = 'font-weight:600;font-size:0.9rem;margin-bottom:4px;';
+    const role = r.role === 'user' ? 'Vous' : 'NIMM';
+    titre.textContent = `${r.thread_name || '(fil sans nom)'} — ${role}`;
+
+    // Extrait avec le mot recherché mis en évidence (texte brut, accessible)
+    const content = r.content || '';
+    const idx = content.toLowerCase().indexOf(query.toLowerCase());
+    let extrait = content;
+    if (idx !== -1) {
+        const debut = Math.max(0, idx - 60);
+        const fin   = Math.min(content.length, idx + query.length + 60);
+        extrait = (debut > 0 ? '…' : '') + content.slice(debut, fin) + (fin < content.length ? '…' : '');
+    } else {
+        extrait = content.slice(0, 140) + (content.length > 140 ? '…' : '');
+    }
+
+    const texte = document.createElement('div');
+    texte.style.cssText = 'font-size:0.82rem;color:var(--text-muted);white-space:pre-wrap;';
+    texte.textContent = extrait;
+
+    div.appendChild(titre);
+    div.appendChild(texte);
+
+    div.addEventListener('click', async () => {
+        document.getElementById('search-conversations-modal').classList.add('hidden');
+        await selectThread(r.thread_id);
+    });
+
+    return div;
+}
+
 // ── Recherche mémoire (triplets), section "Recherches" ──
 let _memorySearchGlobalCache = null;
 
@@ -6538,198 +6730,4 @@ document.getElementById('coanimm-deny')?.addEventListener('click', () => {
     document.getElementById('coanimm-permission').classList.add('hidden');
 });
 
-document.getElementById('coanimm-generate-btn')?.addEventListener('click', () => {
-    const input = document.getElementById('coanimm-consigne');
-    const consigne = (input?.value || '').trim();
-    if (!consigne) {
-        input?.focus();
-        return;
-    }
-    runCoanimmGenerated(consigne, null);
-});
-
-// ══════════════════════════════════════════
-// RACCOURCIS CLAVIER GLOBAUX (Alt+Maj+lettre)
-// ══════════════════════════════════════════
-(function () {
-    var SHORTCUTS = {
-        'c': 'toggle-history',    // Conversations
-        'a': 'toggle-agenda',     // Agenda
-        'm': 'toggle-memory',     // Mémoire
-        'g': 'toggle-galerie',    // Galerie d'images
-        'e': 'toggle-enrich',     // Enrichissement web
-        'p': 'toggle-settings',   // Paramètres
-        'o': 'toggle-prompt-library',      // Promptothèque
-        'r': 'toggle-search-conversations', // Recherches
-        't': 'toggle-coanimm'              // agenT CoaNIMM
-    };
-    var LABELS = {
-        'toggle-history': 'Alt+Shift+C', 'toggle-agenda': 'Alt+Shift+A',
-        'toggle-memory': 'Alt+Shift+M', 'toggle-galerie': 'Alt+Shift+G',
-        'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P',
-        'toggle-prompt-library': 'Alt+Shift+O',
-        'toggle-search-conversations': 'Alt+Shift+R',
-        'toggle-coanimm': 'Alt+Shift+T'
-    };
-    // Annonce les raccourcis aux lecteurs d'écran.
-    Object.keys(LABELS).forEach(function (id) {
-        var el = document.getElementById(id);
-        if (el) el.setAttribute('aria-keyshortcuts', LABELS[id]);
-    });
-    var input = document.getElementById('user-input');
-    if (input) input.setAttribute('aria-keyshortcuts', 'Alt+Shift+S');
-
-    function focusModal(container) {
-        if (!container || container.classList.contains('hidden')) return;
-        // Cible l'élément de dialogue (ou le conteneur) pour que le lecteur d'écran y entre.
-        var dlg = container.querySelector('[role="dialog"]') || container;
-        dlg.setAttribute('tabindex', '-1');
-        dlg.focus();
-    }
-    document.addEventListener('keydown', function (e) {
-        if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
-        var k = (e.key || '').toLowerCase();
-        if (k === 's') {  // focus zone de saisie
-            e.preventDefault();
-            document.getElementById('user-input')?.focus();
-            return;
-        }
-        var id = SHORTCUTS[k];
-        if (id) {
-            var btn = document.getElementById(id);
-            if (btn) {
-                e.preventDefault();
-                btn.click();
-                // Déplace le focus dans le panneau ouvert (sinon le lecteur d'écran reste en arrière).
-                var targetId = (id === 'toggle-history') ? 'history-panel' : id.replace('toggle-', '') + '-modal';
-                setTimeout(function () { focusModal(document.getElementById(targetId)); }, 90);
-            }
-        }
-    });
-})();
-
-// ══════════════════════════════════════════
-// MODE LOCAL (inférence Ollama + OCR Tesseract)
-// ══════════════════════════════════════════
-(function () {
-    var toggle = document.getElementById('local-mode-toggle');
-    var modelField = document.getElementById('local-mode-model');
-    var msg = document.getElementById('local-mode-msg');
-    if (!toggle) return;
-
-    function updateMsg() {
-        if (!msg) return;
-        msg.textContent = toggle.checked
-            ? 'Activé : inférence et OCR sur la machine (plus lent, sans clé). Web actif.'
-            : '';
-    }
-    async function load() {
-        try {
-            var d = await fetch('/api/settings/local-mode').then(function (r) { return r.json(); });
-            toggle.checked = !!d.enabled;
-            if (modelField) modelField.value = d.ollama_model || '';
-            updateMsg();
-        } catch (e) {}
-    }
-    async function save() {
-        try {
-            await fetch('/api/settings/local-mode', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    enabled: toggle.checked,
-                    ollama_model: modelField ? modelField.value.trim() : undefined
-                })
-            });
-            updateMsg();
-        } catch (e) {}
-    }
-    toggle.addEventListener('change', save);
-    if (modelField) modelField.addEventListener('change', save);
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-// ── Genre de l'utilisateur (formulations genrées des relations) ──
-(function () {
-    var sel = document.getElementById('user-genre-select');
-    if (!sel) return;
-    async function load() {
-        try { var d = await fetch('/api/settings/user-genre').then(function (r) { return r.json(); }); sel.value = d.genre || ''; } catch (e) {}
-    }
-    sel.addEventListener('change', async function () {
-        try {
-            await fetch('/api/settings/user-genre', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ genre: sel.value })
-            });
-        } catch (e) {}
-    });
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-// -- Dictee vocale (STT Whisper) --
-(function () {
-    var toggle    = document.getElementById('stt-enabled-toggle');
-    var modelSel  = document.getElementById('stt-model-select');
-    var modelRow  = document.getElementById('stt-model-row');
-    if (!toggle) return;
-
-    function applyVisibility(enabled) {
-        // Bouton micro desktop
-        if (micBtn) micBtn.style.display = enabled ? '' : 'none';
-        // Bouton micro mobile
-        var mobileBtn = document.getElementById('mobile-mic-btn');
-        if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
-        // Afficher/masquer le selecteur de modele
-        if (modelRow) modelRow.style.display = enabled ? '' : 'none';
-    }
-
-    async function load() {
-        try {
-            var d = await fetch('/api/settings/stt').then(function (r) { return r.json(); });
-            toggle.checked = !!d.enabled;
-            if (modelSel) modelSel.value = d.model || 'base';
-            applyVisibility(!!d.enabled);
-        } catch (e) {}
-    }
-
-    async function save() {
-        try {
-            await fetch('/api/settings/stt', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    enabled: toggle.checked,
-                    model:   modelSel ? modelSel.value : 'base'
-                })
-            });
-            applyVisibility(toggle.checked);
-        } catch (e) {}
-    }
-
-    toggle.addEventListener('change', save);
-    if (modelSel) modelSel.addEventListener('change', save);
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-// ── Moteur de recherche web (Brave / Tavily) ──
-(function () {
-    var sel = document.getElementById('search-provider-select');
-    if (!sel) return;
-    async function load() {
-        try { var d = await fetch('/api/settings/search-provider').then(function (r) { return r.json(); }); sel.value = d.provider || 'auto'; } catch (e) {}
-    }
-    sel.addEventListener('change', async function () {
-        try {
-            await fetch('/api/settings/search-provider', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: sel.value })
-            });
-        } catch (e) {}
-    });
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-setupSettingsTabs();
-init();
+document.getElementById('coanimm-generate-btn')?.addEvent

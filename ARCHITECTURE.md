@@ -350,13 +350,15 @@ Appelé par `search_bibliotheque` (tool calling). Recherche FTS5 → injecte dan
 
 ## Tool calling
 
-Le LLM reçoit 4 outils et décide lui-même s'il en a besoin :
+Le LLM reçoit 6 outils et décide lui-même s'il en a besoin :
 
 ```
 search_memory(query)        → recall() dans memory.py
 search_bibliotheque(query)  → recall_bibliotheque() dans hub.py
 search_anecdotes(query)     → recall_anecdotes() dans memory.py
-search_web(query)           → websearch.search() via Brave Search
+search_web(query)           → websearch.search() via Brave/Tavily
+search_documents(query)     → enrichissement.search_documents() — RAG sur documents ingérés
+run_code(code, description) → coanimm.execute_code() — exécution Python sandboxée
 ```
 
 **Règles de déclenchement** (dans le system prompt) :
@@ -364,9 +366,11 @@ search_web(query)           → websearch.search() via Brave Search
 - Référence à une discussion passée → `search_bibliotheque`
 - Référence à un moment vécu, souvenir partagé → `search_anecdotes`
 - Information datée par nature (actualité, météo, prix) → `search_web`
+- L'utilisateur évoque « mes documents » ou un contenu ingéré → `search_documents`
+- Calcul, analyse de données, génération de fichier → `run_code`
 - Question générale, factuelle, technique → aucun outil
 
-`_execute_tool()` est **async**. `search_web` ne doit jamais être appelé pour analyser un document fourni dans le message.
+`_execute_tool(name, args, thread_id)` est **async**. `search_web` ne doit jamais être appelé pour analyser un document fourni dans le message. `run_code` vérifie la permission `run_code_tool` via `agent_permission_granted()` avant toute exécution.
 
 **Cache des recherches (`search_with_cache`, table `web_reference`)** : `search_web`
 passe par `search_with_cache()`, qui réutilise un résultat déjà obtenu pour une
@@ -428,6 +432,10 @@ Fichier : `data/nimm.db`. Accès via `core/database.py` uniquement (Hub-and-Spok
 | `carnet` | Notes de bord LLM (thread_id, note_number, content, created_at). |
 | `interets` | Centres d'intérêt détectés (topic, score, timestamp). |
 | `cost_wallets` | Suivi des coûts API par provider (provider, tokens_in, tokens_out, cost). |
+| `web_reference` | Cache des recherches web + documents ingérés (enrichissement). Colonnes : `query` `query_norm` `content` `embedding` `captured_at` `expiration` `source`. |
+| `reference_chunk` | Passages découpés des documents ingérés (RAG). Colonnes : `ref_id` (FK web_reference), `chunk_index`, `content`, `embedding`. Suppression en cascade. |
+| `images` | Images générées par NIMM (galerie). Colonnes : `filename`, `prompt`, `thread_id`, `created_at`. |
+| `agent_permissions` | Autorisations CoaNIMM (action, scope once/project/always, thread_id, granted_at). |
 | `settings` | Paramètres clé/valeur globaux (provider, model, embeddings_enabled, locks…). |
 
 **FTS5** (recherche plein texte) : activé sur `anecdotes` et `bibliotheque`.
@@ -540,6 +548,71 @@ Animation "bretzel" pendant la génération de réponse.
 - PWA installée sur Android (mode standalone, sans barre d'adresse)
 - Sur PC : accès local via `http://localhost:8080` (inchangé)
 - Géolocalisation : `_getLocation()` dans app.js — GPS + Nominatim (gratuit, sans clé API) → position injectée dans le system prompt à chaque message
+
+---
+
+## Enrichissement web (enrichissement.py)
+
+Ingestion de contenu externe dans la zone de référence (séparée de la mémoire personnelle).
+
+**Portes d'entrée :**
+- Texte collé → normalisé, vectorisé, indexé
+- URL → extraction trafilatura (étage léger) ; repli Playwright (Chromium headless) si < seuil de texte
+- Fichier (PDF, DOCX, RTF, ODT, EPUB, HTML, image, TXT/MD/CSV) → routeur `ingest_file`
+
+**Pipeline d'ingestion :**
+1. Extraction de texte (adapté au type de fichier)
+2. `_chunk_text` : découpage en passages ~1100 car. avec chevauchement
+3. Vectorisation de chaque passage (embeddings)
+4. Stockage dans `web_reference` (document) + `reference_chunk` (passages)
+
+**OCR :**
+- Mistral OCR (`mistral-ocr-latest`) si clé API disponible (qualité supérieure)
+- Tesseract en local sinon (sans clé, repli langue `eng` si `fra` absent)
+- Drapeau `force_ocr` : court-circuite l'extraction texte du PDF (pour les PDF scannés/mixtes)
+
+**Recherche (`search_documents`)** : similarité vectorielle sur `reference_chunk`, retourne passages + source. Appelée par `_execute_tool('search_documents')` dans hub.py.
+
+**Frontend :** panneau « 🌐 Enrichissement web » — bouton bascule + modale avec 3 modes (texte, URL, fichier).
+
+---
+
+## CoaNIMM (coanimm.py)
+
+Agent d'exécution Python sandboxé, piloté par l'utilisateur ou par le LLM via tool calling.
+
+**Workspace :** `data/coanimm_workspace/<nom_fil>_<id[:8]>/` — un dossier par fil de conversation.
+
+**Deux modes d'accès :**
+- `run_script(script_id, args, thread_id, confirm_scope)` — exécute un script de la Promptothèque (type=`script`)
+- `run_generated(consigne, thread_id, confirm_scope)` — génère un script par LLM puis l'exécute
+- `execute_code(code, thread_id)` — exécution directe par tool calling (hub.py → `run_code`)
+
+**Permissions** (table `agent_permissions`, via `db.agent_permission_granted` / `db.grant_agent_permission`) :
+- `once` : exécute sans enregistrer
+- `project` : autorise pour le fil courant (`thread_id`)
+- `always` : autorise pour tous les fils
+
+**Capture des fichiers de sortie (`execute_code`) :**
+- `_scan_new_files(workdir, before)` : diff de l'annuaire avant/après exécution (ignore les `.py` temp)
+- `_route_new_files(new_files, thread_id)` :
+  - Images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`) → `db.save_image()` (galerie NIMM)
+  - Texte/CSV ≤ 4000 car. → inline dans la réponse outil
+  - Fichiers plus volumineux → mention de taille uniquement
+
+**Environnement d'exécution :** `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1` (évite les `UnicodeEncodeError` sur Windows avec emojis). Timeout : 30 secondes.
+
+---
+
+## Recherche par sens dans l'historique (recherche.py)
+
+Module de recherche sémantique dans les messages (`messages`) et les notes Carnet (`carnet`).
+
+**Endpoint :** `POST /api/recherche` — requête en langage naturel → passages pertinents du fil.
+
+**Pipeline :** vectorisation de la requête → similarité cosinus sur les embeddings des messages stockés → retour des passages les plus proches avec score.
+
+**Usage :** retrouver un souvenir ou une information mentionnée dans une conversation passée, même sans les mots exacts.
 
 ---
 
@@ -696,10 +769,4 @@ Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les p
 | 11/06/2026 (phase 3) | **Interrogation des documents ingérés (RAG) + découpage**. [database.py] table `reference_chunk` (passages + embeddings, liés à `web_reference`) ; `save_web_reference` renvoie l'id ; suppression en cascade des passages. [enrichissement.py] `_chunk_text` (passages ~1100 car. avec chevauchement) ; `ingest_text` indexe chaque passage ; `search_documents(query)` = recherche par sens dans les passages, avec source. [hub.py] outil `search_documents` (déclaration `NIMM_TOOLS` + aiguillage + règle de déclenchement), pour répondre « d'après mes documents… » avec citation. [main.py] `/api/enrich/text` en thread (vectorisation). Le contenu ingéré devient réellement interrogeable, toujours séparé de la mémoire personnelle. |
 | 12/06/2026 | **Mode local + accessibilité**. [hub.py/main.py/front] interrupteur « Mode local » (réglages) : bascule l'inférence vers **Ollama** (modèle configurable, défaut `llama3.1:8b`) et l'OCR vers **Tesseract** ; la recherche web reste active. Endpoints `/api/settings/local-mode`, `load_settings` expose `local_mode`. [app.js] a11y : les raccourcis clavier déplacent désormais le focus **dans** la modale ouverte (le lecteur d'écran suit) ; activation clavier des fils corrigée (le `keydown` ciblait le `div` au lieu du `span` porteur du clic → Entrée/Espace charge enfin le fil). |
 | 12/06/2026 (chiralité) | **Relations genrées selon le genre défini par la personne**. [memory.py] la réciproque de fratrie concernant l'utilisateur (`frere_ou_soeur`) est genrée `frère`/`sœur` d'après le réglage `user_genre`, que la personne définit elle-même (`_est_utilisateur`, `_genrer_fratrie`) ; le conjoint reste « conjoint » (déjà neutre). [main.py] endpoints `/api/settings/user-genre`. [front] sélecteur « Comment vous définissez-vous ? » (Non précisé / Masculin / Féminin). Non défini → neutre conservé ; anciens souvenirs non réécrits. |
-| 12/06/2026 (correctifs) | **Ingestion en thread + accessibilité des fils**. [main.py] les ingestions (texte/URL/fichier) propagent le contexte utilisateur au thread via `contextvars.copy_context()` — corrige l'échec « Aucun utilisateur défini » à l'ouverture de la connexion DB sur gros fichiers. [app.js] chaque fil est désormais **un seul bouton activable** (clic sur toute la ligne sauf le menu, Entrée/Espace) : supprime le double énoncé du nom (le `span` n'est plus cliquable séparément). [index.html] titre de la liste renommé « Liste des conversations », distinct de « Conversation ». [enrichissement.py] remontées d'erreur d'ingestion nettoyées (messages clairs en français, détail technique au journal — plus d'exception brute affichée). |
-| 13/06/2026 | **Mistral en reconnaissance d'images + intégration MÀJ Laurent**. [engine.py] `_call_openai_compat` injecte les images (format OpenAI `image_url`) et `call_llm` les transmet (openai/mistral/openrouter/deepseek) ; `call_vision` accepte `mistral`. [index.html] « Mistral (Pixtral) » ajouté au sélecteur de vision (défaut `mistral-small-latest`, multimodal, UE) — corrige au passage la vision OpenAI/OpenRouter qui perdait les images. Base : MÀJ Laurent intégrée — Whisper (VTT) rendu optionnel (toggle + modèle tiny→large avec RAM, ne charge plus au démarrage si off) et réglages réorganisés par onglets, logique de modale accessible préservée. |
-| 13/06/2026 (Tavily) | **Recherche web : ajout de Tavily**. [websearch.py] `_tavily_search` (résultats déjà nettoyés, sans scraping) + `_choose_engine` (préférence explicite ou auto : Tavily si clé sinon Brave, avec repli) ; logs et coût adaptés au moteur. [main.py] clé `tavily` (modèle + listes) et endpoints `/api/settings/search-provider`. [engine.py] env `TAVILY_API_KEY`. [front] champ de clé Tavily + sélecteur « Moteur de recherche web » (Auto / Tavily / Brave). Le cache web (hub) reste indépendant du moteur. |
-| 13/06/2026 (RAG Ollama) | **RAG par outils en mode local (Ollama)**. [engine.py] `call_llm_stream_with_tools` gère Ollama : `_ollama_tools_turn` (détection d'outils via /api/chat, format d'outils OpenAI accepté tel quel) + convertisseur `_oai_msgs_to_ollama` (tool_calls/tool → format Ollama), réutilisé par `_call_ollama` en phase 2. Le mode local dispose maintenant de la recherche web, l'interrogation des documents et le rappel mémoire par pertinence. **Anthropic et Gemini : même schéma, à suivre.** (Mistral + OpenAI-compat fonctionnaient déjà.) |
-| 13/06/2026 (RAG Anthropic) | **RAG par outils pour Anthropic (Claude)**. [engine.py] `_anthropic_tools_turn` (phase 1) + convertisseurs `_oai_tools_to_anthropic` (schéma→input_schema) et `_oai_msgs_to_anthropic` (tool_calls→blocs tool_use, messages tool→tool_result regroupés dans un message user), réutilisés par `_call_anthropic` en phase 2. Reste **Gemini** (voir entrée du 14/06/2026). |
-| 13/06/2026 (correctif 400) | **Garde-fou modèle/fournisseur** — corrige le « 400 Bad Request » au changement de fournisseur. [engine.py] `_resolve_model(provider, model)` : si le modèle sélectionné appartient visiblement à un autre fournisseur (préfixe claude/deepseek/gpt/mistral/gemini…), on retombe sur le modèle par défaut du fournisseur courant ; tags Ollama et modèles OpenRouter laissés intacts. Appliqué dans `call_llm`, `call_llm_stream`, `ca
-| 15/06/2026 | **Prompts d'extraction memoire par provider**. Trois fichiers crees dans `data/prompts/` : `memoire_deepseek.txt` (shadow prompting + chain notation, exemples anonymises [H]/[F]), `memoire_anthropic.txt` (structure logique, exemples epures pour Haiku), `memoire_mistral.txt` (garde-fous contre les inferences, interdictions avec alternative). Injection `{{DATE}}` et `{{LOCATION}}` dans `extract_memories_from_window()`. Cache-busting : `20260615`. |
+| 12/06/2026 (correctifs) | **Ingestion en thread + accessibilité des fils**. [main.py] les ingestions (texte/URL/fichier) propagent le contexte utilisateur au thread via `contextvars.copy_context()` — corrige l'échec « Aucun utilisateur défini » à l'ouverture de la connexion DB sur gros fichiers. [app.js] chaque fil est désormais **un seul bouton
