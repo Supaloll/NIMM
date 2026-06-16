@@ -125,6 +125,7 @@
                 </div>
 <input type="file" id="file-input" accept=".pdf,.txt,.md,.csv,.py,.json,.js,.ts,.jsx,.tsx,.html,.htm,.css,.xml,.yaml,.yml,.toml,.ini,.sh,.bat,.ps1,.sql,.log,.c,.cpp,.h,.java,.rs,.go,.rb,.php,.swift,.kt,.r,.m,image/*" style="display:none">
                 <textarea id="user-input" placeholder="Écris ton message..." rows="1" aria-label="Zone de saisie du message" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"></textarea>
+                <span id="draft-indicator" hidden aria-live="polite" style="font-size:0.72rem;color:var(--text-muted);padding:0 4px 2px 4px;align-self:flex-end;"></span>
                 <div id="input-actions">
                     <div id="plus-menu-wrap">
                         <button id="upload-btn" title="Ajouter" aria-label="Ajouter un fichier ou créer une image">+</button>
@@ -1177,6 +1178,4 @@
             Ajoute du contenu à la zone de référence : indique des URL (une par ligne) ou colle un texte.
             Ce contenu reste séparé de la mémoire personnelle.
         </p>
-        <div style="display:flex;gap:8px;margin-bottom:10px;" role="radiogroup" aria-label="Type de source">
-            <button id="enrich-mode-url" class="btn-secondary" role="radio" aria-checked="true">URL (une par ligne)</button>
-            <button id="enrich-mo
+        <div style="display:flex;gap:8px;margin-bottom:10px;" role="radiogroup" aria-label="Type 

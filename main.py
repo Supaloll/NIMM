@@ -408,6 +408,65 @@ async def fork_thread_route(thread_id: str, req: ForkRequest):
         add_message(new_id, m['role'], m['content'])
     return {"thread_id": new_id, "name": new_name}
 
+@app.post("/api/chat/{thread_id}/continue")
+async def continue_thread_route(thread_id: str):
+    """Continue le dernier message assistant tronqué par max_tokens."""
+    from fastapi.responses import StreamingResponse as SR
+    from core.database import get_messages, append_to_last_assistant
+    import core.hub as hub
+    import core.engine as engine
+
+    msgs = get_messages(thread_id)
+    if not msgs:
+        raise HTTPException(404, "Fil vide.")
+
+    settings = hub.load_settings(thread_id)
+    provider  = settings.get('provider', '')
+    model     = settings.get('model')
+    api_keys  = settings.get('api_keys', {})
+
+    try:
+        if settings.get('personality_mode') == 'potards':
+            mask = {'system_prompt': hub.build_potards_prompt(settings.get('potards', {}))}
+        else:
+            mask = hub.load_mask(settings.get('mask_id', ''))
+    except Exception:
+        mask = {'system_prompt': 'Tu es un assistant utile.'}
+
+    system_prompt = mask.get('system_prompt', '')
+    # Ajouter un user turn de continuation — non sauvegardé en DB
+    continuation_msgs = msgs + [{'role': 'user', 'content': 'Continue.'}]
+
+    async def _stream():
+        accumulated = ''
+        finish_out  = {}
+        try:
+            async for token in engine.call_llm_stream(
+                messages=continuation_msgs,
+                provider=provider,
+                model=model,
+                system_prompt=system_prompt,
+                max_tokens=settings.get('max_tokens', 1024),
+                temperature=settings.get('temperature', 0.7),
+                api_keys=api_keys,
+                _finish_out=finish_out,
+            ):
+                accumulated += token
+                yield f"data: {token}\n\n"
+        except Exception as e:
+            yield f"data: [ERREUR: {e}]\n\n"
+        if accumulated:
+            append_to_last_assistant(thread_id, accumulated)
+        if finish_out.get('reason') in ('length', 'max_tokens'):
+            yield "data: [TRUNCATED]\n\n"
+        yield "data: [DONE]\n\n"
+
+    return SR(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 @app.post("/api/threads/{thread_id}/summary")
 async def summary_route(thread_id: str):
     """Génère un résumé du fil courant via le LLM configuré."""
@@ -1997,61 +2056,4 @@ async def set_server_mode(req: SettingValue):
     return {"status": "ok"}
 
 
-# ══════════════════════════════════════════
-# GALERIE IMAGES
-# ══════════════════════════════════════════
-
-_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'images')
-os.makedirs(_IMAGES_DIR, exist_ok=True)
-
-class ImageSaveRequest(BaseModel):
-    b64:       str = ''
-    url:       str = ''
-    prompt:    str = ''
-    thread_id: str = ''
-
-class ImageRenameRequest(BaseModel):
-    filename: str
-
-@app.post("/api/images/save")
-async def images_save(req: ImageSaveRequest):
-    """Sauvegarde une image (b64 ou url) sur disque + DB. Retourne id + filename."""
-    import re as _re
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:20]
-    filename = f"nimm_{ts}.png"
-    filepath = os.path.join(_IMAGES_DIR, filename)
-    try:
-        if req.b64:
-            data = req.b64
-            if ',' in data:
-                data = data.split(',', 1)[1]
-            with open(filepath, 'wb') as f:
-                f.write(_base64.b64decode(data))
-        elif req.url:
-            async with _httpx.AsyncClient(timeout=30) as client:
-                r = await client.get(req.url)
-                r.raise_for_status()
-                with open(filepath, 'wb') as f:
-                    f.write(r.content)
-        else:
-            raise HTTPException(400, "b64 ou url requis")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, f"Erreur sauvegarde image : {e}")
-    img_id = save_image(filename, req.prompt, req.thread_id)
-    return {"id": img_id, "filename": filename}
-
-@app.get("/api/images")
-async def images_list():
-    """Liste toutes les images sauvegardées."""
-    return get_images()
-
-@app.get("/api/images/file/{filename}")
-async def images_file(filename: str):
-    """Sert le fichier image depuis data/images/."""
-    # Sécurité : nom de fichier simple, pas de traversée de chemin
-    if '/' in filename or '\\' in filename or '..' in filename:
-        raise HTTPException(400, "Nom de fichier invalide")
-    filepath = os.path.join(_IMAGES_DIR, filename)
-    if not os.path.exi
+# ═══════════════

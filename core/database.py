@@ -1400,6 +1400,25 @@ def delete_last_pair(thread_id: str) -> dict:
     return deleted
 
 
+def append_to_last_assistant(thread_id: str, extra: str) -> bool:
+    """Ajoute du texte à la suite du dernier message assistant (continuation après max_tokens)."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, content FROM messages WHERE thread_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+        (thread_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return False
+    conn.execute(
+        "UPDATE messages SET content = ? WHERE id = ?",
+        (row['content'] + extra, row['id'])
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
 # ══════════════════════════════════════════
 # WORKER MÉMOIRE — fonctions de traçabilité
 # ══════════════════════════════════════════
@@ -1945,19 +1964,4 @@ def update_memory_value(key: str, valeur: str):
 
 # ══════════════════════════════════════════
 # RAPPELS / AGENDA
-# ══════════════════════════════════════════
-
-def create_rappel(description: str, date_echeance: str | None, type_rappel: str) -> int:
-    """Crée un rappel. Retourne l'id créé."""
-    conn = get_conn()
-    cur = conn.execute(
-        '''INSERT INTO rappels (description, date_echeance, type, statut, rappels_emis)
-           VALUES (?, ?, ?, 'actif', '[]')''',
-        (description, date_echeance, type_rappel)
-    )
-    conn.commit()
-    rid = cur.lastrowid
-    conn.close()
-    return rid
-
-def update_rappel_date(rappel_id: int, date_echeance: str) ->
+# ═════════════�
