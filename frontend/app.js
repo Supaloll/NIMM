@@ -6069,6 +6069,8 @@ let _audioChunks = [];
 let _micStream   = null;
 const _isMobile  = navigator.maxTouchPoints > 0 && window.innerWidth <= 640;
 
+var _sttTurboActive = false;
+
 function _setSttState(state) {
     _sttState = state;
     if (window._onSttStateChange) window._onSttStateChange();
@@ -6097,6 +6099,8 @@ function _setSttState(state) {
             micBtn.disabled  = true;
             break;
     }
+    // Réappliquer la classe turbo si le mode est actif
+    if (_sttTurboActive) micBtn.classList.add('turbo');
 }
 
 function _positionMenu(btn, menu) {
@@ -7273,8 +7277,10 @@ document.getElementById('coanimm-generate-btn')?.addEventListener('click', () =>
         // Bouton micro mobile
         var mobileBtn = document.getElementById('mobile-mic-btn');
         if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
-        // Afficher/masquer le selecteur de modele
+        // Afficher/masquer le selecteur de modele et turbo
         if (modelRow) modelRow.style.display = enabled ? '' : 'none';
+        var turboRow = document.getElementById('stt-turbo-row');
+        if (turboRow) turboRow.style.display = enabled ? '' : 'none';
     }
 
     async function load() {
@@ -7303,6 +7309,121 @@ document.getElementById('coanimm-generate-btn')?.addEventListener('click', () =>
     if (modelSel) modelSel.addEventListener('change', save);
     document.getElementById('toggle-settings')?.addEventListener('click', load);
     load();
+})();
+
+// -- Turbo Whisper --
+(function () {
+    var turboToggle = document.getElementById('stt-turbo-toggle');
+    if (!turboToggle) return;
+
+    function applyTurbo(enabled) {
+        _sttTurboActive = enabled;
+        if (micBtn) micBtn.classList.toggle('turbo', enabled);
+    }
+
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/stt-turbo').then(function (r) { return r.json(); });
+            turboToggle.checked = !!d.enabled;
+            applyTurbo(!!d.enabled);
+        } catch (e) {}
+    }
+
+    async function save() {
+        try {
+            await fetch('/api/settings/stt-turbo', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: turboToggle.checked ? 'true' : 'false' })
+            });
+            applyTurbo(turboToggle.checked);
+        } catch (e) {}
+    }
+
+    turboToggle.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+// -- Dictionnaire phonétique STT --
+(function () {
+    var modal    = document.getElementById('stt-dict-modal');
+    var btnOpen  = document.getElementById('stt-dict-btn');
+    var btnClose = document.getElementById('stt-dict-close');
+    var btnAdd   = document.getElementById('stt-dict-add');
+    var inFrom   = document.getElementById('stt-dict-from');
+    var inTo     = document.getElementById('stt-dict-to');
+    var list     = document.getElementById('stt-dict-list');
+    if (!modal || !btnOpen) return;
+
+    var _entries = [];
+
+    function renderList() {
+        list.innerHTML = '';
+        if (_entries.length === 0) {
+            list.innerHTML = '<span style="font-size:0.78rem;color:var(--text-muted);">Aucune entrée. Ajoutez vos premières corrections ci-dessous.</span>';
+            return;
+        }
+        _entries.forEach(function (e, i) {
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;background:var(--bg-input);font-size:0.85rem;';
+            row.innerHTML = '<span style="flex:1;color:var(--text-muted);">' + e.from + '</span>'
+                          + '<span style="color:var(--accent);">→</span>'
+                          + '<span style="flex:1;">' + e.to + '</span>'
+                          + '<button data-i="' + i + '" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;" title="Supprimer">🗑</button>';
+            list.appendChild(row);
+        });
+        list.querySelectorAll('button[data-i]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                _entries.splice(parseInt(btn.dataset.i), 1);
+                saveAndRender();
+            });
+        });
+    }
+
+    async function loadDict() {
+        try {
+            var d = await fetch('/api/stt/dict').then(function (r) { return r.json(); });
+            _entries = d.entries || [];
+            renderList();
+        } catch (e) {}
+    }
+
+    async function saveAndRender() {
+        try {
+            await fetch('/api/stt/dict', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entries: _entries })
+            });
+            renderList();
+        } catch (e) {}
+    }
+
+    btnOpen.addEventListener('click', function () {
+        modal.style.display = 'flex';
+        loadDict();
+    });
+
+    btnClose.addEventListener('click', function () {
+        modal.style.display = 'none';
+    });
+
+    modal.addEventListener('click', function (ev) {
+        if (ev.target === modal) modal.style.display = 'none';
+    });
+
+    btnAdd.addEventListener('click', function () {
+        var f = inFrom.value.trim();
+        var t = inTo.value.trim();
+        if (!f || !t) return;
+        _entries.push({ from: f, to: t });
+        inFrom.value = '';
+        inTo.value   = '';
+        saveAndRender();
+    });
+
+    inTo.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') btnAdd.click();
+    });
 })();
 // ── Moteur de recherche web (Brave / Tavily) ──
 (function () {

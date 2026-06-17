@@ -15,7 +15,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260615">
+<link rel="stylesheet" href="/static/styles.css?v=20260617-2">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 </head>
 <body>
@@ -454,6 +454,41 @@
                     <option value="medium">medium — 5 Go</option>
                     <option value="large">large — 10 Go</option>
                 </select>
+            </div>
+        </div>
+
+        <!-- ── TURBO WHISPER ── -->
+        <div class="setting-group" id="stt-turbo-row" style="margin-top:4px;">
+            <label>⚡ Turbo Whisper</label>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="stt-turbo-toggle" aria-label="Activer le mode Turbo Whisper">
+                    <span class="toggle-slider"></span>
+                </label>
+                <span style="font-size:0.78rem;color:var(--text-muted);">
+                    Corrige la transcription via le LLM actif.<br>
+                    <em>Utile en environnement bruyant. Le bouton micro affiche ⚡.</em>
+                </span>
+                <button id="stt-dict-btn" title="Dictionnaire phonétique" style="margin-left:auto;padding:4px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);cursor:pointer;font-size:0.78rem;white-space:nowrap;">📖 Dictionnaire</button>
+            </div>
+        </div>
+
+        <!-- ── MODALE DICTIONNAIRE STT ── -->
+        <div id="stt-dict-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.55);align-items:center;justify-content:center;">
+            <div style="background:var(--bg-panel);border:1px solid var(--border);border-radius:14px;padding:24px;width:min(480px,92vw);max-height:80vh;display:flex;flex-direction:column;gap:14px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <strong style="font-size:1rem;">📖 Dictionnaire phonétique</strong>
+                    <button id="stt-dict-close" style="background:none;border:none;font-size:1.2rem;cursor:pointer;color:var(--text);">✕</button>
+                </div>
+                <p style="font-size:0.78rem;color:var(--text-muted);margin:0;">
+                    Whisper dit → NIMM corrige. Les substitutions sont appliquées avant la correction LLM.
+                </p>
+                <div id="stt-dict-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:8px;"></div>
+                <div style="display:flex;gap:8px;">
+                    <input id="stt-dict-from" placeholder="Whisper dit…" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.85rem;">
+                    <input id="stt-dict-to" placeholder="Correction…" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.85rem;">
+                    <button id="stt-dict-add" style="padding:6px 14px;border-radius:8px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-size:0.85rem;">Ajouter</button>
+                </div>
             </div>
         </div>
 
@@ -1245,6 +1280,6 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260613-2"></script>
+<script src="/static/app.js?v=20260617-2"></script>
 </body>
 </html>
