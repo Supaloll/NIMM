@@ -7311,4 +7311,122 @@ document.getElementById('coanimm-generate-btn')?.addEventListener('click', () =>
 (function () {
     var toggle = document.getElementById('local-mode-toggle');
     var modelField = document.getElementById('local-mode-model');
-    v
+    var msg = document.getElementById('local-mode-msg');
+    if (!toggle) return;
+
+    function updateMsg() {
+        if (!msg) return;
+        msg.textContent = toggle.checked
+            ? 'Activé : inférence et OCR sur la machine (plus lent, sans clé). Web actif.'
+            : '';
+    }
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/local-mode').then(function (r) { return r.json(); });
+            toggle.checked = !!d.enabled;
+            if (modelField) modelField.value = d.ollama_model || '';
+            updateMsg();
+        } catch (e) {}
+    }
+    async function save() {
+        try {
+            await fetch('/api/settings/local-mode', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: toggle.checked,
+                    ollama_model: modelField ? modelField.value.trim() : undefined
+                })
+            });
+            updateMsg();
+        } catch (e) {}
+    }
+    toggle.addEventListener('change', save);
+    if (modelField) modelField.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+// ── Genre de l'utilisateur (formulations genrées des relations) ──
+(function () {
+    var sel = document.getElementById('user-genre-select');
+    if (!sel) return;
+    async function load() {
+        try { var d = await fetch('/api/settings/user-genre').then(function (r) { return r.json(); }); sel.value = d.genre || ''; } catch (e) {}
+    }
+    sel.addEventListener('change', async function () {
+        try {
+            await fetch('/api/settings/user-genre', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ genre: sel.value })
+            });
+        } catch (e) {}
+    });
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+// -- Dictee vocale (STT Whisper) --
+(function () {
+    var toggle    = document.getElementById('stt-enabled-toggle');
+    var modelSel  = document.getElementById('stt-model-select');
+    var modelRow  = document.getElementById('stt-model-row');
+    if (!toggle) return;
+
+    function applyVisibility(enabled) {
+        // Bouton micro desktop
+        if (micBtn) micBtn.style.display = enabled ? '' : 'none';
+        // Bouton micro mobile
+        var mobileBtn = document.getElementById('mobile-mic-btn');
+        if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
+        // Afficher/masquer le selecteur de modele
+        if (modelRow) modelRow.style.display = enabled ? '' : 'none';
+    }
+
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/stt').then(function (r) { return r.json(); });
+            toggle.checked = !!d.enabled;
+            if (modelSel) modelSel.value = d.model || 'base';
+            applyVisibility(!!d.enabled);
+        } catch (e) {}
+    }
+
+    async function save() {
+        try {
+            await fetch('/api/settings/stt', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: toggle.checked,
+                    model:   modelSel ? modelSel.value : 'base'
+                })
+            });
+            applyVisibility(toggle.checked);
+        } catch (e) {}
+    }
+
+    toggle.addEventListener('change', save);
+    if (modelSel) modelSel.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+// ── Moteur de recherche web (Brave / Tavily) ──
+(function () {
+    var sel = document.getElementById('search-provider-select');
+    if (!sel) return;
+    async function load() {
+        try { var d = await fetch('/api/settings/search-provider').then(function (r) { return r.json(); }); sel.value = d.provider || 'auto'; } catch (e) {}
+    }
+    sel.addEventListener('change', async function () {
+        try {
+            await fetch('/api/settings/search-provider', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: sel.value })
+            });
+        } catch (e) {}
+    });
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
+setupSettingsTabs();
+init();
