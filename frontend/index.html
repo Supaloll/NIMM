@@ -1257,4 +1257,29 @@
             <h3 id="export-modal-title"><span aria-hidden="true">📤 </span>Exporter les messages</h3>
             <button class="close-modal" aria-label="Fermer" onclick="document.getElementById('export-modal').classList.add('hidden')">&#x2715;</button>
         </div>
-        <p id="export-count" style="color:var(--text-muted
+        <p id="export-count" style="color:var(--text-muted);font-size:0.92rem;margin:4px 0 14px;"></p>
+        <div style="margin-bottom:14px;">
+            <label for="export-format" style="display:block;font-size:0.88rem;color:var(--text-muted);margin-bottom:6px;">Format</label>
+            <select id="export-format" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.95rem;">
+                <option value="txt">Texte brut (.txt)</option>
+                <option value="rtf">Rich Text (.rtf)</option>
+                <option value="odt">OpenDocument (.odt)</option>
+                <option value="epub">EPUB (.epub)</option>
+                <option value="docx">Word (.docx)</option>
+                <option value="pdf">PDF (.pdf)</option>
+                <option value="mp3">Audio MP3 (.mp3)</option>
+            </select>
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button id="export-do-btn" class="btn-primary" style="flex:1;"
+                    onclick="doExport(document.getElementById('export-format').value)">Exporter</button>
+            <button class="btn-secondary"
+                    onclick="document.getElementById('export-modal').classList.add('hidden')">Annuler</button>
+        </div>
+        <p id="export-status" role="status" aria-live="polite" style="min-height:1.2em;font-size:0.88rem;margin:10px 0 0;"></p>
+    </div>
+</div>
+
+<script src="/static/app.js?v=20260613-2"></script>
+</body>
+</html>
