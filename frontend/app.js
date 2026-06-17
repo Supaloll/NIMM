@@ -955,14 +955,27 @@ function togglePinThread(threadId) {
 function renderSidebar() {
     threadList.innerHTML = '';
 
-    // ── Bouton Recherches, en tête de liste ──
+    // ── Ligne Recherches + Mémoire côte à côte en tête de liste ──
+    const topRow = document.createElement('div');
+    topRow.className = 'sidebar-top-row';
+
     const searchBtn = document.createElement('button');
     searchBtn.id        = 'toggle-search-conversations';
-    searchBtn.className = 'sidebar-section-btn';
+    searchBtn.className = 'sidebar-section-btn sidebar-half-btn';
     searchBtn.title     = 'Recherches (raccourci : Alt+Maj+R)';
     searchBtn.setAttribute('aria-label', 'Recherches');
     searchBtn.innerHTML = '<span aria-hidden="true">🔎</span> Recherches';
-    threadList.appendChild(searchBtn);
+    topRow.appendChild(searchBtn);
+
+    const memoryTopBtn = document.createElement('button');
+    memoryTopBtn.id        = 'toggle-memory';
+    memoryTopBtn.className = 'sidebar-section-btn sidebar-half-btn';
+    memoryTopBtn.title     = 'Mémoire (raccourci : Alt+Maj+M)';
+    memoryTopBtn.setAttribute('aria-label', 'Mémoire');
+    memoryTopBtn.innerHTML = '<span aria-hidden="true">🧠</span> Mémoire';
+    topRow.appendChild(memoryTopBtn);
+
+    threadList.appendChild(topRow);
 
     // ── Ligne Nouveau chat + Nouvel onglet (60/40) ──
     const newChatRow = document.createElement('div');
@@ -1238,13 +1251,6 @@ function renderSidebar() {
     promptBtn.innerHTML = '<span aria-hidden="true">📝</span> Promptothèque';
     threadList.appendChild(promptBtn);
 
-    const memoryBtn = document.createElement('button');
-    memoryBtn.id        = 'toggle-memory';
-    memoryBtn.className = 'sidebar-section-btn';
-    memoryBtn.title     = 'Mémoire (raccourci : Alt+Maj+M)';
-    memoryBtn.setAttribute('aria-label', 'Mémoire');
-    memoryBtn.innerHTML = '<span aria-hidden="true">🧠</span> Mémoire';
-    threadList.appendChild(memoryBtn);
 }
 
 async function selectThread(threadId) {
@@ -3479,16 +3485,15 @@ document.addEventListener('keydown', (e) => {
 
 const _DRAFT_KEY = 'nimm_draft';
 
-function _saveDraft() {
-    const val = userInput.value;
-    if (val.trim()) {
-        localStorage.setItem(_DRAFT_KEY, val);
-        _showDraftIndicator('💾');
-    } else {
-        localStorage.removeItem(_DRAFT_KEY);
-        _hideDraftIndicator();
+    function _saveDraft() {
+        const val = userInput.value;
+        if (val.trim()) {
+            localStorage.setItem(_DRAFT_KEY, val);
+        } else {
+            localStorage.removeItem(_DRAFT_KEY);
+            _hideDraftIndicator();
+        }
     }
-}
 
 function _clearDraft() {
     localStorage.removeItem(_DRAFT_KEY);
@@ -6955,9 +6960,63 @@ document.addEventListener('click', () => {
 // AGENT COANIMM
 // ══════════════════════════════════════════
 
-let _coanimmPendingAction = null; // { kind: 'script'|'generated', scriptId?, label, consigne? }
+// { kind: 'script'|'explore'|'generated', scriptId?, label, consigne?, needs_explore? }
+let _coanimmPendingAction = null;
+let _coanimmCurrentConsigne = null; // conservée pour le flux Plan→Execute
 
-// Ouverture de la modale Agent CoaNIMM
+// ── Helpers UI ──
+
+function _coanimmHideAll() {
+    document.getElementById('coanimm-plan').classList.add('hidden');
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    document.getElementById('coanimm-result').classList.add('hidden');
+    document.getElementById('coanimm-result-code-box')?.classList.add('hidden');
+    document.getElementById('coanimm-explore-result')?.classList.add('hidden');
+}
+
+function _coanimmShowPermission(label) {
+    document.getElementById('coanimm-plan').classList.add('hidden');
+    const permBox = document.getElementById('coanimm-permission');
+    document.getElementById('coanimm-permission-text').textContent =
+        `CoaNIMM demande l'autorisation d'effectuer : ${label}.`;
+    permBox.classList.remove('hidden');
+    setTimeout(() => { document.getElementById('coanimm-allow-once')?.focus(); }, 50);
+}
+
+function _coanimmShowResult(data, label) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    const resultBox = document.getElementById('coanimm-result');
+    resultBox.classList.remove('hidden');
+    const statusEl = document.getElementById('coanimm-result-status');
+    const stdoutEl = document.getElementById('coanimm-result-stdout');
+    const stderrEl = document.getElementById('coanimm-result-stderr');
+    const codeBox  = document.getElementById('coanimm-result-code-box');
+    const codeEl   = document.getElementById('coanimm-result-code');
+
+    if (data.status === 'ok') {
+        statusEl.textContent = `Terminé (code retour ${data.returncode}).`;
+        stdoutEl.value = data.stdout || '';
+        stderrEl.value = data.stderr || '';
+    } else {
+        statusEl.textContent = `Erreur : ${data.message || 'erreur inconnue.'}`;
+        stdoutEl.value = data.stdout || '';
+        stderrEl.value = data.stderr || '';
+    }
+    if (data.files_info) {
+        stdoutEl.value = (stdoutEl.value ? stdoutEl.value + '\n\n' : '') + data.files_info;
+    }
+    if (typeof data.code === 'string') {
+        codeEl.value = data.code;
+        codeBox.classList.remove('hidden');
+    } else {
+        codeEl.value = '';
+        codeBox.classList.add('hidden');
+    }
+    setTimeout(() => { statusEl.focus(); }, 50);
+}
+
+// ── Ouverture modale ──
+
 document.getElementById('toggle-coanimm')?.addEventListener('click', function() {
     document.getElementById('coanimm-modal').classList.remove('hidden');
     loadCoanimm();
@@ -6965,9 +7024,7 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
 
 async function loadCoanimm() {
     const list = document.getElementById('coanimm-script-list');
-    document.getElementById('coanimm-permission').classList.add('hidden');
-    document.getElementById('coanimm-result').classList.add('hidden');
-    document.getElementById('coanimm-result-code-box')?.classList.add('hidden');
+    _coanimmHideAll();
     list.textContent = 'Chargement…';
 
     try {
@@ -6984,16 +7041,13 @@ async function loadCoanimm() {
         scripts.forEach(([id, entry]) => {
             const row = document.createElement('div');
             row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';
-
             const span = document.createElement('span');
             span.textContent = entry.label || '(sans titre)';
             span.style.flex = '1';
-
             const btn = document.createElement('button');
             btn.textContent = '▶️ Exécuter';
             btn.style.cssText = 'background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:0.82rem;cursor:pointer;';
             btn.addEventListener('click', () => runCoanimmScript(id, entry.label || id, null));
-
             row.appendChild(span);
             row.appendChild(btn);
             list.appendChild(row);
@@ -7004,135 +7058,191 @@ async function loadCoanimm() {
     }
 }
 
-function _coanimmShowResult(data, label) {
-    const resultBox = document.getElementById('coanimm-result');
-    resultBox.classList.remove('hidden');
-    const statusEl = document.getElementById('coanimm-result-status');
-    const stdoutEl = document.getElementById('coanimm-result-stdout');
-    const stderrEl = document.getElementById('coanimm-result-stderr');
-    const codeBox = document.getElementById('coanimm-result-code-box');
-    const codeEl = document.getElementById('coanimm-result-code');
-
-    if (data.status === 'ok') {
-        statusEl.textContent = `Script « ${label} » terminé (code retour ${data.returncode}).`;
-        stdoutEl.value = data.stdout || '';
-        stderrEl.value = data.stderr || '';
-    } else {
-        statusEl.textContent = `Erreur : ${data.message || 'erreur inconnue.'}`;
-        stdoutEl.value = '';
-        stderrEl.value = '';
-    }
-
-    if (typeof data.code === 'string') {
-        codeEl.value = data.code;
-        codeBox.classList.remove('hidden');
-    } else {
-        codeEl.value = '';
-        codeBox.classList.add('hidden');
-    }
-
-    setTimeout(() => { if (!_isMobile) statusEl.focus(); }, 50);
-}
-
-function _coanimmShowPermission(label) {
-    const permBox = document.getElementById('coanimm-permission');
-    document.getElementById('coanimm-permission-text').textContent =
-        `L'agent CoaNIMM demande l'autorisation d'exécuter : ${label}.`;
-    permBox.classList.remove('hidden');
-    setTimeout(() => { if (!_isMobile) document.getElementById('coanimm-allow-once')?.focus(); }, 50);
-}
+// ── Scripts Promptothèque ──
 
 async function runCoanimmScript(scriptId, label, confirmScope) {
     document.getElementById('coanimm-permission').classList.add('hidden');
-
     try {
         const r = await fetch('/api/coanimm/run_script', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                script_id: scriptId,
-                thread_id: currentThreadId || null,
-                confirm_scope: confirmScope,
-            }),
+            body: JSON.stringify({ script_id: scriptId, thread_id: currentThreadId || null, confirm_scope: confirmScope }),
         });
         const data = await r.json();
-
         if (data.status === 'permission_required') {
             _coanimmPendingAction = { kind: 'script', scriptId, label };
             _coanimmShowPermission(`le script « ${label} »`);
             return;
         }
-
         _coanimmShowResult(data, label);
     } catch (e) {
-        console.error('[COANIMM] Erreur exécution :', e);
-        document.getElementById('coanimm-result').classList.remove('hidden');
-        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de l\'exécution.';
-        document.getElementById('coanimm-result-stdout').value = '';
-        document.getElementById('coanimm-result-stderr').value = '';
-        document.getElementById('coanimm-result-code-box').classList.add('hidden');
+        console.error('[COANIMM] Erreur exécution script :', e);
+        _coanimmShowResult({ status: 'error', message: 'Erreur réseau.' }, label);
+    }
+}
+
+// ── Flux Plan → Explore → Execute ──
+
+async function runCoanimmPlan(consigne) {
+    _coanimmCurrentConsigne = consigne;
+    _coanimmHideAll();
+
+    const planBox   = document.getElementById('coanimm-plan');
+    const planText  = document.getElementById('coanimm-plan-text');
+    planText.textContent = 'Analyse en cours…';
+    planBox.classList.remove('hidden');
+    document.getElementById('coanimm-plan-ok').disabled = true;
+    document.getElementById('coanimm-plan-no').disabled = true;
+
+    try {
+        const r = await fetch('/api/coanimm/plan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ consigne, thread_id: currentThreadId || null }),
+        });
+        const data = await r.json();
+
+        if (data.status === 'error') {
+            planText.textContent = `Erreur lors de la planification : ${data.message}`;
+            document.getElementById('coanimm-plan-no').disabled = false;
+            return;
+        }
+
+        // data = { status:'ok', plan:'...', needs_explore: true|false }
+        planText.textContent = data.plan || '(aucun plan retourné)';
+        document.getElementById('coanimm-plan-ok').disabled = false;
+        document.getElementById('coanimm-plan-no').disabled = false;
+        document.getElementById('coanimm-plan-ok').dataset.needsExplore = data.needs_explore ? '1' : '';
+        setTimeout(() => { document.getElementById('coanimm-plan-ok').focus(); }, 50);
+
+    } catch (e) {
+        console.error('[COANIMM] Erreur planification :', e);
+        planText.textContent = 'Erreur réseau lors de la planification.';
+        document.getElementById('coanimm-plan-no').disabled = false;
+    }
+}
+
+async function runCoanimmExplore(consigne, confirmScope) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
+    const planText = document.getElementById('coanimm-plan-text');
+    const exploreBox = document.getElementById('coanimm-explore-result');
+    const exploreOut = document.getElementById('coanimm-explore-stdout');
+
+    planText.textContent = (planText.textContent || '') + '\n\n[Exploration du disque en cours…]';
+    exploreBox.classList.add('hidden');
+
+    try {
+        const r = await fetch('/api/coanimm/explore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ consigne, thread_id: currentThreadId || null, confirm_scope: confirmScope }),
+        });
+        const data = await r.json();
+
+        if (data.status === 'permission_required') {
+            _coanimmPendingAction = { kind: 'explore', consigne, label: 'Explorer le disque en lecture seule' };
+            _coanimmShowPermission('explorer le disque en lecture seule');
+            return;
+        }
+
+        if (data.status === 'error') {
+            exploreOut.value = `Erreur : ${data.message}`;
+            exploreBox.classList.remove('hidden');
+            return;
+        }
+
+        // Afficher le résultat d'exploration, puis continuer vers exécution
+        exploreOut.value = data.stdout || '(aucune sortie)';
+        exploreBox.classList.remove('hidden');
+        // Maintenant demander permission pour exécution
+        runCoanimmGenerated(consigne, null);
+
+    } catch (e) {
+        console.error('[COANIMM] Erreur exploration :', e);
+        exploreOut.value = 'Erreur réseau lors de l\'exploration.';
+        exploreBox.classList.remove('hidden');
     }
 }
 
 async function runCoanimmGenerated(consigne, confirmScope) {
     document.getElementById('coanimm-permission').classList.add('hidden');
+    const planText = document.getElementById('coanimm-plan-text');
+    if (planText && !document.getElementById('coanimm-result').classList.contains('hidden') === false) {
+        planText.textContent = (planText.textContent || '').replace(/\n\n\[Génération.*/, '')
+            + '\n\n[Génération et exécution en cours…]';
+    }
 
     try {
         const r = await fetch('/api/coanimm/generate_and_run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                consigne,
-                thread_id: currentThreadId || null,
-                confirm_scope: confirmScope,
-            }),
+            body: JSON.stringify({ consigne, thread_id: currentThreadId || null, confirm_scope: confirmScope }),
         });
         const data = await r.json();
 
         if (data.status === 'permission_required') {
-            _coanimmPendingAction = { kind: 'generated', consigne, label: 'la consigne libre' };
-            _coanimmShowPermission("la génération et l'exécution d'un script à partir de votre consigne");
+            _coanimmPendingAction = { kind: 'generated', consigne };
+            _coanimmShowPermission("générer et exécuter un script Python");
             return;
         }
 
         _coanimmShowResult(data, 'généré');
     } catch (e) {
         console.error('[COANIMM] Erreur génération/exécution :', e);
-        document.getElementById('coanimm-result').classList.remove('hidden');
-        document.getElementById('coanimm-result-status').textContent = 'Erreur réseau lors de la génération/exécution.';
-        document.getElementById('coanimm-result-stdout').value = '';
-        document.getElementById('coanimm-result-stderr').value = '';
-        document.getElementById('coanimm-result-code-box').classList.add('hidden');
+        _coanimmShowResult({ status: 'error', message: 'Erreur réseau.' }, 'généré');
     }
 }
+
+// ── Reprise après permission ──
 
 function _coanimmResumePending(confirmScope) {
     if (!_coanimmPendingAction) return;
     const action = _coanimmPendingAction;
+    _coanimmPendingAction = null;
     document.getElementById('coanimm-permission').classList.add('hidden');
     if (action.kind === 'generated') {
         runCoanimmGenerated(action.consigne, confirmScope);
+    } else if (action.kind === 'explore') {
+        runCoanimmExplore(action.consigne, confirmScope);
     } else {
         runCoanimmScript(action.scriptId, action.label, confirmScope);
     }
 }
 
-document.getElementById('coanimm-allow-once')?.addEventListener('click', () => _coanimmResumePending('once'));
+document.getElementById('coanimm-allow-once')?.addEventListener('click',    () => _coanimmResumePending('once'));
 document.getElementById('coanimm-allow-project')?.addEventListener('click', () => _coanimmResumePending('project'));
-document.getElementById('coanimm-allow-always')?.addEventListener('click', () => _coanimmResumePending('always'));
+document.getElementById('coanimm-allow-always')?.addEventListener('click',  () => _coanimmResumePending('always'));
 document.getElementById('coanimm-deny')?.addEventListener('click', () => {
     _coanimmPendingAction = null;
     document.getElementById('coanimm-permission').classList.add('hidden');
 });
 
+// ── Boutons plan OK / Non ──
+
+document.getElementById('coanimm-plan-ok')?.addEventListener('click', () => {
+    const consigne = _coanimmCurrentConsigne;
+    if (!consigne) return;
+    const needsExplore = document.getElementById('coanimm-plan-ok').dataset.needsExplore === '1';
+    if (needsExplore) {
+        runCoanimmExplore(consigne, null);
+    } else {
+        runCoanimmGenerated(consigne, null);
+    }
+});
+
+document.getElementById('coanimm-plan-no')?.addEventListener('click', () => {
+    document.getElementById('coanimm-plan').classList.add('hidden');
+    const input = document.getElementById('coanimm-consigne');
+    input?.focus();
+});
+
+// ── Bouton Générer → Plan d'abord ──
+
 document.getElementById('coanimm-generate-btn')?.addEventListener('click', () => {
     const input = document.getElementById('coanimm-consigne');
     const consigne = (input?.value || '').trim();
-    if (!consigne) {
-        input?.focus();
-        return;
-    }
-    runCoanimmGenerated(consigne, null);
+    if (!consigne) { input?.focus(); return; }
+    runCoanimmPlan(consigne);
 });
 
 // ══════════════════════════════════════════
@@ -7201,122 +7311,4 @@ document.getElementById('coanimm-generate-btn')?.addEventListener('click', () =>
 (function () {
     var toggle = document.getElementById('local-mode-toggle');
     var modelField = document.getElementById('local-mode-model');
-    var msg = document.getElementById('local-mode-msg');
-    if (!toggle) return;
-
-    function updateMsg() {
-        if (!msg) return;
-        msg.textContent = toggle.checked
-            ? 'Activé : inférence et OCR sur la machine (plus lent, sans clé). Web actif.'
-            : '';
-    }
-    async function load() {
-        try {
-            var d = await fetch('/api/settings/local-mode').then(function (r) { return r.json(); });
-            toggle.checked = !!d.enabled;
-            if (modelField) modelField.value = d.ollama_model || '';
-            updateMsg();
-        } catch (e) {}
-    }
-    async function save() {
-        try {
-            await fetch('/api/settings/local-mode', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    enabled: toggle.checked,
-                    ollama_model: modelField ? modelField.value.trim() : undefined
-                })
-            });
-            updateMsg();
-        } catch (e) {}
-    }
-    toggle.addEventListener('change', save);
-    if (modelField) modelField.addEventListener('change', save);
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-// ── Genre de l'utilisateur (formulations genrées des relations) ──
-(function () {
-    var sel = document.getElementById('user-genre-select');
-    if (!sel) return;
-    async function load() {
-        try { var d = await fetch('/api/settings/user-genre').then(function (r) { return r.json(); }); sel.value = d.genre || ''; } catch (e) {}
-    }
-    sel.addEventListener('change', async function () {
-        try {
-            await fetch('/api/settings/user-genre', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ genre: sel.value })
-            });
-        } catch (e) {}
-    });
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-// -- Dictee vocale (STT Whisper) --
-(function () {
-    var toggle    = document.getElementById('stt-enabled-toggle');
-    var modelSel  = document.getElementById('stt-model-select');
-    var modelRow  = document.getElementById('stt-model-row');
-    if (!toggle) return;
-
-    function applyVisibility(enabled) {
-        // Bouton micro desktop
-        if (micBtn) micBtn.style.display = enabled ? '' : 'none';
-        // Bouton micro mobile
-        var mobileBtn = document.getElementById('mobile-mic-btn');
-        if (mobileBtn) mobileBtn.style.display = enabled ? '' : 'none';
-        // Afficher/masquer le selecteur de modele
-        if (modelRow) modelRow.style.display = enabled ? '' : 'none';
-    }
-
-    async function load() {
-        try {
-            var d = await fetch('/api/settings/stt').then(function (r) { return r.json(); });
-            toggle.checked = !!d.enabled;
-            if (modelSel) modelSel.value = d.model || 'base';
-            applyVisibility(!!d.enabled);
-        } catch (e) {}
-    }
-
-    async function save() {
-        try {
-            await fetch('/api/settings/stt', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    enabled: toggle.checked,
-                    model:   modelSel ? modelSel.value : 'base'
-                })
-            });
-            applyVisibility(toggle.checked);
-        } catch (e) {}
-    }
-
-    toggle.addEventListener('change', save);
-    if (modelSel) modelSel.addEventListener('change', save);
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-// ── Moteur de recherche web (Brave / Tavily) ──
-(function () {
-    var sel = document.getElementById('search-provider-select');
-    if (!sel) return;
-    async function load() {
-        try { var d = await fetch('/api/settings/search-provider').then(function (r) { return r.json(); }); sel.value = d.provider || 'auto'; } catch (e) {}
-    }
-    sel.addEventListener('change', async function () {
-        try {
-            await fetch('/api/settings/search-provider', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: sel.value })
-            });
-        } catch (e) {}
-    });
-    document.getElementById('toggle-settings')?.addEventListener('click', load);
-    load();
-})();
-
-setupSettingsTabs();
-init();
+    v

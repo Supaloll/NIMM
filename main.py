@@ -1059,6 +1059,65 @@ async def coanimm_run_script(req: CoanimmRunScriptRequest):
         raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
     return run_script(req.script_id, req.args, req.thread_id, req.confirm_scope)
 
+class CoanimmPlanRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/plan")
+async def coanimm_plan(req: CoanimmPlanRequest):
+    """Génère un plan en langage naturel (sans code) pour validation par l'utilisateur."""
+    from modules.coanimm import generate_plan
+    if not req.consigne.strip():
+        return {'status': 'error', 'message': 'La consigne est vide.'}
+    try:
+        result = await generate_plan(req.consigne, req.thread_id)
+        return {'status': 'ok', 'plan': result['plan'], 'needs_explore': result['needs_explore']}
+    except Exception as e:
+        detail = str(e) or type(e).__name__
+        return {'status': 'error', 'message': f"Erreur lors de la planification : {detail}"}
+
+class CoanimmExploreRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None
+
+@app.post("/api/coanimm/explore")
+async def coanimm_explore(req: CoanimmExploreRequest):
+    """Génère et exécute un script d'exploration (lecture seule) du disque."""
+    from modules.coanimm import explore_directory
+    if req.confirm_scope not in (None, 'once', 'project', 'always'):
+        raise HTTPException(400, "confirm_scope invalide.")
+    return await explore_directory(req.consigne, req.thread_id, req.confirm_scope)
+
+class CoanimmGenerateRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None
+
+@app.post("/api/coanimm/generate_and_run")
+async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
+    """Génère un script Python à partir d'une consigne puis l'exécute dans le bac à sable."""
+    from modules.coanimm import run_generated
+    if req.confirm_scope not in (None, 'once', 'project', 'always'):
+        raise HTTPException(400, "confirm_scope invalide.")
+    return await run_generated(req.consigne, req.thread_id, req.confirm_scope)
+
+class CoanimmRunCodeDirectRequest(BaseModel):
+    code: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/run_code_direct")
+async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
+    """Exécute du code Python brut (modifié par l'utilisateur) dans le bac à sable."""
+    from modules.coanimm import execute_code, GENERATED_ACTION
+    import core.database as _db
+    if not req.code.strip():
+        return {'status': 'error', 'message': 'Le code est vide.'}
+    if not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+        return {'status': 'permission_required', 'action': GENERATED_ACTION,
+                'label': "re-exécution de code modifié"}
+    return execute_code(req.code, req.thread_id)
+
 @app.get("/api/search")
 async def search_conversations_route(q: str = "", k: int = 8):
     """Recherche par sens dans l'historique des conversations (embeddings)."""
@@ -2105,7 +2164,6 @@ async def images_list():
 @app.get("/api/images/file/{filename}")
 async def images_file(filename: str):
     """Sert le fichier image depuis data/images/."""
-    # Sécurité : nom de fichier simple, pas de traversée de chemin
     if '/' in filename or '\\' in filename or '..' in filename:
         raise HTTPException(400, "Nom de fichier invalide")
     filepath = os.path.join(_IMAGES_DIR, filename)
@@ -2148,4 +2206,3 @@ async def images_delete(img_id: int):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
-
