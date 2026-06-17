@@ -56,7 +56,7 @@
             </button>
             <button id="toggle-enrich" title="Enrichissement web" aria-label="Enrichissement web"><span aria-hidden="true">🌐</span></button>
             <button id="toggle-settings" title="Paramètres" aria-label="Paramètres"><span aria-hidden="true">⚙️</span></button>
-            <button id="toggle-coanimm" title="Agent CoaNIMM" aria-label="Agent CoaNIMM"><span aria-hidden="true">🤖</span></button>
+            <button id="toggle-coanimm" title="Agent CoaNIMM" aria-label="Agent CoaNIMM"><span aria-hidden="true">🐸</span></button>
         </div>
     </header>
 
@@ -775,7 +775,7 @@
 <div id="coanimm-modal" class="modal-overlay hidden">
     <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="coanimm-title" style="max-width:620px;">
         <div class="modal-header">
-            <h3 id="coanimm-title" tabindex="-1">🤖 Agent CoaNIMM</h3>
+            <h3 id="coanimm-title" tabindex="-1">🐸 Agent CoaNIMM</h3>
             <button class="close-modal" aria-label="Fermer l'agent CoaNIMM">✕</button>
         </div>
 
@@ -814,6 +814,25 @@
             </div>
         </div>
 
+        <!-- PRÉVISUALISATION DU CODE GÉNÉRÉ -->
+        <div id="coanimm-code-preview" class="hidden" role="region" aria-live="polite"
+             style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;">
+            <p style="margin:0 0 8px;font-size:0.85rem;font-weight:600;">Code généré par CoaNIMM</p>
+            <button id="coanimm-code-toggle"
+                    aria-expanded="true" aria-controls="coanimm-code-area"
+                    style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:4px 12px;color:var(--text);font-size:0.82rem;cursor:pointer;margin-bottom:6px;">
+                Masquer le code
+            </button>
+            <div id="coanimm-code-area" style="margin-bottom:8px;">
+                <textarea id="coanimm-code-edit" rows="14"
+                          aria-label="Code Python généré, modifiable"
+                          style="width:100%;box-sizing:border-box;font-family:monospace;font-size:0.80rem;
+                                 background:var(--bg-input);color:var(--text);border:1px solid var(--border);
+                                 border-radius:4px;padding:6px;resize:vertical;white-space:pre;"></textarea>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0 0;">Modifie le code si besoin, puis clique sur « OK, vas-y ! » pour l'exécuter.</p>
+        </div>
+
         <div id="coanimm-permission" class="hidden" style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;">
             <p id="coanimm-permission-text" style="margin:0 0 8px;font-size:0.85rem;"></p>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -824,9 +843,9 @@
             </div>
         </div>
 
-        <div id="coanimm-result" class="hidden" style="margin-top:14px;">
+        <div id="coanimm-result" class="hidden" role="status" aria-live="polite" style="margin-top:14px;">
             <h4 style="margin:0 0 6px;font-size:0.9rem;">Résultat de l'exécution</h4>
-            <p id="coanimm-result-status" style="margin:0 0 6px;font-size:0.85rem;"></p>
+            <p id="coanimm-result-status" tabindex="-1" style="margin:0 0 6px;font-size:0.85rem;"></p>
             <div id="coanimm-result-code-box" class="hidden">
                 <label for="coanimm-result-code" style="font-size:0.8rem;display:block;margin-bottom:2px;">Code généré et exécuté :</label>
                 <textarea id="coanimm-result-code" readonly rows="8" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;box-sizing:border-box;"></textarea>
@@ -1238,4 +1257,4 @@
             <h3 id="export-modal-title"><span aria-hidden="true">📤 </span>Exporter les messages</h3>
             <button class="close-modal" aria-label="Fermer" onclick="document.getElementById('export-modal').classList.add('hidden')">&#x2715;</button>
         </div>
-        <p id="export-count" style="color:var(--text-muted);font-size:0.92rem;margin:4px 0 
+        <p id="export-count" style="color:var(--text-muted

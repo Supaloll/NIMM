@@ -6968,6 +6968,7 @@ let _coanimmCurrentConsigne = null; // conservée pour le flux Plan→Execute
 
 function _coanimmHideAll() {
     document.getElementById('coanimm-plan').classList.add('hidden');
+    document.getElementById('coanimm-code-preview').classList.add('hidden');
     document.getElementById('coanimm-permission').classList.add('hidden');
     document.getElementById('coanimm-result').classList.add('hidden');
     document.getElementById('coanimm-result-code-box')?.classList.add('hidden');
@@ -7012,7 +7013,11 @@ function _coanimmShowResult(data, label) {
         codeEl.value = '';
         codeBox.classList.add('hidden');
     }
-    setTimeout(() => { statusEl.focus(); }, 50);
+    // Focus sur le textarea stdout : les lecteurs d'écran lisent son contenu
+    setTimeout(() => {
+        const t = document.getElementById('coanimm-result-stdout');
+        if (t) t.focus();
+    }, 100);
 }
 
 // ── Ouverture modale ──
@@ -7081,18 +7086,21 @@ async function runCoanimmScript(scriptId, label, confirmScope) {
     }
 }
 
-// ── Flux Plan → Explore → Execute ──
+// ── Flux Plan + Code (simultané) → OK → Permission → Exécution ──
 
 async function runCoanimmPlan(consigne) {
     _coanimmCurrentConsigne = consigne;
     _coanimmHideAll();
 
-    const planBox   = document.getElementById('coanimm-plan');
-    const planText  = document.getElementById('coanimm-plan-text');
+    const planBox  = document.getElementById('coanimm-plan');
+    const planText = document.getElementById('coanimm-plan-text');
+    const okBtn    = document.getElementById('coanimm-plan-ok');
+    const noBtn    = document.getElementById('coanimm-plan-no');
+
     planText.textContent = 'Analyse en cours…';
     planBox.classList.remove('hidden');
-    document.getElementById('coanimm-plan-ok').disabled = true;
-    document.getElementById('coanimm-plan-no').disabled = true;
+    okBtn.disabled = true;
+    noBtn.disabled = true;
 
     try {
         const r = await fetch('/api/coanimm/plan', {
@@ -7103,28 +7111,62 @@ async function runCoanimmPlan(consigne) {
         const data = await r.json();
 
         if (data.status === 'error') {
-            planText.textContent = `Erreur lors de la planification : ${data.message}`;
-            document.getElementById('coanimm-plan-no').disabled = false;
+            planText.textContent = 'Erreur lors de la planification : ' + data.message;
+            noBtn.disabled = false;
             return;
         }
 
-        // data = { status:'ok', plan:'...', needs_explore: true|false }
-        planText.textContent = data.plan || '(aucun plan retourné)';
-        document.getElementById('coanimm-plan-ok').disabled = false;
-        document.getElementById('coanimm-plan-no').disabled = false;
-        document.getElementById('coanimm-plan-ok').dataset.needsExplore = data.needs_explore ? '1' : '';
-        setTimeout(() => { document.getElementById('coanimm-plan-ok').focus(); }, 50);
+        planText.textContent = data.plan || '(aucun plan retourn\xe9)';
+        okBtn.disabled = false;
+        noBtn.disabled = false;
+        okBtn.dataset.needsExplore = data.needs_explore ? '1' : '';
+        setTimeout(() => okBtn.focus(), 50);
+
+        // G\xe9n\xe9rer le code en parall\xe8le — affich\xe9 repli\xe9 sous le plan
+        _coanimmStartCodeGen(consigne, '');
 
     } catch (e) {
         console.error('[COANIMM] Erreur planification :', e);
-        planText.textContent = 'Erreur réseau lors de la planification.';
-        document.getElementById('coanimm-plan-no').disabled = false;
+        planText.textContent = 'Erreur r\xe9seau lors de la planification.';
+        noBtn.disabled = false;
     }
 }
 
+// G\xe9n\xe8re le code en arri\xe8re-plan et l’affiche repli\xe9 sous le plan
+async function _coanimmStartCodeGen(consigne, exploreStdout) {
+    const codeEdit = document.getElementById('coanimm-code-edit');
+    const preview  = document.getElementById('coanimm-code-preview');
+    const codeArea = document.getElementById('coanimm-code-area');
+
+    // Montrer le bloc code repli\xe9 avec message provisoire
+    codeEdit.value = '# G\xe9n\xe9ration en cours…';
+    codeArea.classList.add('hidden');
+    document.getElementById('coanimm-code-toggle').textContent = 'Afficher le code';
+    document.getElementById('coanimm-code-toggle').setAttribute('aria-expanded', 'false');
+    preview.classList.remove('hidden');
+
+    try {
+        const r = await fetch('/api/coanimm/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                consigne,
+                thread_id: currentThreadId || null,
+                explore_stdout: exploreStdout || null,
+            }),
+        });
+        const data = await r.json();
+        codeEdit.value = (data.status === 'ok') ? (data.code || '') : ('# Erreur : ' + (data.message || 'inconnue'));
+    } catch (e) {
+        codeEdit.value = '# Erreur r\xe9seau lors de la g\xe9n\xe9ration.';
+    }
+}
+
+// ── Exploration lecture seule (si plan le requiert) ──
+
 async function runCoanimmExplore(consigne, confirmScope) {
     document.getElementById('coanimm-permission').classList.add('hidden');
-    const planText = document.getElementById('coanimm-plan-text');
+    const planText  = document.getElementById('coanimm-plan-text');
     const exploreBox = document.getElementById('coanimm-explore-result');
     const exploreOut = document.getElementById('coanimm-explore-stdout');
 
@@ -7140,68 +7182,65 @@ async function runCoanimmExplore(consigne, confirmScope) {
         const data = await r.json();
 
         if (data.status === 'permission_required') {
-            _coanimmPendingAction = { kind: 'explore', consigne, label: 'Explorer le disque en lecture seule' };
+            _coanimmPendingAction = { kind: 'explore', consigne };
             _coanimmShowPermission('explorer le disque en lecture seule');
             return;
         }
-
         if (data.status === 'error') {
-            exploreOut.value = `Erreur : ${data.message}`;
+            exploreOut.value = 'Erreur : ' + data.message;
             exploreBox.classList.remove('hidden');
             return;
         }
-
-        // Afficher le résultat d'exploration, puis continuer vers exécution
         exploreOut.value = data.stdout || '(aucune sortie)';
         exploreBox.classList.remove('hidden');
-        // Maintenant demander permission pour exécution
-        runCoanimmGenerated(consigne, null);
+
+        // R\xe9-g\xe9n\xe9rer le code avec le contexte d’exploration, puis ex\xe9cuter
+        planText.textContent += '\n\n[G\xe9n\xe9ration du code avec contexte d’exploration…]';
+        await _coanimmStartCodeGen(consigne, data.stdout || '');
+        const code = document.getElementById('coanimm-code-edit')?.value || '';
+        runCoanimmExecuteCode(code, null);
 
     } catch (e) {
         console.error('[COANIMM] Erreur exploration :', e);
-        exploreOut.value = 'Erreur réseau lors de l\'exploration.';
+        exploreOut.value = 'Erreur r\xe9seau lors de l’exploration.';
         exploreBox.classList.remove('hidden');
     }
 }
 
-async function runCoanimmGenerated(consigne, confirmScope) {
-    document.getElementById('coanimm-permission').classList.add('hidden');
-    const planText = document.getElementById('coanimm-plan-text');
-    if (planText && !document.getElementById('coanimm-result').classList.contains('hidden') === false) {
-        planText.textContent = (planText.textContent || '').replace(/\n\n\[Génération.*/, '')
-            + '\n\n[Génération et exécution en cours…]';
-    }
+// ── Ex\xe9cution du code (avec permission) ──
 
+async function runCoanimmExecuteCode(code, confirmScope) {
+    document.getElementById('coanimm-permission').classList.add('hidden');
     try {
-        const r = await fetch('/api/coanimm/generate_and_run', {
+        const r = await fetch('/api/coanimm/run_code_direct', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ consigne, thread_id: currentThreadId || null, confirm_scope: confirmScope }),
+            body: JSON.stringify({ code, thread_id: currentThreadId || null, confirm_scope: confirmScope }),
         });
         const data = await r.json();
 
         if (data.status === 'permission_required') {
-            _coanimmPendingAction = { kind: 'generated', consigne };
-            _coanimmShowPermission("générer et exécuter un script Python");
+            _coanimmPendingAction = { kind: 'run_code', code };
+            _coanimmShowPermission('ex\xe9cuter le code Python');
             return;
         }
-
-        _coanimmShowResult(data, 'généré');
+        _coanimmHideAll();
+        _coanimmShowResult(data, 'ex\xe9cut\xe9');
     } catch (e) {
-        console.error('[COANIMM] Erreur génération/exécution :', e);
-        _coanimmShowResult({ status: 'error', message: 'Erreur réseau.' }, 'généré');
+        console.error('[COANIMM] Erreur ex\xe9cution :', e);
+        _coanimmShowResult({ status: 'error', message: 'Erreur r\xe9seau.' }, 'ex\xe9cut\xe9');
     }
 }
 
-// ── Reprise après permission ──
+// ── Reprise apr\xe8s permission ──
 
 function _coanimmResumePending(confirmScope) {
     if (!_coanimmPendingAction) return;
     const action = _coanimmPendingAction;
     _coanimmPendingAction = null;
     document.getElementById('coanimm-permission').classList.add('hidden');
-    if (action.kind === 'generated') {
-        runCoanimmGenerated(action.consigne, confirmScope);
+    if (action.kind === 'run_code') {
+        runCoanimmExecuteCode(action.code, confirmScope);
     } else if (action.kind === 'explore') {
         runCoanimmExplore(action.consigne, confirmScope);
     } else {
@@ -7217,26 +7256,47 @@ document.getElementById('coanimm-deny')?.addEventListener('click', () => {
     document.getElementById('coanimm-permission').classList.add('hidden');
 });
 
-// ── Boutons plan OK / Non ──
+// ── Toggle affichage du code ──
+
+document.getElementById('coanimm-code-toggle')?.addEventListener('click', () => {
+    const area  = document.getElementById('coanimm-code-area');
+    const btn   = document.getElementById('coanimm-code-toggle');
+    const shown = !area.classList.contains('hidden');
+    area.classList.toggle('hidden', shown);
+    btn.textContent = shown ? 'Afficher le code' : 'Masquer le code';
+    btn.setAttribute('aria-expanded', shown ? 'false' : 'true');
+    if (!shown) setTimeout(() => document.getElementById('coanimm-code-edit')?.focus(), 50);
+});
+
+// ── Bouton plan OK : ex\xe9cuter le code tel quel (\xe9ventuellement modifi\xe9) ──
 
 document.getElementById('coanimm-plan-ok')?.addEventListener('click', () => {
     const consigne = _coanimmCurrentConsigne;
     if (!consigne) return;
+    const codeEdit = document.getElementById('coanimm-code-edit');
+    const code = codeEdit?.value || '';
+    if (!code.trim() || code.startsWith('# G\xe9n\xe9ration en cours')) {
+        // Code pas encore pr\xeat
+        document.getElementById('coanimm-plan-text').textContent +=
+            '\n[Patientez, le code est encore en cours de g\xe9n\xe9ration…]';
+        return;
+    }
+    document.getElementById('coanimm-plan-ok').disabled = true;
+    document.getElementById('coanimm-plan-no').disabled = true;
     const needsExplore = document.getElementById('coanimm-plan-ok').dataset.needsExplore === '1';
     if (needsExplore) {
         runCoanimmExplore(consigne, null);
     } else {
-        runCoanimmGenerated(consigne, null);
+        runCoanimmExecuteCode(code, null);
     }
 });
 
 document.getElementById('coanimm-plan-no')?.addEventListener('click', () => {
-    document.getElementById('coanimm-plan').classList.add('hidden');
-    const input = document.getElementById('coanimm-consigne');
-    input?.focus();
+    _coanimmHideAll();
+    document.getElementById('coanimm-consigne')?.focus();
 });
 
-// ── Bouton Générer → Plan d'abord ──
+// ── Bouton Générer ──
 
 document.getElementById('coanimm-generate-btn')?.addEventListener('click', () => {
     const input = document.getElementById('coanimm-consigne');
@@ -7244,6 +7304,14 @@ document.getElementById('coanimm-generate-btn')?.addEventListener('click', () =>
     if (!consigne) { input?.focus(); return; }
     runCoanimmPlan(consigne);
 });
+
+document.getElementById('coanimm-consigne')?.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('coanimm-generate-btn')?.click();
+    }
+});
+
 
 // ══════════════════════════════════════════
 // RACCOURCIS CLAVIER GLOBAUX (Alt+Maj+lettre)

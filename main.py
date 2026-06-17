@@ -1102,9 +1102,25 @@ async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
         raise HTTPException(400, "confirm_scope invalide.")
     return await run_generated(req.consigne, req.thread_id, req.confirm_scope)
 
+class CoanimmGenerateOnlyRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    explore_stdout: Optional[str] = None   # résultat d'exploration éventuel
+
+@app.post("/api/coanimm/generate")
+async def coanimm_generate(req: CoanimmGenerateOnlyRequest):
+    """Génère un script Python à partir d'une consigne (sans l'exécuter)."""
+    from modules.coanimm import generate_code
+    consigne = req.consigne
+    if req.explore_stdout:
+        consigne = f"{req.consigne}\n\n[Résultat d'exploration]\n{req.explore_stdout}"
+    code = await generate_code(consigne, req.thread_id)
+    return {'status': 'ok', 'code': code}
+
 class CoanimmRunCodeDirectRequest(BaseModel):
     code: str
     thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None  # 'once' | 'project' | 'always'
 
 @app.post("/api/coanimm/run_code_direct")
 async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
@@ -1113,9 +1129,13 @@ async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
     import core.database as _db
     if not req.code.strip():
         return {'status': 'error', 'message': 'Le code est vide.'}
-    if not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+    if req.confirm_scope in ('project', 'always'):
+        _db.grant_agent_permission(GENERATED_ACTION, req.confirm_scope, req.thread_id)
+    # 'once' = l'utilisateur vient d'autoriser → on exécute directement
+    # None = pas encore autorisé → vérifier la DB
+    if req.confirm_scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
         return {'status': 'permission_required', 'action': GENERATED_ACTION,
-                'label': "re-exécution de code modifié"}
+                'label': "exécuter le code Python"}
     return execute_code(req.code, req.thread_id)
 
 @app.get("/api/search")
