@@ -1799,8 +1799,18 @@ async def stt_transcribe(file: UploadFile = File(...)):
             tmp.write(await file.read())
             tmp_path = tmp.name
 
+        # ── Contexte carnet pour Whisper initial_prompt ──
+        _initial_prompt = None
+        try:
+            from core.database import get_carnet
+            _carnet = get_carnet(current_user)
+            if _carnet and _carnet.strip():
+                _initial_prompt = _carnet.strip()[:300]
+        except Exception:
+            pass
+
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, stt.transcribe_file, tmp_path)
+        result = await loop.run_in_executor(None, stt.transcribe_file, tmp_path, _initial_prompt)
 
         # ── Turbo Whisper : correction LLM si activé ──
         if result.get('status') == 'ok' and result.get('text'):
