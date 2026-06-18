@@ -1780,13 +1780,33 @@ async def image_edit(req: ImageEditRequest):
 
 
 @app.post("/api/stt/transcribe")
-async def stt_transcribe(file: UploadFile = File(...)):
+async def stt_transcribe(
+    file:      UploadFile = File(...),
+    thread_id: str        = Form(None),
+    turbo:     str        = Form(None),
+):
     """
     Reçoit un blob audio (webm/wav) enregistré côté client,
     le passe à Whisper dans un thread séparé pour ne pas bloquer l'event loop.
+    Si turbo=true et thread_id fourni, injecte les notes du carnet comme
+    initial_prompt pour améliorer la précision de la transcription.
     """
     import asyncio, tempfile, os
     stt = get_stt()
+
+    # Construire le contexte carnet si mode turbo actif
+    initial_prompt = None
+    if turbo == 'true' and thread_id:
+        try:
+            from core.database import get_carnet_notes
+            notes = get_carnet_notes(thread_id)
+            if notes:
+                # Les 3 dernières notes — résumé compact du contexte récent
+                extrait = ' '.join(n['content'] for n in notes[-3:])
+                initial_prompt = extrait[:300]
+                print(f"[STT-TURBO] Contexte carnet : {initial_prompt[:80]}...")
+        except Exception as e:
+            print(f"[STT-TURBO] Erreur récupération carnet : {e}")
 
     # Sauvegarder le blob dans un fichier temporaire
     suffix = '.webm'
@@ -1799,81 +1819,10 @@ async def stt_transcribe(file: UploadFile = File(...)):
             tmp.write(await file.read())
             tmp_path = tmp.name
 
-        # ── Contexte carnet pour Whisper initial_prompt ──
-        _initial_prompt = None
-        try:
-            from core.database import get_carnet
-            _carnet = get_carnet(current_user)
-            if _carnet and _carnet.strip():
-                _initial_prompt = _carnet.strip()[:300]
-        except Exception:
-            pass
-
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, stt.transcribe_file, tmp_path, _initial_prompt)
-
-        # ── Turbo Whisper : correction LLM si activé ──
-        if result.get('status') == 'ok' and result.get('text'):
-            turbo = get_setting('stt_turbo_enabled', 'false').lower() == 'true'
-            if turbo:
-                # Substitution dictionnaire phonétique (avant LLM)
-                import json as _jd
-                try:
-                    stt_dict = _jd.loads(get_setting('stt_dict', '[]'))
-                    corrected_text = result['text']
-                    for entry in stt_dict:
-                        if entry.get('from') and entry.get('to'):
-                            corrected_text = corrected_text.replace(entry['from'], entry['to'])
-                    result['text'] = corrected_text
-                except Exception as e:
-                    print(f"[STT-DICT] Erreur substitution : {e}")
-            if turbo:
-                try:
-                    from core.engine import call_llm
-                    prompt_turbo = (
-                        "Tu corriges des transcriptions vocales Whisper d'un utilisateur francophone parlant d'IA et de LLM, "
-                        "enregistrées en environnement bruyant (cabine de camion). "
-                        "Whisper déforme les termes anglais et noms propres en approximations phonétiques françaises. "
-                        "Règle unique : corrige uniquement les déformations phonétiques de termes techniques ou noms propres. "
-                        "Ne touche à rien d'autre : ni la structure, ni la grammaire, ni le style. "
-                        "Si aucune déformation n'est détectée, retourne le texte identique. "
-                        "Retourne uniquement le texte corrigé, sans commentaire ni guillemets.\n"
-                        "Exemples :\n"
-                        "- 'je te parle du provider d'impsych' → 'je te parle du provider DeepSeek'\n"
-                        "- 'le Proveil d'Hur est impressionnant' → 'le provider DeepSeek est impressionnant'\n"
-                        "- 'provider DeepSick' → 'provider DeepSeek'\n"
-                        "- 'tu dois appeler la pays' → 'tu dois appeler l\\'API'\n"
-                        "- 'la provarie d\\'heures OpenAI' → 'le provider OpenAI'\n"
-                        "- 'j\\'ai conduit toute la nuit et je suis fatigué' → 'j\\'ai conduit toute la nuit et je suis fatigué'\n"
-                    )
-                    import json as _json
-                    api_keys = {}
-                    try:
-                        api_keys = _json.loads(get_setting('api_keys', '{}'))
-                    except Exception:
-                        pass
-                    routing = {}
-                    try:
-                        routing = _json.loads(get_setting('routing', '{}'))
-                    except Exception:
-                        pass
-                    provider = routing.get('chat', {}).get('provider') or get_setting('provider', 'deepseek')
-                    model    = routing.get('chat', {}).get('model') or ''
-                    corrected = await call_llm(
-                        provider=provider,
-                        model=model,
-                        api_keys=api_keys,
-                        system=prompt_turbo,
-                        messages=[{"role": "user", "content": result['text']}],
-                        max_tokens=500,
-                        temperature=0.1,
-                    )
-                    if corrected and corrected.strip():
-                        result['text'] = corrected.strip()
-                        result['turbo'] = True
-                except Exception as e:
-                    print(f"[STT-TURBO] Correction LLM échouée : {e}")
-
+        result = await loop.run_in_executor(
+            None, stt.transcribe_file, tmp_path, initial_prompt
+        )
         return result
 
     except Exception as e:

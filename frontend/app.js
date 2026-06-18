@@ -6222,6 +6222,8 @@ async function _stopRecording() {
         const blob     = new Blob(_audioChunks, { type: mimeType });
         const formData = new FormData();
         formData.append('file', blob, `audio.${ext}`);
+        if (currentThreadId) formData.append('thread_id', currentThreadId);
+        if (_sttTurboActive) formData.append('turbo', 'true');
 
         const r      = await fetch('/api/stt/transcribe', { method: 'POST', body: formData });
         const result = await r.json();

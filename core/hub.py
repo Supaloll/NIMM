@@ -18,7 +18,7 @@ from core.database import (
     get_rappels_actifs, create_rappel, update_rappel_date,
     close_rappel, marquer_rappel_emis, perimer_rappels_depasses,
     get_thread, set_thread_mask,
-    add_carnet_note, get_carnet_notes, count_carnet_notes,
+    add_carnet_note, get_carnet_notes, count_carnet_notes, get_carnet_notes_actives,
 )
 from core.engine import call_llm
 from modules.memory import extract_all_tags
@@ -1647,15 +1647,15 @@ async def maybe_generate_carnet_note(thread_id: str, settings: dict):
     prompt = (
         "Tu tiens le carnet de bord d'une conversation en cours.\n"
         + existing_block +
-        "Lis les échanges ci-dessous et écris une note courte (1 à 2 phrases) "
-        "qui capture ce qui a bougé : nouveau sujet, information ajoutée, "
-        "tournant dans le ton, tension apparue ou résolue.\n"
-        "Si le sujet est le même que dans les notes existantes mais que quelque chose "
-        "s'est précisé, nuancé ou approfondi, note ce complément — ne répète pas ce qui est déjà écrit.\n"
-        "Style : prose naturelle, première personne, présent ou passé composé.\n"
+        "Lis les échanges ci-dessous et écris une note courte (2 à 3 phrases maximum) "
+        "structurée en trois temps :\n"
+        "1. Sujet dominant : de quoi parle-t-on dans ces échanges ?\n"
+        "2. Ce qui a évolué : information nouvelle, précision, changement de ton ou de direction "
+        "par rapport aux notes déjà écrites. Ne répète jamais ce qui est déjà noté.\n"
+        "3. État : la question est-elle résolue, en cours, ou ouverte ?\n"
+        "Style : prose naturelle, première personne, présent ou passé composé. Pas de liste, pas de titre, pas de numéros.\n"
         "SKIP uniquement si les échanges sont vides de contenu "
-        "(salutations, accusés de réception, aucune information ni évolution).\n"
-        "Contrainte stricte : 1 à 2 phrases, pas de liste, pas de titre.\n\n"
+        "(salutations pures, accusés de réception, aucune information ni évolution).\n\n"
         f"Échanges :\n{conv_text}\n\n"
         "Note :"
     )
@@ -1671,8 +1671,11 @@ async def maybe_generate_carnet_note(thread_id: str, settings: dict):
         )
         note = note.strip()
         if note and note.upper() != 'SKIP':
-            add_carnet_note(thread_id, note_number, note)
-            print(f"[CARNET] Note #{note_number} — fil {thread_id[:8]}... : {note[:60]}")
+            # msg_debut = premier message résumé par cette note
+            # La note résume les CARNET_INTERVAL*2 derniers messages → le plus ancien est n - (CARNET_INTERVAL*2)
+            msg_debut = max(0, n - (CARNET_INTERVAL * 2))
+            add_carnet_note(thread_id, note_number, note, msg_debut=msg_debut)
+            print(f"[CARNET] Note #{note_number} msg_debut={msg_debut} — fil {thread_id[:8]}... : {note[:60]}")
         elif note.upper() == 'SKIP':
             print(f"[CARNET] Note #{note_number} ignorée (doublon détecté) — fil {thread_id[:8]}...")
     except Exception as e:
@@ -2160,11 +2163,11 @@ async def process_message(
     # Les persistants/épisodiques sont récupérés à la demande via tool calling.
     memory_context = build_memory_context_permanent_only()
 
-    # 5. Carnet — injecté uniquement si la fenêtre est pleine
+    # 5. Carnet — injection glissante : uniquement les notes dont les messages sont sortis de la fenêtre active
     n_messages = count_messages(thread_id)
     carnet_notes = None
     if n_messages > CARNET_WINDOW:
-        _notes = get_carnet_notes(thread_id)
+        _notes = get_carnet_notes_actives(thread_id, n_messages, fenetre=60)
         carnet_notes = [n['content'] for n in _notes] if _notes else None
 
     # 6. Présence temporelle
@@ -2434,11 +2437,11 @@ async def process_message_stream(
     # biblio_context = _match_bibliotheque() — matching fuzzy automatique sur l'index bibliothèque
     memory_context = build_memory_context_permanent_only()
     biblio_context = _match_bibliotheque(user_message)
-    # Carnet — injecté uniquement si la fenêtre est pleine
+    # Carnet — injection glissante : uniquement les notes dont les messages sont sortis de la fenêtre active
     n_messages = count_messages(thread_id)
     carnet_notes = None
     if n_messages > CARNET_WINDOW:
-        _notes = get_carnet_notes(thread_id)
+        _notes = get_carnet_notes_actives(thread_id, n_messages, fenetre=60)
         carnet_notes = [n['content'] for n in _notes] if _notes else None
     # Présence temporelle (streaming aussi)
     presence_level = int(get_setting('presence', '5'))
