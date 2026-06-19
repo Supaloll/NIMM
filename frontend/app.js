@@ -2844,7 +2844,7 @@ async function _triggerStream(content, conversationId, images = null) {
                                         b64:       imgB64,
                                         url:       img.url || '',
                                         prompt:    img.prompt || '',
-                                        thread_id: _currentThreadId || '',
+                                        thread_id: currentTabId || currentThreadId || '',
                                     })
                                 });
                                 if (saveResp.ok) {
@@ -7078,7 +7078,7 @@ function _coanimmShowResult(data, label) {
     const codeBox  = document.getElementById('coanimm-result-code-box');
     const codeEl   = document.getElementById('coanimm-result-code');
 
-    // Label stderr = �lément précédent le textarea dans le DOM
+    // Label stderr = élément précédent le textarea dans le DOM
     const stderrLabel = stderrEl ? stderrEl.previousElementSibling : null;
     if (data.status === 'ok') {
         statusEl.textContent = `Terminé (code retour ${data.returncode}).`;
@@ -7781,7 +7781,7 @@ document.getElementById('coanimm-save-confirm')?.addEventListener('click', async
             const st = document.getElementById('coanimm-result-status');
             if (st) { st.textContent += ' — script enregistré dans la Promptothèque.'; st.focus(); }
         } else {
-            if (feedback) feedback.textContent = 'Erreur�: ' + (d.detail || d.message || 'inconnue');
+            if (feedback) feedback.textContent = 'Erreur : ' + (d.detail || d.message || 'inconnue');
         }
     } catch(e) {
         if (feedback) feedback.textContent = 'Erreur réseau.';
