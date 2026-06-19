@@ -215,13 +215,14 @@ Le hub exécute.
 
 ---
 
-## Ce que NIMM n'est pas
+## CoaNIMM — exécution autonome et boucle humain-machine
 
-NIMM n'est pas conçu pour être un assistant généraliste. Il ne cherche pas
-à tout savoir ni à tout faire. Il est conçu pour **connaître une personne**
-et lui parler en tenant compte de ce qu'il sait d'elle.
+CoaNIMM est le bras exécutant de NIMM. Son principe de conception : l'utilisateur
+formule une intention en langage naturel, CoaNIMM fait le reste — planifie,
+explore, génère le code, l'exécute, et boucle si nécessaire.
 
-La recherche web existe mais est contrainte. L'agenda existe mais reste simple.
-La bibliothèque archive mais ne résume pas tout. Chaque fonctionnalité est là
-parce qu'elle sert la relation entre l'assistant et l'utilisateur — pas pour
-faire une liste de features.
+### Autonomie d'abord
+
+Pour les tâches sans ambiguïté ou sans risque destructif, CoaNIMM exécute
+directement. Pas de validation systématique qui alourdit l'interaction.
+L'utilisateur a donné son accord en cliquant "OK,
