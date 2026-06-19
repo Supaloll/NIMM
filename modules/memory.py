@@ -656,7 +656,9 @@ def _is_prenom(s: str) -> bool:
         return False
     # Commence par un mot-outil = description
     mots_outils = {'qui', 'que', 'pour', 'avec', 'de', 'du', 'le', 'la',
-                   'les', 'un', 'une', 'des', 'non', 'pas', 'très', 'trop'}
+                   'les', 'un', 'une', 'des', 'non', 'pas', 'très', 'trop',
+                   'ma', 'ta', 'sa', 'mon', 'ton', 'son',
+                   'mes', 'tes', 'ses', 'notre', 'votre', 'leur', 'leurs'}
     if mots[0].lower() in mots_outils:
         return False
     return True
