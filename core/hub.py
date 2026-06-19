@@ -18,7 +18,7 @@ from core.database import (
     get_rappels_actifs, create_rappel, update_rappel_date,
     close_rappel, marquer_rappel_emis, perimer_rappels_depasses,
     get_thread, set_thread_mask,
-    add_carnet_note, get_carnet_notes, count_carnet_notes,
+    add_carnet_note, get_carnet_notes, count_carnet_notes, get_carnet_notes_actives,
 )
 from core.engine import call_llm
 from modules.memory import extract_all_tags
@@ -882,17 +882,13 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
             f"\n📋 Points acquis cette session (ne pas remettre en question ni redemander) :\n{lignes}"
         )
 
-    # Carnet de bord — injecté uniquement si la fenêtre est pleine (> CARNET_WINDOW messages)
+    # Carnet de bord — signal léger uniquement (pull à la demande via search_carnet, pas d'injection systématique)
     if carnet_notes:
-        notes_text = '\n'.join(
-            f"[{i}] {n}" for i, n in enumerate(carnet_notes)
-        )
         parts.append(
-            f"\n--- Carnet de bord (échanges hors fenêtre active) ---\n"
-            f"[Ces notes résument les échanges précédents, désormais hors de ta fenêtre de contexte. "
-            f"Elles te donnent le fil conducteur de la relation. "
-            f"Ne pas y répondre directement — elles fournissent le contexte, pas une requête.]\n\n"
-            f"{notes_text}"
+            f"\n[Un carnet de bord existe pour ce fil — il résume les échanges désormais hors de ta "
+            f"fenêtre de contexte. Si tu as besoin de te raccrocher à un sujet abordé plus tôt dans "
+            f"cette conversation et qui ne figure plus dans l'historique visible, appelle "
+            f"search_carnet(sujet).]"
         )
 
     # Prénom et date de naissance — toujours injectés (stockés dans settings, survivent aux nettoyages DB)
@@ -1399,7 +1395,31 @@ NIMM_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Mots-clés ou question pour retrouver les passages pertinents"
+                        "description": "Mots-cles ou question pour retrouver les passages pertinents"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_carnet",
+            "description": (
+                "Recherche dans le CARNET DE BORD de ce fil de conversation -- la chronologie des "
+                "sujets abordes plus tot, desormais hors de ta fenetre de contexte. "
+                "Utilise cet outil quand tu as besoin de te raccrocher a quelque chose evoque "
+                "precedemment dans CETTE conversation et que tu ne vois plus dans l'historique recent. "
+                "Ne concerne que ce fil -- pas la memoire personnelle de l'utilisateur (pour ca, "
+                "utiliser search_memory)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Mots-cles ou sujet pour retrouver les notes pertinentes du carnet"
                     }
                 },
                 "required": ["query"]
@@ -1409,7 +1429,7 @@ NIMM_TOOLS = [
 ]
 
 
-# Périssabilité d'une information → durée de vie en cache (jours ; 0 = permanent)
+# Perissabilite d'une information
 _PERISSABILITE_JOURS = {'ephemere': 1, 'normale': 30, 'durable': 365, 'permanente': 0}
 
 async def classify_perissabilite_jours(query: str, content: str = ""):
@@ -1529,6 +1549,32 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             print(f"[HUB] ⚠️ Erreur search_documents : {e}")
             return '[Erreur lors de la recherche documentaire]'
 
+    elif name == 'search_carnet':
+        try:
+            from core.database import get_carnet_notes as _get_carnet_notes
+            if not thread_id:
+                return '[Aucun carnet disponible -- fil non identifie]'
+            toutes_notes = _get_carnet_notes(thread_id)
+            if not toutes_notes:
+                return '[Le carnet de ce fil est vide pour le moment]'
+            mots = [m for m in query.lower().split() if len(m) > 2]
+            if mots:
+                pertinentes = [
+                    n for n in toutes_notes
+                    if any(m in n['content'].lower() for m in mots)
+                ]
+            else:
+                pertinentes = []
+            # Repli : si aucune note ne matche les mots-cles, renvoyer les plus recentes
+            notes_a_renvoyer = pertinentes if pertinentes else toutes_notes[-5:]
+            lines = [f"[{n['note_number']}] {n['content']}" for n in notes_a_renvoyer]
+            result = '\n'.join(lines)
+            print(f"[HUB] Tool search_carnet({query!r}) -> {len(notes_a_renvoyer)} note(s)")
+            return result
+        except Exception as e:
+            print(f"[HUB] Erreur search_carnet : {e}")
+            return '[Erreur lors de la recherche dans le carnet]'
+
     elif name == 'run_code':
         code = args.get('code', '').strip()
         description = args.get('description', '').strip()
@@ -1647,15 +1693,15 @@ async def maybe_generate_carnet_note(thread_id: str, settings: dict):
     prompt = (
         "Tu tiens le carnet de bord d'une conversation en cours.\n"
         + existing_block +
-        "Lis les échanges ci-dessous et écris une note courte (1 à 2 phrases) "
-        "qui capture ce qui a bougé : nouveau sujet, information ajoutée, "
-        "tournant dans le ton, tension apparue ou résolue.\n"
-        "Si le sujet est le même que dans les notes existantes mais que quelque chose "
-        "s'est précisé, nuancé ou approfondi, note ce complément — ne répète pas ce qui est déjà écrit.\n"
-        "Style : prose naturelle, première personne, présent ou passé composé.\n"
+        "Lis les échanges ci-dessous et écris une note courte (2 à 3 phrases maximum) "
+        "structurée en trois temps :\n"
+        "1. Sujet dominant : de quoi parle-t-on dans ces échanges ?\n"
+        "2. Ce qui a évolué : information nouvelle, précision, changement de ton ou de direction "
+        "par rapport aux notes déjà écrites. Ne répète jamais ce qui est déjà noté.\n"
+        "3. État : la question est-elle résolue, en cours, ou ouverte ?\n"
+        "Style : prose naturelle, première personne, présent ou passé composé. Pas de liste, pas de titre, pas de numéros.\n"
         "SKIP uniquement si les échanges sont vides de contenu "
-        "(salutations, accusés de réception, aucune information ni évolution).\n"
-        "Contrainte stricte : 1 à 2 phrases, pas de liste, pas de titre.\n\n"
+        "(salutations pures, accusés de réception, aucune information ni évolution).\n\n"
         f"Échanges :\n{conv_text}\n\n"
         "Note :"
     )
@@ -1671,8 +1717,11 @@ async def maybe_generate_carnet_note(thread_id: str, settings: dict):
         )
         note = note.strip()
         if note and note.upper() != 'SKIP':
-            add_carnet_note(thread_id, note_number, note)
-            print(f"[CARNET] Note #{note_number} — fil {thread_id[:8]}... : {note[:60]}")
+            # msg_debut = premier message résumé par cette note
+            # La note résume les CARNET_INTERVAL*2 derniers messages → le plus ancien est n - (CARNET_INTERVAL*2)
+            msg_debut = max(0, n - (CARNET_INTERVAL * 2))
+            add_carnet_note(thread_id, note_number, note, msg_debut=msg_debut)
+            print(f"[CARNET] Note #{note_number} msg_debut={msg_debut} — fil {thread_id[:8]}... : {note[:60]}")
         elif note.upper() == 'SKIP':
             print(f"[CARNET] Note #{note_number} ignorée (doublon détecté) — fil {thread_id[:8]}...")
     except Exception as e:
@@ -2160,12 +2209,9 @@ async def process_message(
     # Les persistants/épisodiques sont récupérés à la demande via tool calling.
     memory_context = build_memory_context_permanent_only()
 
-    # 5. Carnet — injecté uniquement si la fenêtre est pleine
+    # 5. Carnet — signal leger uniquement : le LLM consulte via search_carnet() s'il en a besoin (pull, pas push)
     n_messages = count_messages(thread_id)
-    carnet_notes = None
-    if n_messages > CARNET_WINDOW:
-        _notes = get_carnet_notes(thread_id)
-        carnet_notes = [n['content'] for n in _notes] if _notes else None
+    carnet_notes = ['actif'] if count_carnet_notes(thread_id) > 0 else None
 
     # 6. Présence temporelle
     presence_level = int(get_setting('presence', '5'))
@@ -2181,7 +2227,7 @@ async def process_message(
     session_bilans = _get_session_bilans(thread_id)
     system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans)
 
-    # 7. Historique récent (60 derniers messages)
+    # 7. Historique recent (60 derniers messages)
     history = get_messages(thread_id, limit=60)
     messages = _sanitize_history([{'role': m['role'], 'content': m['content']} for m in history])
 
@@ -2434,12 +2480,9 @@ async def process_message_stream(
     # biblio_context = _match_bibliotheque() — matching fuzzy automatique sur l'index bibliothèque
     memory_context = build_memory_context_permanent_only()
     biblio_context = _match_bibliotheque(user_message)
-    # Carnet — injecté uniquement si la fenêtre est pleine
+    # Carnet — signal leger uniquement : le LLM consulte via search_carnet() s'il en a besoin (pull, pas push)
     n_messages = count_messages(thread_id)
-    carnet_notes = None
-    if n_messages > CARNET_WINDOW:
-        _notes = get_carnet_notes(thread_id)
-        carnet_notes = [n['content'] for n in _notes] if _notes else None
+    carnet_notes = ['actif'] if count_carnet_notes(thread_id) > 0 else None
     # Présence temporelle (streaming aussi)
     presence_level = int(get_setting('presence', '5'))
     presence_note  = _build_presence_note(presence_level)
