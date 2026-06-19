@@ -195,7 +195,7 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
     if system_prompt:
         payload['system'] = system_prompt
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=300) as client:
         r = await client.post(
             'https://api.anthropic.com/v1/messages',
             headers={
@@ -299,7 +299,7 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
         headers['HTTP-Referer'] = 'https://nimm.local'
         headers['X-Title']      = 'NIMM'
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=300) as client:
         r = await client.post(
             f'{base_url}/chat/completions',
             headers=headers,
@@ -393,7 +393,7 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
     if system_prompt:
         payload['systemInstruction'] = {'parts': [{'text': system_prompt}]}
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=300) as client:
         r = await client.post(
             f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}',
             json=payload
@@ -602,7 +602,7 @@ async def call_gemini_vision(image_b64: str, media_type: str, prompt: str, api_k
         }],
         'generationConfig': {'maxOutputTokens': 1024, 'temperature': 0.2}
     }
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=300) as client:
         r = await client.post(
             f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}',
             json=payload
@@ -922,7 +922,7 @@ async def call_llm_stream_with_tools(
     _raw_acc        = ''   # accumule le content brut pour détecter le DSML
     _dsml_detected  = False
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream(
             'POST',
             f'{base_url}/chat/completions',

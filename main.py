@@ -1059,6 +1059,324 @@ async def coanimm_run_script(req: CoanimmRunScriptRequest):
         raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
     return run_script(req.script_id, req.args, req.thread_id, req.confirm_scope)
 
+class CoanimmPlanRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    override_provider: Optional[str] = None
+
+@app.post("/api/coanimm/plan")
+async def coanimm_plan(req: CoanimmPlanRequest):
+    """Génère un plan en langage naturel (sans code) pour validation par l'utilisateur."""
+    from modules.coanimm import generate_plan
+    if not req.consigne.strip():
+        return {'status': 'error', 'message': 'La consigne est vide.'}
+    try:
+        result = await generate_plan(req.consigne, req.thread_id,
+                                     provider_override=req.override_provider)
+        return {'status': 'ok', 'plan': result['plan'], 'needs_explore': result['needs_explore']}
+    except Exception as e:
+        detail = str(e) or type(e).__name__
+        return {'status': 'error', 'message': f"Erreur lors de la planification : {detail}"}
+
+class CoanimmExploreRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None
+
+@app.post("/api/coanimm/explore")
+async def coanimm_explore(req: CoanimmExploreRequest):
+    """Génère et exécute un script d'exploration (lecture seule) du disque."""
+    from modules.coanimm import explore_directory
+    if req.confirm_scope not in (None, 'once', 'project', 'always'):
+        raise HTTPException(400, "confirm_scope invalide.")
+    return await explore_directory(req.consigne, req.thread_id, req.confirm_scope)
+
+class CoanimmGenerateRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None
+
+@app.post("/api/coanimm/generate_and_run")
+async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
+    """Génère un script Python à partir d'une consigne puis l'exécute dans le bac à sable."""
+    from modules.coanimm import run_generated
+    if req.confirm_scope not in (None, 'once', 'project', 'always'):
+        raise HTTPException(400, "confirm_scope invalide.")
+    return await run_generated(req.consigne, req.thread_id, req.confirm_scope)
+
+class CoanimmGenerateOnlyRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+    explore_stdout: Optional[str] = None   # résultat d'exploration éventuel
+    override_provider: Optional[str] = None
+
+@app.post("/api/coanimm/generate")
+async def coanimm_generate(req: CoanimmGenerateOnlyRequest):
+    """Génère un script Python à partir d'une consigne (sans l'exécuter)."""
+    from modules.coanimm import generate_code, _analyze_code_risks
+    consigne = req.consigne
+    if req.explore_stdout:
+        consigne = f"{req.consigne}\n\n[Résultat d'exploration]\n{req.explore_stdout}"
+    try:
+        code = await generate_code(consigne, req.thread_id,
+                                  provider_override=req.override_provider)
+        risks = _analyze_code_risks(code)
+        return {'status': 'ok', 'code': code, 'risks': risks}
+    except Exception as e:
+        import traceback
+        detail = traceback.format_exc()
+        return JSONResponse({'status': 'error',
+                             'message': str(e),
+                             'detail': detail[-800:]})  # derniers 800 car. du traceback
+
+class CoanimmRunCodeDirectRequest(BaseModel):
+    code: str
+    thread_id: Optional[str] = None
+    confirm_scope: Optional[str] = None  # 'once' | 'project' | 'always'
+
+@app.post("/api/coanimm/run_code_direct")
+async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
+    """Exécute du code Python brut (modifié par l'utilisateur) dans le bac à sable."""
+    from modules.coanimm import execute_code, GENERATED_ACTION
+    import core.database as _db
+    if not req.code.strip():
+        return {'status': 'error', 'message': 'Le code est vide.'}
+    if req.confirm_scope in ('project', 'always'):
+        _db.grant_agent_permission(GENERATED_ACTION, req.confirm_scope, req.thread_id)
+    # 'once' = l'utilisateur vient d'autoriser → on exécute directement
+    # None = pas encore autorisé → vérifier la DB
+    if req.confirm_scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+        return {'status': 'permission_required', 'action': GENERATED_ACTION,
+                'label': "exécuter le code Python"}
+    return execute_code(req.code, req.thread_id)
+
+
+class CoanimmGenerateImageRequest(BaseModel):
+    prompt: str
+    thread_id: Optional[str] = None
+
+
+@app.get("/api/coanimm/test_stream")
+async def coanimm_test_stream():
+    """Endpoint de diagnostic : stream 5 lignes de test."""
+    from fastapi.responses import StreamingResponse as SR
+    import asyncio, json
+    async def gen():
+        for i in range(1, 6):
+            yield f"data: {json.dumps({'type': 'line', 'text': f'Ligne de test {i}/5'})}\n\n"
+            await asyncio.sleep(0.3)
+        yield f"data: {json.dumps({'type': 'done', 'returncode': 0, 'files_list': []})}\n\n"
+    return SR(gen(), media_type="text/event-stream",
+              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/coanimm/run_code_stream")
+async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
+    """Exécute du code Python et diffuse la sortie ligne par ligne (SSE)."""
+    from fastapi.responses import StreamingResponse as SR
+    from modules.coanimm import (GENERATED_ACTION, _workspace_dir, _build_prologue,
+                                  _check_syntax, _scan_new_files, _route_new_files,
+                                  TIMEOUT_SECONDS)
+    import asyncio, tempfile, sys, os
+    import core.database as _db
+
+    if not req.code.strip():
+        return JSONResponse({"status": "error", "message": "Le code est vide."})
+    if req.confirm_scope in ("project", "always"):
+        _db.grant_agent_permission(GENERATED_ACTION, req.confirm_scope, req.thread_id)
+    if req.confirm_scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+        return JSONResponse({"status": "permission_required", "action": GENERATED_ACTION,
+                             "label": "exécuter le code Python"})
+
+    syntax_err = _check_syntax(req.code)
+    if syntax_err:
+        return JSONResponse({"status": "error", "message": syntax_err})
+
+    workdir = _workspace_dir(req.thread_id)
+    os.makedirs(workdir, exist_ok=True)
+    prologue = _build_prologue(req.thread_id, workdir)
+    full_code = (prologue + "\n" + req.code) if prologue else req.code
+    before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
+
+    fd, script_path = tempfile.mkstemp(suffix=".py", dir=workdir)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(full_code)
+
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8:replace"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+
+    async def stream_exec():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-u", script_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,  # mélanger stderr dans stdout
+                cwd=workdir,
+                env=env,
+            )
+            collected_lines = []
+            interaction_question = None
+            async def _read_and_stream():
+                nonlocal interaction_question
+                async for raw_line in proc.stdout:
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                    collected_lines.append(line)
+                    if line.startswith("__NIMM_DEMANDE__:"):
+                        interaction_question = line[len("__NIMM_DEMANDE__:"):].strip()
+                    yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
+                await proc.wait()
+            timed_out = False
+            try:
+                async for chunk in _read_and_stream():
+                    yield chunk
+                # wait_for pour le timeout global
+                await asyncio.wait_for(proc.wait(), timeout=TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                timed_out = True
+                try: proc.kill()
+                except Exception: pass
+                yield f"data: {json.dumps({'type': 'error', 'message': f'Délai dépassé ({TIMEOUT_SECONDS}s). Le script a été interrompu.'})}\n\n"
+            if timed_out: return
+
+            new_files = _scan_new_files(workdir, before)
+            files_info, files_list = _route_new_files(new_files, req.thread_id)
+            done_payload = {'type': 'done', 'returncode': proc.returncode, 'files_list': files_list}
+            if interaction_question:
+                done_payload['interaction_needed'] = {
+                    'question': interaction_question,
+                    'output_so_far': '\n'.join(collected_lines),
+                }
+            yield f"data: {json.dumps(done_payload)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            try:
+                os.unlink(script_path)
+            except Exception:
+                pass
+
+    return SR(stream_exec(), media_type="text/event-stream",
+              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+class CoanimmContinueRequest(BaseModel):
+    thread_id: Optional[str] = None
+    consigne_originale: str
+    output_precedent: str
+    question_posee: str
+    reponse_utilisateur: str
+    override_provider: Optional[str] = None
+
+@app.post("/api/coanimm/continue")
+async def coanimm_continue(req: CoanimmContinueRequest):
+    """Reprend une exécution CoaNIMM après une interaction utilisateur.
+    Génère un nouveau script qui tient compte de la réponse et du contexte précédent."""
+    from modules.coanimm import generate_code, _analyze_code_risks
+    context = (
+        f"Consigne originale : {req.consigne_originale}\n\n"
+        f"[Résultat de l'étape précédente]\n{req.output_precedent}\n\n"
+        f"[Question posée à l'utilisateur]\n{req.question_posee}\n\n"
+        f"[Réponse de l'utilisateur]\n{req.reponse_utilisateur}\n\n"
+        f"Continue la tâche en tenant compte de cette réponse. "
+        f"Ne réaffiche pas ce qui a déjà été fait. "
+        f"Si la réponse est négative (non, annuler...), affiche un message et termine proprement."
+    )
+    try:
+        code = await generate_code(context, req.thread_id,
+                                   provider_override=req.override_provider)
+        risks = _analyze_code_risks(code)
+        return {'status': 'ok', 'code': code, 'risks': risks}
+    except Exception as e:
+        import traceback
+        detail = traceback.format_exc()
+        return JSONResponse({'status': 'error', 'message': str(e), 'detail': detail[-800:]})
+
+
+@app.post("/api/coanimm/generate_image")
+async def coanimm_generate_image_endpoint(req: CoanimmGenerateImageRequest):
+    """Génère une image via le provider configuré et la sauvegarde dans le workspace CoaNIMM."""
+    from core.engine import generate_image
+    from core.hub import load_settings, get_task_provider_model
+    from modules.coanimm import _workspace_dir
+    import base64, time, mimetypes
+    if not req.prompt or not req.prompt.strip():
+        raise HTTPException(400, "Le prompt est vide.")
+    settings   = load_settings(req.thread_id)
+    api_keys   = settings.get("api_keys", {})
+    img_provider = settings.get("provider_routing", {}).get("image", "gemini")
+    try:
+        result = await generate_image(req.prompt, img_provider, api_keys)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    workdir  = _workspace_dir(req.thread_id)
+    filename = f"nimm_img_{int(time.time())}.png"
+    filepath = os.path.join(workdir, filename)
+    try:
+        if result.get("b64"):
+            import base64 as _b64
+            with open(filepath, "wb") as _f:
+                _f.write(_b64.b64decode(result["b64"]))
+        elif result.get("url"):
+            import urllib.request as _ur
+            _ur.urlretrieve(result["url"], filepath)
+        else:
+            return {"status": "error", "message": "Aucune donnée image reçue du provider."}
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde image échouée : {e}"}
+    print(f"[COANIMM] Image générée → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename,
+            "url": f"/api/coanimm/files/{filename}"}
+
+class CoanimmSuggestNameRequest(BaseModel):
+    consigne: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/suggest_name")
+async def coanimm_suggest_name(req: CoanimmSuggestNameRequest):
+    """Génère un nom court et explicite pour le script CoaNIMM."""
+    from core.engine import call_llm
+    from core.hub import load_settings, get_task_provider_model
+    if not req.consigne.strip():
+        return {"status": "ok", "name": ""}
+    settings = load_settings(req.thread_id)
+    provider, model = get_task_provider_model("coanimm", settings)
+    api_keys = settings.get("api_keys", {})
+    try:
+        name = await call_llm(
+            messages=[{"role": "user", "content": req.consigne}],
+            provider=provider, model=model, api_keys=api_keys,
+            system_prompt=(
+                "Tu reçois une consigne d'automatisation. "
+                "Réponds UNIQUEMENT avec un nom de script court (4 à 7 mots), "
+                "clair et en français, sans ponctuation ni guillemets. "
+                "Exemple de consigne : 'liste les PDF du bureau' → 'Lister les PDF du bureau'"
+            ),
+            max_tokens=20,
+            temperature=0.3,
+        )
+        return {"status": "ok", "name": name.strip().strip('"').strip("'")}
+    except Exception as e:
+        return {"status": "ok", "name": ""}  # silencieux, le champ reste vide
+
+@app.get("/api/coanimm/files/{filename}")
+async def coanimm_download_file(filename: str, thread_id: str = None):
+    """Télécharge un fichier produit par CoaNIMM depuis le workspace."""
+    from modules.coanimm import _workspace_dir
+    import mimetypes
+    workdir = _workspace_dir(thread_id)
+    filepath = os.path.join(workdir, os.path.basename(filename))
+    if not os.path.isfile(filepath):
+        raise HTTPException(404, f"Fichier introuvable : {filename}")
+    mime, _ = mimetypes.guess_type(filepath)
+    mime = mime or "application/octet-stream"
+    return FileResponse(
+        filepath,
+        media_type=mime,
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 @app.get("/api/search")
 async def search_conversations_route(q: str = "", k: int = 8):
     """Recherche par sens dans l'historique des conversations (embeddings)."""
@@ -2166,7 +2484,6 @@ async def images_list():
 @app.get("/api/images/file/{filename}")
 async def images_file(filename: str):
     """Sert le fichier image depuis data/images/."""
-    # Sécurité : nom de fichier simple, pas de traversée de chemin
     if '/' in filename or '\\' in filename or '..' in filename:
         raise HTTPException(400, "Nom de fichier invalide")
     filepath = os.path.join(_IMAGES_DIR, filename)
@@ -2209,4 +2526,3 @@ async def images_delete(img_id: int):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
-

@@ -578,7 +578,7 @@ Animation "bretzel" pendant la génération de réponse.
 
 ## CoaNIMM (coanimm.py)
 
-Agent d'exécution Python sandboxé — déclenché depuis le panneau CoaNIMM (sidebar).
+Agent d'exécution Python autonome — déclenché depuis le panneau CoaNIMM (sidebar). CoaNIMM peut exécuter n'importe quelle requête en langage naturel, avec ou sans validation intermédiaire, en bouclant avec l'utilisateur via l'interface si nécessaire.
 
 ### Deux modes d'exécution
 
@@ -587,11 +587,12 @@ Agent d'exécution Python sandboxé — déclenché depuis le panneau CoaNIMM (s
 | Script Promptothèque | `run_script(script_id, …)` | Sélection dans la liste des scripts enregistrés |
 | Génération libre | `run_generated(consigne, …)` | Consigne en langage naturel |
 
-### Flow Plan→Explore→Execute (run_generated)
+### Flow Plan→Explore→Generate→Execute (run_generated)
 
 1. **Planification** (`generate_plan()`) — LLM génère un plan en texte brut (sans markdown, lisible braille) et indique si une exploration disque est nécessaire (`EXPLORER: oui/non`)
 2. **Exploration** optionnelle (`explore_directory()`, permission `EXPLORE_ACTION='explorer_disque'`) — liste arborescente du dossier workspace, injectée dans le contexte de génération
-3. **Génération + exécution** (`run_generated()`, permission `GENERATED_ACTION='exec_generated_code'`) — LLM produit un script Python ; retry automatique si `SyntaxError`
+3. **Génération** (`run_generated()`, permission `GENERATED_ACTION='exec_generated_code'`) — LLM produit un script Python ; retry automatique si `SyntaxError`
+4. **Exécution en streaming** — le script tourne en sous-processus ; stdout transmis en temps réel via SSE (`/api/coanimm/run_code_stream`) avec `PYTHONUNBUFFERED=1` et flag `-u`
 
 ### Système de permissions (deux niveaux)
 
@@ -600,15 +601,54 @@ Agent d'exécution Python sandboxé — déclenché depuis le panneau CoaNIMM (s
 
 Si l'accord n'est pas déjà en base, le backend retourne `{'status': 'permission_required', 'action': …}` ; le frontend affiche le panneau de permission avec 3 niveaux : une fois / pour ce fil / toujours.
 
+### Exécution streaming (SSE)
+
+Route `GET /api/coanimm/run_code_stream?script_path=…` — `StreamingResponse` (text/event-stream). Chaque ligne de stdout du script est émise sous la forme :
+
+```
+data: {"type": "line", "text": "..."}
+```
+
+Fin de stream : `data: {"type": "done", "returncode": N, "files_list": [...]}`. Si `interaction_needed` est présent dans le payload `done`, le frontend affiche le panneau d'interaction.
+
+Variables d'environnement du sous-processus : `PYTHONIOENCODING=utf-8`, `PYTHONUNBUFFERED=1`.
+Timeout : 300 secondes (augmenté de 30 s pour les tâches longues et les appels LLM internes).
+
+### Protocole `__NIMM_DEMANDE__` (boucle agentique)
+
+Quand un script généré a besoin de la validation de l'utilisateur avant une action destructive ou ambiguë, il ne bloque pas (`input()` interdit) — il émet un marqueur :
+
+```python
+print('__NIMM_DEMANDE__: Confirmez-vous la suppression des 42 dossiers détectés ?')
+import sys; sys.exit(0)
+```
+
+Le backend détecte ce marqueur dans le stream et inclut `interaction_needed: {question, output_so_far}` dans le payload `done`. Le frontend :
+
+1. Affiche le panneau `#coanimm-interact-panel` avec la question
+2. L'utilisateur tape sa réponse et clique Envoyer (ou Entrée)
+3. Le frontend appelle `POST /api/coanimm/continue` avec `{consigne_originale, output_precedent, question_posee, reponse_utilisateur, thread_id}`
+4. Le backend reconstruit le contexte complet et régénère un script en tenant compte de la réponse
+5. Le nouveau script est présenté et exécuté — la boucle peut recommencer
+
+Cette boucle est entièrement dans l'interface ; aucun `input()` n'est jamais utilisé.
+
 ### Sandbox
 
 Répertoire dédié par fil : `data/coanimm_workspace/{nom_fil}_{thread_id[:8]}/`.
-Scripts exécutés avec `PYTHONIOENCODING=utf-8` (emojis dans stdout).
-Timeout : 30 secondes.
+Scripts exécutés avec `PYTHONIOENCODING=utf-8` et `PYTHONUNBUFFERED=1` (emojis + stdout non bufférisé).
+Timeout : 300 secondes.
 
 ### PLANNING_SYSTEM_PROMPT
 
 Texte brut uniquement (interdictions explicites de tout markdown, balises, astérisques, backticks). Format de réponse : ligne `EXPLORER: oui|non` + plan en 3–8 phrases numérotées.
+
+### GENERATE_SYSTEM_PROMPT (règles clés)
+
+- Jamais de `input()` ni `sys.stdin` — utiliser le protocole `__NIMM_DEMANDE__` si validation nécessaire
+- Toujours `print()` les actions au fil de l'exécution (stdout en temps réel)
+- Pour les tâches sans risque : exécuter directement sans demander confirmation
+- Encodage : `utf-8` explicite sur toutes les opérations fichier
 
 ---
 
@@ -772,3 +812,4 @@ Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les p
 | 12/06/2026 | **Mode local + accessibilité**. [hub.py/main.py/front] interrupteur « Mode local » (réglages) : bascule l'inférence vers **Ollama** (modèle configurable, défaut `llama3.1:8b`) et l'OCR vers **Tesseract** ; la recherche web reste active. Endpoints `/api/settings/local-mode`, `load_settings` expose `local_mode`. [app.js] a11y : les raccourcis clavier déplacent désormais le focus **dans** la modale ouverte (le lecteur d'écran suit) ; activation clavier des fils corrigée (le `keydown` ciblait le `div` au lieu du `span` porteur du clic → Entrée/Espace charge enfin le fil). |
 | 12/06/2026 (chiralité) | **Relations genrées selon le genre défini par la personne**. [memory.py] la réciproque de fratrie concernant l'utilisateur (`frere_ou_soeur`) est genrée `frère`/`sœur` d'après le réglage `user_genre`, que la personne définit elle-même (`_est_utilisateur`, `_genrer_fratrie`) ; le conjoint reste « conjoint » (déjà neutre). [main.py] endpoints `/api/settings/user-genre`. [front] sélecteur « Comment vous définissez-vous ? » (Non précisé / Masculin / Féminin). Non défini → neutre conservé ; anciens souvenirs non réécrits. |
 | 12/06/2026 (correctifs) | **Ingestion en thread + accessibilité des fils**. [main.py] les ingestions (texte/URL/fichier) propagent le contexte utilisateur au thread via `contextvars.copy_context()` — corrige l'échec « Aucun utilisateur défini » à l'ouverture de la connexion DB sur gros fichiers. [app.js] chaque fil est désormais **un seul bouton activable** (clic sur toute la ligne sauf le menu, Entrée/Espace) : supprime le double énoncé du nom (
+| 16–19/06/2026 | **CoaNIMM — boucle agentique + streaming + accessibilité** : [engine.py] tous les `httpx.AsyncClient(timeout=60)` → `timeout=300` (5 occurrences) — corrige `ReadTimeout` sur génération à 16 000 tokens. [main.py] exécution subprocess non bufférisée : `env["PYTHONUNBUFFERED"]="1"` + `sys.executable, "-u"` — stdout du script transmis ligne par ligne en temps réel. [main.py] route SSE `GET /api/coanimm/run_code_stream` — `StreamingResponse` text/event-stream, chaque ligne émise immédiatement, payload `done` inclut `files_list` et `interaction_needed` si marqueur `__NIMM_DEMANDE__` détecté. [main.py] `CoanimmContinueRequest` + `POST /api/coanimm/continue` — reçoit consigne originale, sortie précédente, question posée, réponse utilisateur ; reconstruit le contexte complet et régénère le script via `generate_code()`. [modules/coanimm.py] `GENERATE_SYSTEM_PROMPT` : règles `input()` interdit, protocole `__NIMM_DEMANDE__`, `print()` en continu, exécution directe si tâche sans risque. [frontend/index.html] panneau `#coanimm-interact-panel` (caché par défaut, `role="region"`, `aria-label="CoaNIMM demande"`) avec question en `aria-live="polite"`, textarea et bouton Envoyer. [frontend/app.js] `_coanimmCurrentConsigne` capturé à la génération ; done handler : détecte `interaction_needed`, affiche panneau, submit handler appelle `/api/coanimm/continue`, relance `runCoanimmExecuteCode` avec le nouveau code (boucle agentique) ; erreur rc≠0 : `aria-live="assertive"` + `stdoutEl.focus()` pour que le lecteur d'écran lise les erreurs. [frontend/app.js] titre boîte risques : `⚠️ ATTENTION — ce script :`. Annonce NVDA : suppression des announces intermédiaires qui s'annulaient mutuellement. |

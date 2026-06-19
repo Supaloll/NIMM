@@ -56,7 +56,7 @@
             </button>
             <button id="toggle-enrich" title="Enrichissement web" aria-label="Enrichissement web"><span aria-hidden="true">🌐</span></button>
             <button id="toggle-settings" title="Paramètres" aria-label="Paramètres"><span aria-hidden="true">⚙️</span></button>
-            <button id="toggle-coanimm" title="Agent CoaNIMM" aria-label="Agent CoaNIMM"><span aria-hidden="true">🤖</span></button>
+            <button id="toggle-coanimm" title="Agent CoaNIMM" aria-label="Agent CoaNIMM"><span aria-hidden="true">🐸</span></button>
         </div>
     </header>
 
@@ -347,6 +347,19 @@
                     <option value="ollama">🟢 Ollama (local)</option>
                 </select>
                 <span class="routing-warning hidden" id="warn-synthese" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+
+                <span class="routing-label">🐸 CoaNIMM (génération de code)</span>
+                <select id="routing-coanimm" class="routing-select" aria-label="Provider pour CoaNIMM">
+                    <option value="same">↩ Même que le chat</option>
+                    <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
+                    <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+                    <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
+                    <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
+                    <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
+                    <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+                    <option value="ollama">🟢 Ollama (local)</option>
+                </select>
+                <span class="routing-warning hidden" id="warn-coanimm" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
 
                 <span class="routing-label">🔠 PDF (texte sélectionnable)</span>
                 <span class="routing-fixed">Local gratuit (pypdf)</span>
@@ -810,27 +823,75 @@
 <div id="coanimm-modal" class="modal-overlay hidden">
     <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="coanimm-title" style="max-width:620px;">
         <div class="modal-header">
-            <h3 id="coanimm-title" tabindex="-1">🤖 Agent CoaNIMM</h3>
+            <h3 id="coanimm-title" tabindex="-1">🐸 Agent CoaNIMM</h3>
             <button class="close-modal" aria-label="Fermer l'agent CoaNIMM">✕</button>
         </div>
 
         <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 12px;">
-            Exécutez un script Python enregistré dans la Promptothèque (type « Script Python »).
-            Le script s'exécute dans un répertoire de travail isolé, propre à ce fil de conversation.
+            Lancez ici des tâches que vous avez enregistrées à l'avance — elles s'exécutent en un clic.
         </p>
 
         <div id="coanimm-script-list"></div>
 
         <div style="margin-top:14px;">
-            <h4 style="margin:0 0 6px;font-size:0.9rem;">Consigne libre</h4>
+            <h4 style="margin:0 0 6px;font-size:0.9rem;">Demande libre</h4>
             <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 8px;">
-                Décrivez une tâche en langage naturel : l'agent génère un script Python
-                correspondant et l'exécute (sous réserve d'autorisation) dans le bac à sable.
+                Décrivez ce que vous voulez faire, CoaNIMM s'occupe du reste.
             </p>
-            <label for="coanimm-consigne" class="sr-only">Consigne pour l'agent CoaNIMM</label>
+            <label for="coanimm-consigne" class="sr-only">Votre demande à CoaNIMM</label>
             <textarea id="coanimm-consigne" rows="4" placeholder="Exemple : liste les fichiers du répertoire courant et écris leur nombre dans compte.txt"
                 style="width:100%;font-size:0.85rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;box-sizing:border-box;"></textarea>
-            <button id="coanimm-generate-btn" style="margin-top:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">🤖 Générer et exécuter</button>
+            <button id="coanimm-generate-btn" style="margin-top:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">Coa !<//button>
+        </div>
+
+        <div id="coanimm-plan" class="hidden" role="region" aria-live="polite" style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;">
+            <h4 style="margin:0 0 8px;font-size:0.9rem;">Plan proposé par CoaNIMM</h4>
+            <p id="coanimm-plan-text" aria-live="polite" role="status" style="font-size:0.85rem;white-space:pre-wrap;margin:0 0 10px;line-height:1.5;"></p>
+            <div id="coanimm-explore-result" class="hidden" style="margin-bottom:10px;">
+                <h5 style="margin:0 0 4px;font-size:0.82rem;">Résultat de l'exploration du disque :</h5>
+                <textarea id="coanimm-explore-stdout" readonly rows="5"
+                    style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;box-sizing:border-box;"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <button id="coanimm-plan-ok"
+                    style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:8px 16px;color:#fff;font-size:0.88rem;cursor:pointer;font-weight:600;">OK, vas-y !</button>
+                <button id="coanimm-plan-no"
+                    style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:8px 16px;color:var(--text);font-size:0.88rem;cursor:pointer;">Non, ça n'va pas</button>
+                <button id="coanimm-crapauduc-btn"
+                    style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:8px 16px;color:var(--text);font-size:0.88rem;cursor:pointer;" aria-expanded="false" aria-controls="coanimm-crapauduc-select">Changer de crapauduc</button>
+            </div>
+            <div id="coanimm-crapauduc-panel" hidden style="margin-top:8px;">
+                <label for="coanimm-crapauduc-select" style="font-size:0.82rem;display:block;margin-bottom:4px;">Choisir un autre LLM et relancer :</label>
+                <select id="coanimm-crapauduc-select" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:0.85rem;">
+                    <option value="">-- choisir --</option>
+                    <option value="deepseek">🟢 DeepSeek</option>
+                    <option value="anthropic">🔴 Claude (Anthropic)</option>
+                    <option value="openai">🔴 OpenAI</option>
+                    <option value="gemini">🟡 Gemini</option>
+                    <option value="mistral">🔵 Mistral</option>
+                    <option value="openrouter">🟠 OpenRouter</option>
+                    <option value="ollama">🟢 Ollama (local)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- PRÉVISUALISATION DU CODE GÉNÉRÉ -->
+        <div id="coanimm-code-preview" class="hidden" role="region" aria-live="polite"
+             style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;">
+            <p style="margin:0 0 8px;font-size:0.85rem;font-weight:600;">Code généré par CoaNIMM</p>
+            <button id="coanimm-code-toggle"
+                    aria-expanded="true" aria-controls="coanimm-code-area"
+                    style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:4px 12px;color:var(--text);font-size:0.82rem;cursor:pointer;margin-bottom:6px;">
+                Masquer le code
+            </button>
+            <div id="coanimm-code-area" style="margin-bottom:8px;">
+                <textarea id="coanimm-code-edit" rows="14"
+                          aria-label="Code Python généré, modifiable"
+                          style="width:100%;box-sizing:border-box;font-family:monospace;font-size:0.80rem;
+                                 background:var(--bg-input);color:var(--text);border:1px solid var(--border);
+                                 border-radius:4px;padding:6px;resize:vertical;white-space:pre;"></textarea>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0 0;">Modifie le code si besoin, puis clique sur « OK, vas-y ! » pour l'exécuter.</p>
         </div>
 
         <div id="coanimm-permission" class="hidden" style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;">
@@ -843,9 +904,9 @@
             </div>
         </div>
 
-        <div id="coanimm-result" class="hidden" style="margin-top:14px;">
+        <div id="coanimm-result" class="hidden" role="status" aria-live="polite" style="margin-top:14px;">
             <h4 style="margin:0 0 6px;font-size:0.9rem;">Résultat de l'exécution</h4>
-            <p id="coanimm-result-status" style="margin:0 0 6px;font-size:0.85rem;"></p>
+            <p id="coanimm-result-status" tabindex="-1" aria-live="polite" role="status" style="margin:0 0 6px;font-size:0.85rem;"></p>
             <div id="coanimm-result-code-box" class="hidden">
                 <label for="coanimm-result-code" style="font-size:0.8rem;display:block;margin-bottom:2px;">Code généré et exécuté :</label>
                 <textarea id="coanimm-result-code" readonly rows="8" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;box-sizing:border-box;"></textarea>
@@ -854,6 +915,24 @@
             <textarea id="coanimm-result-stdout" readonly rows="6" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
             <label for="coanimm-result-stderr" style="font-size:0.8rem;display:block;margin:8px 0 2px;">Erreurs :</label>
             <textarea id="coanimm-result-stderr" readonly rows="4" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
+            <div id="coanimm-result-files" hidden style="margin-top:10px;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;" aria-label="Fichiers produits" role="region"></div>
+            <div id="coanimm-interact-panel" hidden role="region" aria-label="CoaNIMM demande" style="margin-top:14px;padding:12px;border:2px solid var(--accent,#6ea8fe);border-radius:8px;">
+                <p id="coanimm-interact-question" style="font-size:0.88rem;font-weight:600;margin:0 0 8px;" aria-live="polite"></p>
+                <label for="coanimm-interact-input" style="font-size:0.82rem;display:block;margin-bottom:4px;">Votre réponse :</label>
+                <textarea id="coanimm-interact-input" rows="2" placeholder="Tapez votre réponse…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.85rem;margin-bottom:8px;resize:vertical;"></textarea>
+                <button id="coanimm-interact-submit" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:7px 18px;color:#fff;font-size:0.88rem;cursor:pointer;font-weight:600;">Envoyer</button>
+            </div>
+            <div id="coanimm-save-panel" hidden style="margin-top:12px;padding:10px;border:1px solid var(--border);border-radius:8px;">
+                <p style="font-size:0.85rem;font-weight:600;margin:0 0 8px;">Enregistrer ce script dans la Promptothèque</p>
+                <label for="coanimm-save-label" style="font-size:0.82rem;display:block;margin-bottom:4px;">Nom du script :</label>
+                <input id="coanimm-save-label" type="text" placeholder="Ex. : Trier les fichiers par date"
+                    style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.85rem;margin-bottom:8px;">
+                <div style="display:flex;gap:8px;">
+                    <button id="coanimm-save-confirm" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">Enregistrer</button>
+                    <button id="coanimm-save-cancel"  style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">Pas maintenant</button>
+                </div>
+                <p id="coanimm-save-feedback" style="font-size:0.82rem;margin:6px 0 0;" aria-live="polite"></p>
+            </div>
         </div>
     </div>
 </div>
@@ -1281,5 +1360,7 @@
 </div>
 
 <script src="/static/app.js?v=20260619"></script>
+<!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
