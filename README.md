@@ -43,6 +43,7 @@ Tourne entièrement sur ta machine — tes conversations ne quittent jamais ton 
 - 🔎 **Recherche par sens** — retrouve un souvenir même sans les mots exacts (optionnel)
 - ✏️ **Modifier / Régénérer** — réédite ton dernier message ou demande une nouvelle réponse
 - 📤 **Export** — marque des réponses et exporte-les en TXT, DOCX, PDF, RTF, ODT, EPUB ou MP3
+- 🤖 **CoaNIMM** — exécute n'importe quelle tâche en langage naturel (organiser des fichiers, renommer, déplacer…) en générant et lançant un script Python à la demande
 
 ---
 
@@ -213,14 +214,4 @@ L'ensemble de l'interface est balisé avec les attributs ARIA appropriés :
 
 ## 📄 Licence
 
-**CC BY-NC-SA 4.0** — Utilisation personnelle et modification libres.  
-Usage commercial interdit.  
-Voir [LICENSE](LICENSE) pour le détail.
-
----
-
-<div align="center">
-
-*NIMM — Fait avec ☕ quelque part en France*
-
-</div>
+**CC BY-NC-SA 4.0** — Utilisation personnelle
