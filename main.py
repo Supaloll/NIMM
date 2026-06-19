@@ -1099,6 +1099,18 @@ async def set_local_mode(req: dict):
         set_setting('ollama_model', str(req['ollama_model']).strip())
     return {"status": "ok"}
 
+@app.get("/api/settings/stt-turbo")
+async def get_stt_turbo():
+    return {"enabled": get_setting('stt_turbo', 'false') == 'true'}
+
+@app.post("/api/settings/stt-turbo")
+async def set_stt_turbo(req: dict):
+    val = req.get('value')
+    if val is None:
+        val = 'true' if req.get('enabled') else 'false'
+    set_setting('stt_turbo', 'true' if str(val).lower() in ('true', '1') else 'false')
+    return {"status": "ok"}
+
 @app.get("/api/settings/user-genre")
 async def get_user_genre():
     return {"genre": get_setting('user_genre', '')}

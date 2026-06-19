@@ -174,8 +174,8 @@ def lire_derniere_entree_log():
         return None
     with open(LOG_PATH, encoding="utf-8") as f:
         contenu = f.read()
-    blocs = contenu.split("=" * 60)
-    if len(blocs) < 2:
+    blocs = [b for b in contenu.split("=" * 60) if b.strip()]
+    if not blocs:
         return None
     return blocs[-1].strip()
 
