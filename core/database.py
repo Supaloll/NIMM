@@ -1652,13 +1652,22 @@ def set_os(thread_id: str, summary: str):
 # CARNET DE BORD
 # ══════════════════════════════════════════
 
-def add_carnet_note(thread_id: str, note_number: int, content: str):
-    """Ajoute une note au carnet du fil."""
+def add_carnet_note(thread_id: str, note_number: int, content: str, msg_debut: int = 0):
+    """Ajoute une note au carnet du fil.
+    msg_debut : numéro du premier message résumé par cette note.
+    Utilisé pour l'injection glissante (ne montrer la note que quand ce message
+    est sorti de la fenêtre active)."""
     conn = get_conn()
+    # Migration douce : ajouter la colonne si absente (bases existantes)
+    try:
+        conn.execute('ALTER TABLE carnet ADD COLUMN msg_debut INTEGER DEFAULT 0')
+        conn.commit()
+    except Exception:
+        pass  # Colonne déjà présente
     conn.execute(
-        '''INSERT INTO carnet (thread_id, note_number, content)
-           VALUES (?, ?, ?)''',
-        (thread_id, note_number, content)
+        '''INSERT INTO carnet (thread_id, note_number, content, msg_debut)
+           VALUES (?, ?, ?, ?)''',
+        (thread_id, note_number, content, msg_debut)
     )
     conn.commit()
     conn.close()
@@ -1681,6 +1690,22 @@ def count_carnet_notes(thread_id: str) -> int:
     ).fetchone()
     conn.close()
     return row['n'] if row else 0
+
+def get_carnet_notes_actives(thread_id: str, n_messages: int, fenetre: int = 60) -> list:
+    """Retourne uniquement les notes dont les messages résumés sont sortis de la fenêtre active.
+    Une note est active si : msg_debut < n_messages - fenetre.
+    Les notes sans msg_debut (valeur 0, bases existantes) sont toujours injectées."""
+    conn = get_conn()
+    seuil = max(0, n_messages - fenetre)
+    rows = conn.execute(
+        '''SELECT note_number, content, msg_debut FROM carnet
+           WHERE thread_id = ?
+             AND (msg_debut = 0 OR msg_debut < ?)
+           ORDER BY note_number ASC''',
+        (thread_id, seuil)
+    ).fetchall()
+    conn.close()
+    return [{'note_number': r['note_number'], 'content': r['content']} for r in rows]
 
 
 # ══════════════════════════════════════════

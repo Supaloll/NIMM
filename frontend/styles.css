@@ -1978,6 +1978,23 @@ body {
     stroke: var(--accent);
 }
 
+/* ── Turbo Whisper — bouton micro agrandi ── */
+#mic-btn.turbo {
+    width: 46px;
+    height: 46px;
+    border-color: var(--accent);
+    position: relative;
+}
+#mic-btn.turbo::after {
+    content: '⚡';
+    position: absolute;
+    bottom: 0px;
+    right: -2px;
+    font-size: 0.72rem;
+    line-height: 1;
+    pointer-events: none;
+}
+
 /* ── STT — états animés ── */
 .mic-loading {
     border-color: var(--accent) !important;

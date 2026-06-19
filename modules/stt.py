@@ -49,13 +49,22 @@ class STTModule:
             print("[STT] Whisper prêt.")
         return self._model
 
-    def transcribe_file(self, path: str) -> dict:
+    def transcribe_file(self, path: str, initial_prompt: str = None) -> dict:
         """
         Transcrit un fichier audio (webm, wav, mp3…) via Whisper.
         Appelé depuis main.py dans un run_in_executor pour ne pas bloquer l'event loop.
         """
         try:
-            result = self._get_model().transcribe(path, language="fr", fp16=False)
+            kwargs = dict(
+                language="fr",
+                fp16=False,
+                beam_size=8,
+                condition_on_previous_text=False,
+                no_speech_threshold=0.3,
+            )
+            if initial_prompt:
+                kwargs["initial_prompt"] = initial_prompt[:300]
+            result = self._get_model().transcribe(path, **kwargs)
             text   = result["text"].strip()
             print(f"[STT] {text[:80]}")
             return {"status": "ok", "text": text}

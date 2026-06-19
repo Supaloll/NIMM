@@ -1417,6 +1417,18 @@ async def set_local_mode(req: dict):
         set_setting('ollama_model', str(req['ollama_model']).strip())
     return {"status": "ok"}
 
+@app.get("/api/settings/stt-turbo")
+async def get_stt_turbo():
+    return {"enabled": get_setting('stt_turbo', 'false') == 'true'}
+
+@app.post("/api/settings/stt-turbo")
+async def set_stt_turbo(req: dict):
+    val = req.get('value')
+    if val is None:
+        val = 'true' if req.get('enabled') else 'false'
+    set_setting('stt_turbo', 'true' if str(val).lower() in ('true', '1') else 'false')
+    return {"status": "ok"}
+
 @app.get("/api/settings/user-genre")
 async def get_user_genre():
     return {"genre": get_setting('user_genre', '')}
@@ -1439,6 +1451,33 @@ async def set_search_provider(req: dict):
     if p not in ('auto', 'brave', 'tavily'):
         p = 'auto'
     set_setting('search_provider', p)
+    return {"status": "ok"}
+
+@app.get("/api/stt/dict")
+async def get_stt_dict():
+    import json as _j
+    raw = get_setting('stt_dict', '[]')
+    try:
+        return {"entries": _j.loads(raw)}
+    except Exception:
+        return {"entries": []}
+
+@app.post("/api/stt/dict")
+async def save_stt_dict(req: dict = Body(...)):
+    import json as _j
+    entries = req.get('entries', [])
+    set_setting('stt_dict', _j.dumps(entries, ensure_ascii=False))
+    return {"status": "ok"}
+
+@app.get("/api/settings/stt-turbo")
+async def get_stt_turbo():
+    return {"enabled": get_setting('stt_turbo_enabled', 'false').lower() == 'true'}
+
+@app.post("/api/settings/stt-turbo")
+async def set_stt_turbo(req: SettingValue):
+    if req.value not in ('true', 'false'):
+        raise HTTPException(400, "Valeur invalide (true/false)")
+    set_setting('stt_turbo_enabled', req.value)
     return {"status": "ok"}
 
 @app.get("/api/settings/stt")
@@ -2071,13 +2110,33 @@ async def image_edit(req: ImageEditRequest):
 
 
 @app.post("/api/stt/transcribe")
-async def stt_transcribe(file: UploadFile = File(...)):
+async def stt_transcribe(
+    file:      UploadFile = File(...),
+    thread_id: str        = Form(None),
+    turbo:     str        = Form(None),
+):
     """
     Reçoit un blob audio (webm/wav) enregistré côté client,
     le passe à Whisper dans un thread séparé pour ne pas bloquer l'event loop.
+    Si turbo=true et thread_id fourni, injecte les notes du carnet comme
+    initial_prompt pour améliorer la précision de la transcription.
     """
     import asyncio, tempfile, os
     stt = get_stt()
+
+    # Construire le contexte carnet si mode turbo actif
+    initial_prompt = None
+    if turbo == 'true' and thread_id:
+        try:
+            from core.database import get_carnet_notes
+            notes = get_carnet_notes(thread_id)
+            if notes:
+                # Les 3 dernières notes — résumé compact du contexte récent
+                extrait = ' '.join(n['content'] for n in notes[-3:])
+                initial_prompt = extrait[:300]
+                print(f"[STT-TURBO] Contexte carnet : {initial_prompt[:80]}...")
+        except Exception as e:
+            print(f"[STT-TURBO] Erreur récupération carnet : {e}")
 
     # Sauvegarder le blob dans un fichier temporaire
     suffix = '.webm'
@@ -2091,7 +2150,9 @@ async def stt_transcribe(file: UploadFile = File(...)):
             tmp_path = tmp.name
 
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, stt.transcribe_file, tmp_path)
+        result = await loop.run_in_executor(
+            None, stt.transcribe_file, tmp_path, initial_prompt
+        )
         return result
 
     except Exception as e:
