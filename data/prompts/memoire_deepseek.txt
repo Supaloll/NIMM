@@ -9,6 +9,8 @@ LOGIQUE :
 - Un seul triplet par fait, dans le sens naturel de l'énoncé. Ne génère jamais la réciproque — le code s'en charge.
 - Quantité globale sans prénom ("on est 5") → aucun objet.
 - Proche sans prénom → sujet = {{USER_NAME}}, prédicat = lien de parenté.
+- Tiers nommé par sa fonction sans prénom ("mon commandant", "le maire", "mon chef") → sujet = {{USER_NAME}}, predicat = "relation_sociale", objet = la fonction citée (ex: "commandant"). Si un prénom est donné en même temps ("mon commandant Dupuis"), sujet = ce prénom/nom, predicat = "relation_sociale" ou lien pertinent.
+- Formule de mémorisation forcée ("retiens que", "souviens-toi que", "garde en mémoire", "n'oublie pas que") → le fait qui suit DOIT être extrait, même s'il aurait normalement été jugé trop mineur ou hors-sujet. Le sujet reste soumis aux mêmes règles (prénom réel ou {{USER_NAME}}) — la formule force la mémorisation, pas le format.
 - Trait de personnalité ("douce", "émotive", "sensible") → predicat="qualite", memoire_type="autre". Jamais "sante".
 - Émotion rapportée calmement ("j'étais fier") → registre="neutre". "emotionnel" réservé au ton à vif (majuscules, colère manifeste).
 
@@ -17,17 +19,18 @@ INTERDICTIONS :
 - Sujet = rôle ("père", "fils", "utilisateur", "je", "il", "elle").
 - Inférer un âge actuel depuis une date passée → objet = âge déclaré, contexte = circonstance.
 - Personne publique, historique, fictionnelle, ou mentionnée sans lien relationnel explicite avec {{USER_NAME}}.
+- Sujet = placeholder ou gabarit non rempli ("[F]", "[H]", "[prénom]", "X", "Madame", "Monsieur") → si le prénom réel n'est pas donné dans la conversation, sujet = {{USER_NAME}}, prédicat = lien de parenté (comme pour "proche sans prénom").
 
 EXEMPLES :
-Échange : "Je suis chauffeur poids lourd. [F] fait de la couture, elle est aussi secrétaire bénévole au club de judo."
+Échange : "Je suis chauffeur poids lourd. Camille fait de la couture, elle est aussi secrétaire bénévole au club de judo."
 → {"registre":"neutre","type":"trait","sujet":"{{USER_NAME}}","predicat":"metier","objet":"chauffeur poids lourd","memoire_type":"travail","profondeur":1,"type_temporal":"permanent","contexte":""}
-→ {"registre":"neutre","type":"trait","sujet":"[F]","predicat":"metier","objet":"couturière","memoire_type":"travail","profondeur":1,"type_temporal":"permanent","contexte":""}
-→ {"registre":"neutre","type":"activite","sujet":"[F]","predicat":"benevolat","objet":"secrétaire club de judo","memoire_type":"autre","profondeur":3,"type_temporal":"persistant","contexte":""}
+→ {"registre":"neutre","type":"trait","sujet":"Camille","predicat":"metier","objet":"couturière","memoire_type":"travail","profondeur":1,"type_temporal":"permanent","contexte":""}
+→ {"registre":"neutre","type":"activite","sujet":"Camille","predicat":"benevolat","objet":"secrétaire club de judo","memoire_type":"autre","profondeur":3,"type_temporal":"persistant","contexte":""}
 
-Échange : "J'ai une sœur qui s'appelle [F]. Son mari c'est [H]."
-→ {"registre":"neutre","type":"relation","sujet":"{{USER_NAME}}","predicat":"soeur","objet":"[F]","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
-→ {"registre":"neutre","type":"relation","sujet":"[F]","predicat":"conjoint","objet":"[H]","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
-→ {"registre":"neutre","type":"relation","sujet":"[F]","predicat":"frere","objet":"{{USER_NAME}}","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
+Échange : "J'ai une sœur qui s'appelle Camille. Son mari c'est Julien."
+→ {"registre":"neutre","type":"relation","sujet":"{{USER_NAME}}","predicat":"soeur","objet":"Camille","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
+→ {"registre":"neutre","type":"relation","sujet":"Camille","predicat":"conjoint","objet":"Julien","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
+→ {"registre":"neutre","type":"relation","sujet":"Camille","predicat":"frere","objet":"{{USER_NAME}}","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
 
 Échange : "On est 5 dans la maison."
 → (aucun objet — quantité sans prénom)
