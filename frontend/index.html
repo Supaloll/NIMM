@@ -832,6 +832,21 @@
         </p>
 
         <div id="coanimm-script-list"></div>
+        <details id="coanimm-paths-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Dossiers autorisés en écriture</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Par défaut, CoaNIMM n'écrit, ne déplace et ne supprime que dans son espace de travail.
+                Ajoutez ici les dossiers où vous l'autorisez à agir (par exemple votre dossier Téléchargements).
+            </p>
+            <ul id="coanimm-paths-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;"></ul>
+            <label for="coanimm-path-input" class="sr-only">Chemin du dossier à autoriser</label>
+            <input type="text" id="coanimm-path-input" placeholder="Collez ici le chemin complet d'un dossier"
+                style="width:100%;font-size:0.82rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px;box-sizing:border-box;">
+            <button type="button" id="coanimm-path-add-btn"
+                style="margin-top:6px;font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Ajouter ce dossier</button>
+            <p id="coanimm-path-feedback" role="status" aria-live="polite" style="font-size:0.8rem;margin:6px 0 0;"></p>
+        </details>
+
 
         <div style="margin-top:14px;">
             <h4 style="margin:0 0 6px;font-size:0.9rem;">Demande libre</h4>
@@ -904,9 +919,16 @@
             </div>
         </div>
 
+        <div id="coanimm-confirm-panel" class="hidden" role="alertdialog" aria-labelledby="coanimm-confirm-text" style="margin-top:14px;padding:10px;border:1px solid #c88c00;border-radius:6px;background:rgba(200,140,0,0.10);">
+            <p id="coanimm-confirm-text" tabindex="-1" style="margin:0 0 8px;font-size:0.85rem;"></p>
+            <button type="button" id="coanimm-confirm-yes" style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Exécuter quand même</button>
+            <button type="button" id="coanimm-confirm-no" style="font-size:0.82rem;padding:5px 12px;margin-left:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Annuler</button>
+        </div>
+
         <div id="coanimm-result" class="hidden" role="status" aria-live="polite" style="margin-top:14px;">
             <h4 style="margin:0 0 6px;font-size:0.9rem;">Résultat de l'exécution</h4>
             <p id="coanimm-result-status" tabindex="-1" aria-live="polite" role="status" style="margin:0 0 6px;font-size:0.85rem;"></p>
+            <button type="button" id="coanimm-stop-btn" class="hidden" style="margin:0 0 8px;font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">⏹ Arrêter le script</button>
             <div id="coanimm-result-code-box" class="hidden">
                 <label for="coanimm-result-code" style="font-size:0.8rem;display:block;margin-bottom:2px;">Code généré et exécuté :</label>
                 <textarea id="coanimm-result-code" readonly rows="8" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;box-sizing:border-box;"></textarea>
