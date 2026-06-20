@@ -105,6 +105,126 @@ def update_user(user_id: str, name: str = None, emoji: str = None, admin: bool =
             return u
     raise ValueError(f"Profil '{user_id}' introuvable.")
 
+# ══════════════════════════════════════════
+# VERROU DE SESSION — PIN local (haché) + identité Tailscale
+# ══════════════════════════════════════════
+#
+# But : empêcher la POLLUTION de mémoire quand on bascule par erreur sur la
+# session d'un autre profil sur le PC partagé. Local : PIN par profil (haché,
+# jamais en clair). Distant : un profil peut être lié à une identité Tailscale,
+# et seul le porteur de cette identité peut écrire dans cette session.
+# INERTE par défaut : sans pin_hash ni ts_login, aucun comportement ne change.
+
+import hashlib as _hashlib, hmac as _hmac, secrets as _secrets, base64 as _b64
+
+_UNLOCK_SECRET_FILE = os.path.join(DATA_DIR, '.nimm_unlock_secret')
+
+
+def _unlock_secret() -> bytes:
+    """Secret serveur (généré une fois) pour signer les jetons de déverrouillage."""
+    try:
+        if os.path.exists(_UNLOCK_SECRET_FILE):
+            with open(_UNLOCK_SECRET_FILE, 'rb') as f:
+                data = f.read().strip()
+            if data:
+                return data
+    except Exception:
+        pass
+    sec = _secrets.token_bytes(32)
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(_UNLOCK_SECRET_FILE, 'wb') as f:
+            f.write(sec)
+        try:
+            os.chmod(_UNLOCK_SECRET_FILE, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return sec
+
+
+def _hash_pin(pin: str, salt: bytes) -> str:
+    dk = _hashlib.pbkdf2_hmac('sha256', (pin or '').encode('utf-8'), salt, 120000)
+    return _b64.b64encode(dk).decode('ascii')
+
+
+def set_user_pin(user_id: str, pin: str) -> None:
+    """Définit (pin non vide) ou retire (pin vide) le PIN d'un profil.
+    Stocké haché (PBKDF2 + sel) dans users.json — jamais en clair."""
+    users = _load_users()
+    for u in users:
+        if u['id'] == user_id:
+            if pin:
+                salt = _secrets.token_bytes(16)
+                u['pin_salt'] = _b64.b64encode(salt).decode('ascii')
+                u['pin_hash'] = _hash_pin(pin, salt)
+            else:
+                u.pop('pin_salt', None)
+                u.pop('pin_hash', None)
+            _save_users(users)
+            return
+    raise ValueError(f"Profil '{user_id}' introuvable.")
+
+
+def user_has_pin(user_id: str) -> bool:
+    for u in _load_users():
+        if u['id'] == user_id:
+            return bool(u.get('pin_hash'))
+    return False
+
+
+def verify_user_pin(user_id: str, pin: str) -> bool:
+    """True si le PIN correspond, ou si le profil n'a pas de PIN défini."""
+    for u in _load_users():
+        if u['id'] == user_id:
+            ph, ps = u.get('pin_hash'), u.get('pin_salt')
+            if not ph or not ps:
+                return True  # pas de verrou
+            try:
+                salt = _b64.b64decode(ps)
+            except Exception:
+                return False
+            return _hmac.compare_digest(_hash_pin(pin or '', salt), ph)
+    return False
+
+
+def unlock_token(user_id: str) -> str:
+    """Jeton opaque prouvant que le PIN de user_id a été fourni (HMAC du secret)."""
+    return _hmac.new(_unlock_secret(), (user_id or '').encode('utf-8'),
+                     _hashlib.sha256).hexdigest()
+
+
+def check_unlock_token(user_id: str, token: str) -> bool:
+    if not token:
+        return False
+    return _hmac.compare_digest(token, unlock_token(user_id))
+
+
+def set_user_ts_login(user_id: str, ts_login: str) -> None:
+    """Lie (ou délie si vide) un profil à une identité Tailscale (Tailscale-User-Login)."""
+    users = _load_users()
+    for u in users:
+        if u['id'] == user_id:
+            if ts_login:
+                u['ts_login'] = ts_login
+            else:
+                u.pop('ts_login', None)
+            _save_users(users)
+            return
+    raise ValueError(f"Profil '{user_id}' introuvable.")
+
+
+def find_user_by_ts_login(ts_login: str):
+    """id du profil lié à cette identité Tailscale, ou None."""
+    if not ts_login:
+        return None
+    for u in _load_users():
+        if u.get('ts_login') and u['ts_login'].lower() == ts_login.lower():
+            return u['id']
+    return None
+
+
 def init_bibliotheque(conn):
     """Crée la table bibliothèque si elle n'existe pas."""
     conn.execute('''

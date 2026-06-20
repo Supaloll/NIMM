@@ -35,6 +35,9 @@ if (window.marked) {
     marked.setOptions({ renderer: _renderer });
 }
 
+// Sécurité (anti-XSS) : échappement HTML + désinfection du Markdown rendu
+function _safeHTML(h){ try { return window.DOMPurify ? DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']}) : h; } catch(e){ return h; } }
+
 // ── Accessibilité : bips de génération ──
 const _ac = new (window.AudioContext || window.webkitAudioContext)();
 function _bip(freq = 440, duration = 80, gain = 0.08) {
@@ -251,15 +254,41 @@ function stopTTS() {
 let _selectedVoice  = localStorage.getItem('nimm-voice') || 'ff_siwis';
 let _autoTTS        = localStorage.getItem('nimm-autotts') === 'true';
 let _currentUserId  = localStorage.getItem('nimm-user-id') || '';
+let _unlockTokens   = {};   // userId -> jeton de session (memoire seule, non persiste)
 
-// ── Intercepteur fetch — injecte X-User-ID sur tous les appels /api ──
+// ── Intercepteur fetch — injecte X-User-ID (+ jeton de session) sur tous les appels /api ──
 const _nimmOrigFetch = window.fetch.bind(window);
 window.fetch = (url, opts = {}) => {
     if (typeof url === 'string' && url.startsWith('/api') && _currentUserId) {
-        opts = { ...opts, headers: { 'X-User-ID': _currentUserId, ...(opts.headers || {}) } };
+        const _h = { 'X-User-ID': _currentUserId, ...(opts.headers || {}) };
+        if (_unlockTokens[_currentUserId]) _h['X-Unlock-Token'] = _unlockTokens[_currentUserId];
+        opts = { ...opts, headers: _h };
     }
     return _nimmOrigFetch(url, opts);
 };
+
+// ── Verrou de session : deverrouille un profil a PIN avant d'ecrire (anti-pollution memoire) ──
+async function _ensureUnlocked(userId) {
+    if (!userId || _unlockTokens[userId]) return true;
+    let hasPin = false;
+    try {
+        const users = await fetch('/api/users').then(r => r.json());
+        const u = (users || []).find(x => x.id === userId);
+        hasPin = !!(u && u.has_pin);
+    } catch (e) { hasPin = false; }
+    if (!hasPin) return true;
+    const pin = window.prompt('Code PIN pour la session « ' + userId + ' » :');
+    if (pin === null || pin === '') return false;
+    try {
+        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/unlock', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin })
+        });
+        if (!r.ok) { window.alert('PIN incorrect.'); return false; }
+        _unlockTokens[userId] = (await r.json()).token;
+        return true;
+    } catch (e) { window.alert('Deverrouillage impossible.'); return false; }
+}
 
 // Cache masques : id → label (ex: "Glaude 🐺")
 let _maskCache = {};
@@ -584,6 +613,7 @@ async function showUserPicker(switchMode = false) {
 }
 
 async function _selectUser(user, switchMode = false) {
+    _unlockTokens = {};   // changer de session re-verrouille les profils a PIN
     _currentUserId = user.id;
     localStorage.setItem('nimm-user-id',    user.id);
     localStorage.setItem('nimm-user-name',  user.name);
@@ -606,6 +636,40 @@ async function _selectUser(user, switchMode = false) {
         return;
     }
     await init();
+}
+
+// ── Tuile admin : verrou PIN + identité Tailscale par profil ──
+async function _setUserPin(userId, hasPin) {
+    let current = '';
+    if (hasPin) {
+        current = window.prompt('Code PIN actuel de « ' + userId + ' » :');
+        if (current === null) return;
+    }
+    const np = window.prompt(hasPin ? 'Nouveau code PIN (laisser vide pour RETIRER le PIN) :' : 'Nouveau code PIN pour « ' + userId + ' » :');
+    if (np === null) return;
+    try {
+        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/set-pin', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: np, current_pin: current })
+        });
+        if (!r.ok) { window.alert('Échec (code PIN actuel incorrect ?).'); return; }
+        window.alert(np ? 'Code PIN défini.' : 'Code PIN retiré.');
+        _loadUsersTab();
+    } catch (e) { window.alert('Opération impossible.'); }
+}
+
+async function _setUserTs(userId) {
+    const v = window.prompt('Identité Tailscale à lier à « ' + userId + ' » (ex : prenom@gmail.com ; vide = délier) :');
+    if (v === null) return;
+    try {
+        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/ts-login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ts_login: v })
+        });
+        if (!r.ok) { window.alert('Échec.'); return; }
+        window.alert(v ? 'Identité Tailscale liée.' : 'Identité Tailscale déliée.');
+        _loadUsersTab();
+    } catch (e) { window.alert('Opération impossible.'); }
 }
 
 async function _loadUsersTab() {
@@ -646,10 +710,12 @@ const isAdmin = me.admin;
         <h4>👥 Gérer les profils</h4>
         <div id="users-list-inner" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">`;
         users.forEach(u => {
-            html += `<div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+            html += `<div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);flex-wrap:wrap">
                 <span style="font-size:1.4rem">${u.emoji || '👤'}</span>
-                <span style="flex:1;font-weight:${u.id === _currentUserId ? '700' : '400'}">${u.name}${u.id === _currentUserId ? ' (moi)' : ''}</span>
-                ${u.id !== _currentUserId ? `<button onclick="_deleteUser('${u.id}')" style="padding:3px 10px;border:none;background:#e55;color:#fff;border-radius:6px;cursor:pointer;font-size:0.8rem">✕</button>` : ''}
+                <span style="flex:1;font-weight:${u.id === _currentUserId ? '700' : '400'}">${u.name}${u.id === _currentUserId ? ' (moi)' : ''}${u.ts_login ? ' 🔗' : ''}</span>
+                <button onclick="_setUserPin('${u.id}', ${u.has_pin ? 'true' : 'false'})" aria-label="${u.has_pin ? 'Modifier le code PIN de ' + u.name : 'Definir un code PIN pour ' + u.name}" style="padding:3px 10px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.8rem">${u.has_pin ? '🔒' : '🔓'} PIN</button>
+                <button onclick="_setUserTs('${u.id}')" aria-label="Lier une identite Tailscale a ${u.name}" style="padding:3px 10px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.8rem">🔗 Tailscale</button>
+                ${u.id !== _currentUserId ? `<button onclick="_deleteUser('${u.id}')" aria-label="Supprimer le profil ${u.name}" style="padding:3px 10px;border:none;background:#e55;color:#fff;border-radius:6px;cursor:pointer;font-size:0.8rem">✕</button>` : ''}
             </div>`;
         });
         html += `</div>
@@ -771,6 +837,27 @@ function _slugify(str) {
 }
 
 async function init() {
+    // Reconnaissance Tailscale (distant) : identité tailnet liée à un profil → on s'y place d'office.
+    let _tsMapped = false;
+    try {
+        const sess = await fetch('/api/session/identity').then(r => r.json()).catch(() => ({}));
+        if (sess && sess.mapped_user) {
+            _currentUserId = sess.mapped_user;
+            localStorage.setItem('nimm-user-id', sess.mapped_user);
+            _tsMapped = true;
+        }
+    } catch (e) {}
+
+    // Verrou par profil au démarrage : un profil à PIN doit être déverrouillé avant d'entrer.
+    // (les proches reconnus par identité Tailscale entrent sans saisir de PIN)
+    if (_currentUserId && !_tsMapped) {
+        if (!(await _ensureUnlocked(_currentUserId))) {
+            _currentUserId = '';
+            await showUserPicker();
+            return;
+        }
+    }
+
     // Sélection profil — avant tout le reste
     if (!_currentUserId) {
         // Vérifier si le mode serveur est actif
@@ -1800,6 +1887,7 @@ function _renderBubble(bubble, rawText) {
 
     // 3. Markdown
     let html = window.marked ? marked.parse(processed) : processed.replace(/\n/g, '<br>');
+    html = _safeHTML(html);  // désinfection anti-XSS du contenu rendu
 
     // 4. Injecter les cartes
     quizBlocks.forEach((data, idx) => {
@@ -2812,7 +2900,7 @@ async function _triggerStream(content, conversationId, images = null) {
                         const imgBubble = document.createElement('div');
                         imgBubble.className = 'message-bubble';
                         const imgB64 = img.b64 || '';
-                        imgBubble.innerHTML = `<img src="${src}" alt="${img.prompt}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${displayPrompt}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+                        imgBubble.innerHTML = `<img src="${src}" alt="${_esc(img.prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${_esc(displayPrompt)}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
                         imgBubble.querySelector('.img-download-btn').addEventListener('click', async () => {
                             try {
                                 const resp = await fetch(src);
@@ -3297,6 +3385,7 @@ async function requestSummary(conversationId) {
 async function sendMessage() {
     const content = userInput.value.trim();
     if (!content && !_pendingFile) return;
+    if (!(await _ensureUnlocked(_currentUserId))) return;  // session a PIN : deverrouiller avant d'ecrire
 
     userInput.value = '';
     userInput.style.height = '44px';
@@ -3340,9 +3429,9 @@ async function sendMessage() {
             bubble.className = 'message-bubble';
             const promptLabel = revisedPrompt && revisedPrompt !== prompt
                 ? `<span style="font-size:0.8rem;color:var(--text-muted);">${revisedPrompt}</span>`
-                : `<span style="font-size:0.8rem;color:var(--text-muted);">${prompt}</span>`;
+                : `<span style="font-size:0.8rem;color:var(--text-muted);">${_esc(prompt)}</span>`;
             const editB64 = data.b64 || '';
-            bubble.innerHTML = `<img src="${src}" alt="${prompt}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">${promptLabel}<br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+            bubble.innerHTML = `<img src="${src}" alt="${_esc(prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">${promptLabel}<br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
             bubble.querySelector('.img-download-btn').addEventListener('click', async () => {
                 try {
                     const resp = await fetch(src);
@@ -4592,7 +4681,7 @@ document.getElementById('image-edit-ok')?.addEventListener('click', async () => 
         emoji.textContent = '🎨';
         const bubble   = document.createElement('div');
         bubble.className = 'message-bubble';
-        bubble.innerHTML = `<img src="${src}" alt="${prompt}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${prompt}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+        bubble.innerHTML = `<img src="${src}" alt="${_esc(prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${_esc(prompt)}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
         bubble.querySelector('.img-download-btn').addEventListener('click', async () => {
             try {
                 const resp = await fetch(src);
@@ -4819,7 +4908,7 @@ function renderAgenda(rappels) {
 }
 
 function _esc(str) {
-    return String(str || '').replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/\"/g,'"');
+    return String(str == null ? '' : str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // ══════════════════════════════════════════
@@ -4847,10 +4936,10 @@ async function _galerieLoad() {
             const displayName = img.filename.replace(/\.png$/, '');
             card.innerHTML = `
                 <img src="/api/images/file/${encodeURIComponent(img.filename)}"
-                     alt="${img.prompt || img.filename}"
+                     alt="${_esc(img.prompt || img.filename)}"
                      loading="lazy"
                      style="width:100%;aspect-ratio:1;object-fit:cover;display:block;cursor:pointer;"
-                     title="${img.prompt || ''}"
+                     title="${_esc(img.prompt || '')}"
                      data-img-id="${img.id}">
                 <div style="padding:6px 8px;font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${displayName}">${displayName}</div>
                 <div style="display:flex;gap:4px;padding:0 6px 6px;flex-wrap:wrap;">

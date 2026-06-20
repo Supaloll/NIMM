@@ -15,6 +15,8 @@ import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 
+from modules import net_guard
+
 BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_TIMEOUT = 8  # secondes
 
@@ -194,15 +196,16 @@ def _check_url(url: str) -> str:
     """Mode léger : 'live', 'dead' ou 'unknown' (n'écarte que 404/410)."""
     if not url:
         return "unknown"
+    if not net_guard.is_public_url(url):
+        return "unknown"  # cible interne / tailnet : refus anti-SSRF
     headers = {"User-Agent": _BROWSER_UA}
     try:
-        resp = requests.head(url, headers=headers, timeout=VERIFY_TIMEOUT,
-                             allow_redirects=True)
+        resp = net_guard.safe_request("HEAD", url, headers=headers, timeout=VERIFY_TIMEOUT)
         if resp.status_code in (403, 405, 501):
-            resp = requests.get(url, headers=headers, timeout=VERIFY_TIMEOUT,
-                                 allow_redirects=True, stream=True)
+            resp = net_guard.safe_request("GET", url, headers=headers,
+                                          timeout=VERIFY_TIMEOUT, stream=True)
             resp.close()
-    except requests.exceptions.RequestException:
+    except (requests.exceptions.RequestException, PermissionError):
         return "unknown"
     code = resp.status_code
     if code in (404, 410):
@@ -269,11 +272,13 @@ def _scrape_url(url: str, keywords):
     Retourne (statut, paragraphes) avec statut dans {'live','dead','unknown'}."""
     if not url:
         return "unknown", []
+    if not net_guard.is_public_url(url):
+        return "unknown", []  # cible interne / tailnet : refus anti-SSRF
     headers = {"User-Agent": _BROWSER_UA, "Accept-Language": "fr,en;q=0.8"}
     try:
-        resp = requests.get(url, headers=headers, timeout=ENRICH_TIMEOUT,
-                            allow_redirects=True, verify=ENRICH_VERIFY_TLS)
-    except requests.exceptions.RequestException:
+        resp = net_guard.safe_request("GET", url, headers=headers,
+                                      timeout=ENRICH_TIMEOUT, verify=ENRICH_VERIFY_TLS)
+    except (requests.exceptions.RequestException, PermissionError):
         return "unknown", []
     code = resp.status_code
     if code in (404, 410):
@@ -635,8 +640,4 @@ async def search_with_cache(query: str, max_results: int = 5, classify=None) -> 
     result = await search(query, max_results)
 
     # On ne mémorise que les vraies réponses (ni erreur, ni absence de résultat),
-    # et on le fait en arrière-plan pour ne pas retarder la réponse.
-    indesirable = result.startswith("⚠️") or result.startswith("Aucun résultat")
-    if result and not indesirable:
-        _schedule_store(_store_task(query, norm, result, qvec, classify))
-    return result
+    # et on le
