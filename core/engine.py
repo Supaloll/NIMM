@@ -82,6 +82,7 @@ async def call_llm(
     temperature: float = 0.7,
     api_keys: dict = None,
     images: list = None,        # [{"data": base64, "media_type": "image/jpeg"}]
+    tools: list = None,
 ) -> str:
     """
     Point d'entrée unique pour tous les providers.
@@ -91,11 +92,11 @@ async def call_llm(
     model = _resolve_model(provider, model)
 
     if provider == 'anthropic':
-        return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images)
+        return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools)
     elif provider == 'deepseek':
         return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', 'https://api.deepseek.com/v1', images=images)
     elif provider == 'gemini':
-        return await _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys)
+        return await _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys, tools=tools)
     elif provider == 'openai':
         return await _call_openai_compat(messages, model or 'gpt-4o', system_prompt, max_tokens, temperature, api_keys, 'openai', 'https://api.openai.com/v1', images=images)
     elif provider == 'openrouter':
@@ -159,7 +160,7 @@ def _oai_msgs_to_anthropic(messages):
     return out
 
 
-async def _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images):
+async def _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None):
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
         raise ValueError("Clé API Anthropic manquante.")
@@ -194,6 +195,8 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
     }
     if system_prompt:
         payload['system'] = system_prompt
+    if tools:
+        payload['tools'] = _oai_tools_to_anthropic(tools)
 
     async with httpx.AsyncClient(timeout=300) as client:
         r = await client.post(
@@ -264,7 +267,7 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
 # OPENAI-COMPATIBLE (DeepSeek / OpenAI / OpenRouter)
 # ══════════════════════════════════════════
 
-async def _call_openai_compat(messages, model, system_prompt, max_tokens, temperature, api_keys, provider_name, base_url, images=None):
+async def _call_openai_compat(messages, model, system_prompt, max_tokens, temperature, api_keys, provider_name, base_url, images=None, tools=None):
     api_key = get_api_key(provider_name, api_keys)
     if not api_key:
         raise ValueError(f"Clé API {provider_name} manquante.")
@@ -308,6 +311,7 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
                 'messages':    oai_messages,
                 'max_tokens':  max_tokens,
                 'temperature': temperature,
+                **({'tools': tools} if tools else {}),
             }
         )
         r.raise_for_status()
@@ -376,7 +380,7 @@ def _oai_msgs_to_gemini(messages):
     return out
 
 
-async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys):
+async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys, tools=None):
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
         raise ValueError("Clé API Gemini manquante.")
@@ -390,6 +394,8 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
             'temperature':     temperature,
         }
     }
+    if tools:
+        payload['tools'] = _oai_tools_to_gemini(tools)
     if system_prompt:
         payload['systemInstruction'] = {'parts': [{'text': system_prompt}]}
 
@@ -645,7 +651,7 @@ async def call_vision(image_b64: str, media_type: str, prompt: str,
 # STREAMING
 # ══════════════════════════════════════════
 
-async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, provider_name, base_url):
+async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, provider_name, base_url, tools=None):
     """Stream tokens via API OpenAI-compatible (DeepSeek, OpenAI, OpenRouter)."""
     api_key = get_api_key(provider_name, api_keys)
     if not api_key:
@@ -678,6 +684,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                 'max_tokens':  max_tokens,
                 'temperature': temperature,
                 'stream':      True,
+                **({'tools': tools} if tools else {}),
             }
         ) as r:
             r.raise_for_status()
@@ -700,7 +707,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                 except Exception:
                     continue
 
-async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images):
+async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None):
     """Stream tokens via API Anthropic."""
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
@@ -730,6 +737,8 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
     }
     if system_prompt:
         payload['system'] = system_prompt
+    if tools:
+        payload['tools'] = _oai_tools_to_anthropic(tools)
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
             'POST',
@@ -765,6 +774,7 @@ async def call_llm_stream(
     temperature: float = 0.7,
     api_keys: dict = None,
     images: list = None,
+    tools: list = None,
     pipeline: str = 'chat',
 ):
     """Stream de tokens — génère les tokens un par un."""
@@ -774,7 +784,7 @@ async def call_llm_stream(
 
     try:
         if provider == 'anthropic':
-            async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images):
+            async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools):
                 _accumulated.append(token)
                 yield token
         elif provider in ('deepseek', 'openai', 'openrouter', 'mistral'):
@@ -792,13 +802,13 @@ async def call_llm_stream(
             }
             async for token in _call_openai_compat_stream(
                 messages, model or models[provider], system_prompt,
-                max_tokens, temperature, api_keys, provider, urls[provider]
+                max_tokens, temperature, api_keys, provider, urls[provider], tools=tools
             ):
                 _accumulated.append(token)
                 yield token
         else:
             # Fallback : appel normal (déjà loggé dans call_llm)
-            result = await call_llm(messages, provider, model, system_prompt, max_tokens, temperature, api_keys, images)
+            result = await call_llm(messages, provider, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools)
             _accumulated.append(result)
             yield result
             return  # call_llm a déjà loggé — on sort avant le _log stream

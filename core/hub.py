@@ -2329,6 +2329,7 @@ async def process_message(
                         max_tokens=settings['max_tokens'],
                         temperature=settings['temperature'],
                         api_keys=settings['api_keys'],
+                        tools=NIMM_TOOLS,  # requis par Anthropic : l'historique contient des blocs tool_use/tool_result
                     )
 
     except Exception as e:
@@ -2626,6 +2627,7 @@ async def process_message_stream(
                         max_tokens=settings['max_tokens'],
                         temperature=settings['temperature'],
                         api_keys=settings['api_keys'],
+                        tools=NIMM_TOOLS,  # requis par Anthropic : l'historique contient des blocs tool_use/tool_result
                     ):
                         full_reply += token
                         _yield_buf += token

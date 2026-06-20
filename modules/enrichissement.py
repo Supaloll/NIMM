@@ -125,6 +125,10 @@ def _render_playwright(url, timeout_ms=20000):
         from playwright.sync_api import sync_playwright
     except Exception:
         return None
+    from modules import net_guard
+    if not net_guard.is_public_url(url):
+        print(f"[ENRICH] Rendu refusé (cible interne / tailnet) : {url}")
+        return None
     try:
         with sync_playwright() as p:
             navigateur = p.chromium.launch(headless=True)
@@ -153,6 +157,8 @@ def extract_url(url, allow_browser=True):
         import trafilatura
     except Exception:
         raise RuntimeError("trafilatura n'est pas installé (pip install trafilatura).")
+    from modules import net_guard
+    net_guard.assert_public_url(url)  # anti-SSRF : refuse loopback/privé/tailnet
     downloaded = trafilatura.fetch_url(url)
     html = downloaded
     texte = trafilatura.extract(
@@ -482,8 +488,4 @@ def ingest_file(path, filename, mistral_key=None, expiration=None, force_ocr=Fal
             return {"ok": False, "erreur": f"Format non pris en charge : .{ext}"}
     except RuntimeError as e:
         # Messages déjà clairs (clé OCR manquante, dépendance, Tesseract introuvable…).
-        return {"ok": False, "erreur": str(e)}
-    except Exception as e:
-        print(f"[ENRICH] Échec lecture fichier : {e}")
-        return {"ok": False, "erreur": "Impossible de lire ce fichier."}
-    return ingest_text(filename, texte, source="fichier:" + filename, expiration=expiration)
+        r

@@ -12,7 +12,7 @@ import threading
 import time
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -186,6 +186,57 @@ async def _user_ctx_middleware(request, call_next):
     user_id = request.headers.get('x-user-id', '') or ''
     if user_id:
         set_user_context(user_id)
+    return await call_next(request)
+
+def _sec_host_allowed(host: str) -> bool:
+    """Host/Origine autorisé : local, nom tailnet (.ts.net), ou NIMM_ALLOWED_HOSTS."""
+    if not host:
+        return True  # client local sans en-tête Host : on n'enferme pas
+    h = host.strip().lower()
+    if h.startswith('['):
+        h = h[1:].split(']')[0]
+    elif h.count(':') == 1:
+        h = h.split(':')[0]
+    if h in ('127.0.0.1', 'localhost', '::1'):
+        return True
+    if h.endswith('.ts.net'):
+        return True
+    extra = [x.strip().lower() for x in _os_main.environ.get('NIMM_ALLOWED_HOSTS', '').split(',') if x.strip()]
+    return h in extra
+
+@app.middleware("http")
+async def _security_middleware(request, call_next):
+    """Anti DNS-rebinding / CSRF + capture de l'identité Tailscale.
+    Le binding sur 127.0.0.1 limite déjà l'accès distant à `tailscale serve`."""
+    if not _sec_host_allowed(request.headers.get('host', '')):
+        return JSONResponse({'detail': 'Host non autorisé.'}, status_code=400)
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        origin = request.headers.get('origin')
+        if origin:
+            from urllib.parse import urlparse as _up
+            if not _sec_host_allowed(_up(origin).netloc):
+                return JSONResponse({'detail': 'Origine non autorisée.'}, status_code=403)
+    # Identité fournie par `tailscale serve`
+    ts_user = request.headers.get('tailscale-user-login') or ''
+    try:
+        request.state.tailscale_user = ts_user
+    except Exception:
+        pass
+    # Verrou de session (anti-pollution mémoire) sur les écritures de chat.
+    # Distant : seul le porteur de l'identité Tailscale liée peut écrire dans sa session.
+    # Local : un profil à PIN exige un jeton de déverrouillage valide.
+    if request.method == 'POST':
+        _p = request.url.path
+        if _p.startswith('/api/chat') or _p.endswith('/messages'):
+            import core.database as _dbsec
+            _target = request.headers.get('x-user-id', '') or ''
+            _bound = _dbsec.find_user_by_ts_login(ts_user) if ts_user else None
+            if _bound is not None:
+                if _target and _target != _bound:
+                    return JSONResponse({'detail': 'tailscale_identity_mismatch'}, status_code=403)
+            elif _target and _dbsec.user_has_pin(_target):
+                if not _dbsec.check_unlock_token(_target, request.headers.get('x-unlock-token', '')):
+                    return JSONResponse({'detail': 'session_locked', 'user': _target}, status_code=403)
     return await call_next(request)
 
 # Fichiers statiques
@@ -1043,6 +1094,14 @@ async def delete_prompt_route(prompt_id: str):
 # COANIMM — agent d'exécution
 # ══════════════════════════════════════════
 
+def _ephemeral_scope(scope):
+    """Sécurité (anti auto-grant RCE) : aucune permission d'exécution n'est
+    rendue durable via les routes d'exécution. Tout 'project'/'always' reçu dans
+    la requête est ramené à 'once' (exécute maintenant, ne persiste rien). Les
+    accords durables par identité seront gérés à part, après cartographie."""
+    return 'once' if scope in ('project', 'always') else scope
+
+
 class CoanimmRunScriptRequest(BaseModel):
     script_id: str
     args: Optional[List[str]] = None
@@ -1057,7 +1116,7 @@ async def coanimm_run_script(req: CoanimmRunScriptRequest):
     from modules.coanimm import run_script
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
-    return run_script(req.script_id, req.args, req.thread_id, req.confirm_scope)
+    return run_script(req.script_id, req.args, req.thread_id, _ephemeral_scope(req.confirm_scope))
 
 class CoanimmPlanRequest(BaseModel):
     consigne: str
@@ -1089,7 +1148,7 @@ async def coanimm_explore(req: CoanimmExploreRequest):
     from modules.coanimm import explore_directory
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide.")
-    return await explore_directory(req.consigne, req.thread_id, req.confirm_scope)
+    return await explore_directory(req.consigne, req.thread_id, _ephemeral_scope(req.confirm_scope))
 
 class CoanimmGenerateRequest(BaseModel):
     consigne: str
@@ -1102,7 +1161,7 @@ async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
     from modules.coanimm import run_generated
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide.")
-    return await run_generated(req.consigne, req.thread_id, req.confirm_scope)
+    return await run_generated(req.consigne, req.thread_id, _ephemeral_scope(req.confirm_scope))
 
 class CoanimmGenerateOnlyRequest(BaseModel):
     consigne: str
@@ -1125,9 +1184,10 @@ async def coanimm_generate(req: CoanimmGenerateOnlyRequest):
     except Exception as e:
         import traceback
         detail = traceback.format_exc()
+        print('[COANIMM][ERREUR]', detail)
         return JSONResponse({'status': 'error',
                              'message': str(e),
-                             'detail': detail[-800:]})  # derniers 800 car. du traceback
+                             'detail': ''})  # derniers 800 car. du traceback
 
 class CoanimmRunCodeDirectRequest(BaseModel):
     code: str
@@ -1142,11 +1202,8 @@ async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
     import core.database as _db
     if not req.code.strip():
         return {'status': 'error', 'message': 'Le code est vide.'}
-    if req.confirm_scope in ('project', 'always'):
-        _db.grant_agent_permission(GENERATED_ACTION, req.confirm_scope, req.thread_id)
-    # 'once' = l'utilisateur vient d'autoriser → on exécute directement
-    # None = pas encore autorisé → vérifier la DB
-    if req.confirm_scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+    scope = _ephemeral_scope(req.confirm_scope)  # anti auto-grant RCE : pas de persistance via exécution
+    if scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
         return {'status': 'permission_required', 'action': GENERATED_ACTION,
                 'label': "exécuter le code Python"}
     return execute_code(req.code, req.thread_id)
@@ -1185,9 +1242,8 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
 
     if not req.code.strip():
         return JSONResponse({"status": "error", "message": "Le code est vide."})
-    if req.confirm_scope in ("project", "always"):
-        _db.grant_agent_permission(GENERATED_ACTION, req.confirm_scope, req.thread_id)
-    if req.confirm_scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+    scope = _ephemeral_scope(req.confirm_scope)  # anti auto-grant RCE : pas de persistance via exécution
+    if scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
         return JSONResponse({"status": "permission_required", "action": GENERATED_ACTION,
                              "label": "exécuter le code Python"})
 
@@ -1348,7 +1404,8 @@ async def coanimm_continue(req: CoanimmContinueRequest):
     except Exception as e:
         import traceback
         detail = traceback.format_exc()
-        return JSONResponse({'status': 'error', 'message': str(e), 'detail': detail[-800:]})
+        print('[COANIMM][ERREUR]', detail)
+        return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
 
 
 class CoanimmRepairRequest(BaseModel):
@@ -1374,7 +1431,8 @@ async def coanimm_repair(req: CoanimmRepairRequest):
     except Exception as e:
         import traceback
         detail = traceback.format_exc()
-        return JSONResponse({'status': 'error', 'message': str(e), 'detail': detail[-800:]})
+        print('[COANIMM][ERREUR]', detail)
+        return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
 
 
 @app.post("/api/coanimm/generate_image")
@@ -2033,6 +2091,13 @@ async def get_identity():
     except (RuntimeError, Exception):
         return {"name": ""}
 
+@app.get("/api/session/identity")
+async def session_identity(request: Request):
+    """Identité Tailscale de la requête et profil NIMM lié (pour l'écran de démarrage)."""
+    import core.database as _db
+    ts = getattr(request.state, 'tailscale_user', '') or ''
+    return {"ts_user": ts, "mapped_user": (_db.find_user_by_ts_login(ts) if ts else None)}
+
 
 # ══════════════════════════════════════════
 # TTS
@@ -2504,7 +2569,48 @@ class UserUpdate(BaseModel):
 
 @app.get("/api/users")
 async def list_users():
-    return get_all_users()
+    # Ne jamais exposer pin_hash/pin_salt — seulement la présence d'un PIN.
+    out = []
+    for u in get_all_users():
+        out.append({
+            'id': u.get('id'), 'name': u.get('name'),
+            'emoji': u.get('emoji', '👤'), 'admin': u.get('admin', False),
+            'has_pin': bool(u.get('pin_hash')),
+            'ts_login': u.get('ts_login', ''),
+        })
+    return out
+
+class PinSet(BaseModel):
+    pin: str = ''
+    current_pin: Optional[str] = None
+
+@app.post("/api/users/{user_id}/set-pin")
+async def set_pin(user_id: str, req: PinSet):
+    import core.database as _db
+    # Si un PIN existe déjà, exiger l'actuel pour le changer ou le retirer.
+    if _db.user_has_pin(user_id) and not _db.verify_user_pin(user_id, req.current_pin or ''):
+        raise HTTPException(403, "PIN actuel incorrect.")
+    _db.set_user_pin(user_id, req.pin or '')
+    return {"status": "ok", "has_pin": _db.user_has_pin(user_id)}
+
+class PinUnlock(BaseModel):
+    pin: str
+
+@app.post("/api/users/{user_id}/unlock")
+async def unlock_session(user_id: str, req: PinUnlock):
+    import core.database as _db
+    if _db.user_has_pin(user_id) and not _db.verify_user_pin(user_id, req.pin or ''):
+        raise HTTPException(401, "PIN incorrect.")
+    return {"status": "ok", "token": _db.unlock_token(user_id)}
+
+class TsLogin(BaseModel):
+    ts_login: str = ''
+
+@app.post("/api/users/{user_id}/ts-login")
+async def set_ts_login(user_id: str, req: TsLogin):
+    import core.database as _db
+    _db.set_user_ts_login(user_id, req.ts_login or '')
+    return {"status": "ok"}
 
 @app.post("/api/users")
 async def add_user(req: UserCreate):
@@ -2636,4 +2742,4 @@ async def images_delete(img_id: int):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8080)
