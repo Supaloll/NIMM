@@ -1471,6 +1471,16 @@ async def classify_perissabilite_jours(query: str, content: str = ""):
         return None
 
 
+# Outils Fichiers vérifiés de CoaNIMM (couche tool-calling) — voir modules/coanimm_ops.py
+from modules.coanimm_ops import (OPS_TOOLS as _COANIMM_OPS_TOOLS,
+                                 OPS_NAMES as _COANIMM_OPS_NAMES,
+                                 dispatch_op as _coanimm_dispatch_op,
+                                 ASYNC_OPS_TOOLS as _COANIMM_ASYNC_TOOLS,
+                                 ASYNC_OPS_NAMES as _COANIMM_ASYNC_NAMES,
+                                 dispatch_async_op as _coanimm_dispatch_async_op)
+NIMM_TOOLS = NIMM_TOOLS + _COANIMM_OPS_TOOLS + _COANIMM_ASYNC_TOOLS
+
+
 async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     """
     Exécute un outil demandé par le LLM et retourne le résultat en texte.
@@ -1612,6 +1622,22 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         except Exception as e:
             print(f"[HUB] ⚠️ Erreur run_code : {e}")
             return f'[Erreur lors de l\'exécution du code : {e}]'
+
+    if name in _COANIMM_ASYNC_NAMES:
+        try:
+            return await _coanimm_dispatch_async_op(name, args, thread_id)
+        except Exception as e:
+            print(f"[HUB] Erreur op document {name} : {e}")
+            return f'[Erreur résumé document : {e}]'
+
+    if name in _COANIMM_OPS_NAMES:
+        try:
+            txt = _coanimm_dispatch_op(name, args, thread_id)
+            print(f"[HUB] 🗂️ Tool {name} -> {len(txt)} chars")
+            return txt
+        except Exception as e:
+            print(f"[HUB] Erreur op fichier {name} : {e}")
+            return f'[Erreur opération fichier : {e}]'
 
     return f'[Outil inconnu : {name}]'
 
