@@ -1844,6 +1844,43 @@ def delete_prompt(prompt_id: str) -> None:
 
 
 # ══════════════════════════════════════════
+# COANIMM — DOSSIERS AUTORISÉS EN ÉCRITURE
+# ══════════════════════════════════════════
+#
+# CoaNIMM confine par défaut ses écritures et suppressions à son workspace. Pour
+# qu'un script (ou une opération Fichiers) puisse agir ailleurs — par exemple le
+# dossier Téléchargements — l'utilisateur doit l'autoriser explicitement. La liste
+# est stockée en chemins absolus dans les settings.
+
+def list_coanimm_paths() -> list:
+    """Retourne la liste des dossiers (chemins absolus) autorisés en écriture pour CoaNIMM."""
+    raw = get_setting('coanimm_allowed_paths', '[]')
+    try:
+        data = json.loads(raw)
+        return [str(p) for p in data] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def add_coanimm_path(path: str) -> list:
+    """Ajoute un dossier autorisé (normalisé en chemin absolu). Retourne la liste à jour."""
+    p = os.path.abspath((path or '').strip())
+    if not p or not (path or '').strip():
+        return list_coanimm_paths()
+    paths = list_coanimm_paths()
+    if p not in paths:
+        paths.append(p)
+        set_setting('coanimm_allowed_paths', json.dumps(paths, ensure_ascii=False))
+    return paths
+
+def remove_coanimm_path(path: str) -> list:
+    """Retire un dossier autorisé. Retourne la liste à jour."""
+    p = os.path.abspath((path or '').strip())
+    paths = [x for x in list_coanimm_paths() if x != p]
+    set_setting('coanimm_allowed_paths', json.dumps(paths, ensure_ascii=False))
+    return paths
+
+
+# ══════════════════════════════════════════
 # PERMISSIONS AGENT (CoaNIMM)
 # ══════════════════════════════════════════
 #

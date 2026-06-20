@@ -77,8 +77,9 @@ GENERATE_SYSTEM_PROMPT = (
     "Réponds UNIQUEMENT avec le code Python, sans balises markdown (```), sans "
     "explication avant ou après.\n"
     "RÈGLES IMPÉRATIVES :\n"
-    "1. N'utilise jamais de triple-guillemets (\"\"\" ou ''') — ni pour les docstrings, "
-    "ni pour les chaînes multilignes. Utilise des commentaires # à la place.\n"
+    "1. Écris un script Python autonome, complet et directement exécutable. "
+    "Les triple-guillemets (\"\"\" ou ''') sont autorisés, pour les docstrings comme "
+    "pour les chaînes multilignes.\n"
     "2. N'utilise JAMAIS input() ni sys.stdin : le script s'exécute sans terminal interactif. Si tu as besoin d'une réponse de l'utilisateur, utilise le protocole __NIMM_DEMANDE__ (règle 3).\n"
     "3. INTERACTION UTILISATEUR : si la tâche nécessite une validation ou un choix (ex : confirmer un plan avant des opérations irréversibles), le script doit :\n"
     "   a) Afficher le plan/analyse complet avec print()\n"
@@ -88,18 +89,36 @@ GENERATE_SYSTEM_PROMPT = (
     "   CoaNIMM détectera ce marqueur, montrera un champ de saisie à l'utilisateur, et relancera génération + exécution avec la réponse et tout le contexte précédent. Pour les tâches sans risque, exécute directement sans demander.\n"
     "4. Affiche chaque action avec print() au fur et à mesure (ex : 'Déplacé : ancien -> nouveau').\n"
     "Le script s'exécute dans un processus isolé.\n"
+    "CONFINEMENT : écris tous tes fichiers de sortie dans le RÉPERTOIRE COURANT. "
+    "Toute écriture, suppression ou déplacement hors du répertoire courant est bloqué "
+    "par sécurité, sauf si l'utilisateur a explicitement autorisé le dossier visé.\n"
     "BIBLIOTHÈQUES DISPONIBLES : bibliothèque standard Python + reportlab (PDF), "
-    "PIL/Pillow (images), pandas, openpyxl.\n"
+    "python-docx (Word), PIL/Pillow (images), pandas, openpyxl.\n"
+    "ACCESSIBILITÉ (l'utilisateur est aveugle et lit avec un lecteur d'écran et une plage braille) :\n"
+    "  - Pour un document destiné à être LU par un lecteur d'écran, privilégie un .docx "
+    "(python-docx) avec des styles de titres (add_heading) : c'est nativement accessible.\n"
+    "      from docx import Document\n"
+    "      d = Document(); d.add_heading('Mon titre', level=1)\n"
+    "      d.add_paragraph('Texte du paragraphe.'); d.save('rapport.docx')\n"
+    "  - Si un PDF est explicitement demandé, utilise reportlab en mode STRUCTURÉ (platypus) "
+    "pour un ordre de lecture correct, avec titre du document, langue française, et texte "
+    "alternatif sur les images. Évite canvas.drawString (texte non structuré, illisible au "
+    "lecteur d'écran).\n"
+    "      from reportlab.lib.pagesizes import A4\n"
+    "      from reportlab.lib.styles import getSampleStyleSheet\n"
+    "      from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image\n"
+    "      doc = SimpleDocTemplate('rapport.pdf', pagesize=A4, title='Mon titre', lang='fr-FR')\n"
+    "      s = getSampleStyleSheet()\n"
+    "      story = [Paragraph('Mon titre', s['Title']), Spacer(1, 12),\n"
+    "               Paragraph('Texte du paragraphe.', s['BodyText'])]\n"
+    "      img_path = nimm_generate_image('une illustration de ...')\n"
+    "      story += [Image(img_path, width=200, height=150),\n"
+    "                Paragraph(\"Description de l'image pour le lecteur d'écran.\", s['BodyText'])]\n"
+    "      doc.build(story)\n"
     "HELPER INJECTÉ (disponible sans import) :\n"
     "  nimm_generate_image(prompt: str) -> str\n"
     "  Génère une image IA à partir du prompt et retourne le chemin absolu du fichier PNG "
-    "dans le répertoire de travail courant. Exemple d'intégration PDF :\n"
-    "    from reportlab.pdfgen import canvas\n"
-    "    c = canvas.Canvas('rapport.pdf')\n"
-    "    img_path = nimm_generate_image('une illustration de ...')\n"
-    "    c.drawImage(img_path, 50, 600, width=200, height=150)\n"
-    "    c.drawString(50, 580, 'Mon titre')\n"
-    "    c.save()\n"
+    "dans le répertoire de travail courant.\n"
     "N'importe pas nimm_generate_image : elle est déjà présente dans l'environnement."
 )
 
@@ -125,16 +144,29 @@ def _workspace_dir(thread_id: str = None) -> str:
 
 
 def _strip_code_fences(text: str) -> str:
-    """Retire d'éventuelles balises ```python ... ``` autour du code généré."""
+    """Extrait le code Python d'une réponse LLM, même imparfaite.
+
+    Gère trois cas fréquents qui faisaient échouer l'exécution :
+      - balises ```python ... ``` situées n'importe où (et pas seulement en tête) ;
+      - texte explicatif avant ou après le bloc, malgré la consigne ;
+      - plusieurs blocs : on retient le plus long (le script complet) ;
+      - réponse tronquée par max_tokens : un ``` d'ouverture sans fermeture est
+        nettoyé pour récupérer le code partiel (qui déclenchera ensuite le retry).
+    """
     text = (text or '').strip()
-    if text.startswith('```'):
-        lines = text.splitlines()
-        if lines and lines[0].startswith('```'):
-            lines = lines[1:]
-        if lines and lines[-1].strip().startswith('```'):
-            lines = lines[:-1]
-        text = '\n'.join(lines)
-    return text.strip()
+    if not text:
+        return ''
+    # Blocs ```lang\n ... ``` complets, où qu'ils soient
+    blocks = re.findall(r'```[a-zA-Z0-9_+\-]*\n?(.*?)```', text, re.DOTALL)
+    if blocks:
+        return max(blocks, key=len).strip()
+    # Pas de bloc fermé : retirer d'éventuelles lignes ``` orphelines (tête/queue)
+    lines = text.splitlines()
+    if lines and lines[0].lstrip().startswith('```'):
+        lines = lines[1:]
+    if lines and lines[-1].rstrip().endswith('```'):
+        lines = lines[:-1]
+    return '\n'.join(lines).strip()
 
 
 def _check_syntax(code: str):
@@ -147,75 +179,18 @@ def _check_syntax(code: str):
 
 
 def _analyze_code_risks(code: str) -> list:
-    """Analyse statique AST du code généré.
-    Retourne une liste de {'level': 'warning'|'danger', 'message': str}.
+    """Analyse statique AST du code généré, pour AFFICHER les avertissements dans l'UI.
+
+    Délègue à modules.coanimm_safety.risks_for_display afin de partager UNE SEULE
+    source de vérité avec le blocage/confirmation (classify_for_execution) : les
+    avertissements montrés à l'utilisateur correspondent ainsi exactement à ce qui
+    est réellement bloqué, à confirmer, ou confiné. Format : [{'level','message'}].
     """
-    import ast as _ast
-    risks = []
     try:
-        tree = _ast.parse(code)
-    except SyntaxError:
-        return risks
-
-    DANGER_IMPORTS = {
-        'ctypes':        "utilise des fonctions système de très bas niveau (inhabituel)",
-        'winreg':        "peut lire ou modifier les paramètres système de Windows",
-        'win32api':      "accède directement à l'API Windows (inhabituel)",
-        'win32security': "peut modifier des paramètres de sécurité Windows",
-    }
-    WARN_IMPORTS = {
-        'subprocess': "peut lancer d'autres programmes sur votre ordinateur",
-        'socket':     "peut ouvrir des connexions réseau",
-        'smtplib':    "peut envoyer des e-mails",
-        'ftplib':     "peut se connecter à un serveur distant",
-        'paramiko':   "peut se connecter à un serveur via SSH",
-    }
-    DANGER_CALLS = {
-        ('os', 'system'): "lance une commande directement dans le terminal",
-        ('os', 'popen'):  "lance une commande directement dans le terminal",
-    }
-    WARN_CALLS = {
-        ('shutil', 'rmtree'): "peut supprimer un dossier entier et tout son contenu",
-        ('os', 'remove'):     "peut supprimer des fichiers de votre ordinateur",
-        ('os', 'unlink'):     "peut supprimer des fichiers de votre ordinateur",
-        ('os', 'rmdir'):      "peut supprimer des dossiers",
-    }
-
-    for node in _ast.walk(tree):
-        if isinstance(node, (_ast.Import, _ast.ImportFrom)):
-            names = ([node.module] if isinstance(node, _ast.ImportFrom)
-                     else [a.name for a in node.names])
-            for name in (names or []):
-                if not name:
-                    continue
-                root = name.split('.')[0]
-                if root in DANGER_IMPORTS:
-                    risks.append({'level': 'danger',
-                                  'message': DANGER_IMPORTS[root]})
-                elif root in WARN_IMPORTS:
-                    risks.append({'level': 'warning',
-                                  'message': WARN_IMPORTS[root]})
-        elif isinstance(node, _ast.Call):
-            if isinstance(node.func, _ast.Name) and node.func.id in ('eval', 'exec'):
-                risks.append({'level': 'danger',
-                              'message': "exécute du code dont le contenu n'est connu qu'à l'exécution (risque élevé)"})
-            elif isinstance(node.func, _ast.Attribute):
-                obj = (node.func.value.id
-                       if isinstance(node.func.value, _ast.Name) else None)
-                key = (obj, node.func.attr)
-                if key in DANGER_CALLS:
-                    risks.append({'level': 'danger',
-                                  'message': DANGER_CALLS[key]})
-                elif key in WARN_CALLS:
-                    risks.append({'level': 'warning',
-                                  'message': WARN_CALLS[key]})
-
-    seen, unique = set(), []
-    for r in risks:
-        k = (r['level'], r['message'])
-        if k not in seen:
-            seen.add(k); unique.append(r)
-    return unique
+        import modules.coanimm_safety as _safety
+        return _safety.risks_for_display(code)
+    except Exception:
+        return []
 
 
 def _build_prologue(thread_id: str, workdir: str) -> str:
@@ -252,9 +227,32 @@ def _execute(code: str, args: list, workdir: str, thread_id: str = None) -> dict
         return {'status': 'error', 'message': syntax_err,
                 'stdout': '', 'stderr': '', 'returncode': 1}
 
-    # Prologue injectant les helpers CoaNIMM (nimm_generate_image, ...)
+    # Garde-fous de sécurité (cf. modules.coanimm_safety).
+    import modules.coanimm_safety as _safety
+    _risks = _safety.classify_for_execution(code)
+    if _risks['blocked']:
+        raisons = ' ; '.join(r['message'] for r in _risks['blocked'])
+        return {'status': 'error',
+                'message': f"Exécution refusée pour raison de sécurité : ce script {raisons}.",
+                'blocked': _risks['blocked'],
+                'stdout': '', 'stderr': '', 'returncode': 1}
+    if _risks['needs_confirmation']:
+        raisons = ' ; '.join(r['message'] for r in _risks['needs_confirmation'])
+        return {'status': 'error',
+                'message': (f"Ce script {raisons} : ouvre le panneau CoaNIMM pour "
+                            "l'exécuter et confirmer explicitement cette action."),
+                'needs_confirmation': _risks['needs_confirmation'],
+                'stdout': '', 'stderr': '', 'returncode': 1}
+
+    # Prologue = garde-fou d'écriture (confinement aux dossiers autorisés) +
+    # helpers CoaNIMM (nimm_generate_image…).
+    try:
+        _allowed = db.list_coanimm_paths()
+    except Exception:
+        _allowed = []
+    guard = _safety.build_guard_prologue(_allowed, allow_network=False)
     prologue = _build_prologue(thread_id, workdir)
-    full_code = prologue + '\n' + code if prologue else code
+    full_code = guard + '\n' + (prologue + '\n' + code if prologue else code)
     fd, script_path = tempfile.mkstemp(suffix='.py', dir=workdir)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -262,6 +260,7 @@ def _execute(code: str, args: list, workdir: str, thread_id: str = None) -> dict
         env = dict(os.environ)
         env['PYTHONIOENCODING'] = 'utf-8:replace'
         env['PYTHONUTF8'] = '1'
+        env['PYTHONDONTWRITEBYTECODE'] = '1'  # le garde-fou bloquerait l'écriture des .pyc
         try:
             proc = subprocess.run(
                 [sys.executable, script_path, *(args or [])],
@@ -300,37 +299,44 @@ def run_script(script_id: str, args: list = None, thread_id: str = None,
     Retourne 'permission_required' si l'utilisateur doit d'abord accorder
     l'exécution (once / project / always).
     """
-    action = f"run_script:{script_id}"
+    action = f"exec_script:{script_id}"
 
     if confirm_scope in ('project', 'always'):
         db.grant_agent_permission(action, confirm_scope, thread_id)
 
+    # La Promptothèque n'expose pas d'accès unitaire : on lit la liste des scripts
+    # (type='script') et on y retrouve l'entrée. Le code est dans la clé 'text'.
+    entry = db.list_prompts('script').get(script_id)
+
     if confirm_scope is None and not db.agent_permission_granted(action, thread_id):
-        prompt_entry = db.get_prompt(script_id)
-        label = (prompt_entry or {}).get('label', script_id)
         return {
             'status': 'permission_required',
             'action': action,
-            'label': label,
+            'label': (entry or {}).get('label', script_id),
         }
 
-    prompt_entry = db.get_prompt(script_id)
-    if not prompt_entry:
+    if not entry:
         return {'status': 'error', 'message': f"Script introuvable : {script_id}"}
 
-    code = prompt_entry.get('content', '')
+    code = entry.get('text', '')
     if not code.strip():
         return {'status': 'error', 'message': "Le script est vide."}
 
     workdir = _workspace_dir(thread_id)
-    result = _execute(code, args, workdir)
+    result = _execute(code, args, workdir, thread_id)
     result['script_id'] = script_id
     return result
 
 
 async def generate_code(consigne: str, thread_id: str = None,
                          provider_override: str = None) -> str:
-    """Demande au LLM de générer un script Python à partir d'une consigne."""
+    """Demande au LLM de générer un script Python à partir d'une consigne.
+
+    Relance UNE fois, en demandant une version plus concise, si le premier jet est
+    vide ou syntaxiquement invalide (cas typique : code coupé par max_tokens).
+    Ce filet protège aussi le chemin de l'interface (/api/coanimm/generate), qui
+    n'appelait pas le retry historiquement présent dans run_generated().
+    """
     import core.engine as engine
     import core.hub as hub
 
@@ -338,16 +344,59 @@ async def generate_code(consigne: str, thread_id: str = None,
     provider, model = hub.get_task_provider_model('coanimm', settings)
     if provider_override:
         provider, model = provider_override, None
-    response = await engine.call_llm(
-        messages=[{'role': 'user', 'content': consigne}],
-        provider=provider,
-        model=model,
-        system_prompt=GENERATE_SYSTEM_PROMPT,
-        max_tokens=16000,
-        temperature=0.2,
-        api_keys=settings['api_keys'],
+
+    async def _ask(message: str) -> str:
+        response = await engine.call_llm(
+            messages=[{'role': 'user', 'content': message}],
+            provider=provider,
+            model=model,
+            system_prompt=GENERATE_SYSTEM_PROMPT,
+            max_tokens=16000,
+            temperature=0.2,
+            api_keys=settings['api_keys'],
+        )
+        return _strip_code_fences(response)
+
+    code = await _ask(consigne)
+    if code.strip() and _check_syntax(code) is None:
+        return code
+
+    # Premier jet vide ou invalide (souvent tronqué) : relance plus concise.
+    print(f"[COANIMM] 1er jet invalide/tronqué, relance plus concise…")
+    retry_consigne = (
+        consigne
+        + "\n\n[IMPORTANT : ton script précédent était invalide ou tronqué. "
+        "Réécris un script Python COMPLET et plus concis : supprime les fonctions "
+        "secondaires et les affichages superflus, garde l'essentiel, et assure-toi "
+        "qu'il se termine proprement.]"
     )
-    return _strip_code_fences(response)
+    retry_code = await _ask(retry_consigne)
+    if retry_code.strip() and _check_syntax(retry_code) is None:
+        return retry_code
+    # Aucune des deux tentatives n'est valide : renvoyer la plus complète des deux,
+    # _check_syntax en aval produira un message d'erreur clair.
+    return retry_code or code
+
+
+async def repair_code(code: str, error_output: str, consigne: str = '',
+                      thread_id: str = None, provider_override: str = None) -> str:
+    """Corrige un script qui a échoué à l'exécution, à partir de son erreur.
+
+    Renvoie un nouveau script Python complet, en réutilisant generate_code (donc
+    avec le même nettoyage des balises et le même filet anti-troncature)."""
+    objectif = (consigne or '').strip() or "(objectif initial non précisé)"
+    message = (
+        "Le script Python ci-dessous a échoué à l'exécution. "
+        "Analyse l'erreur, corrige le script, et renvoie une version COMPLÈTE et "
+        "fonctionnelle qui atteint l'objectif.\n\n"
+        f"Objectif initial :\n{objectif}\n\n"
+        "Script fautif :\n"
+        f"{code}\n\n"
+        "Sortie observée (les dernières lignes contiennent généralement l'erreur) :\n"
+        f"{(error_output or '')[-2000:]}\n\n"
+        "Ne réexplique pas, ne t'excuse pas : renvoie seulement le script corrigé."
+    )
+    return await generate_code(message, thread_id, provider_override)
 
 
 async def generate_plan(consigne: str, thread_id: str = None,

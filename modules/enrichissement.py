@@ -221,6 +221,15 @@ _EXT_IMAGE = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff"}
 _EXT_TEXTE = {"txt", "md", "csv"}
 
 
+def mistral_key_from_settings(settings):
+    """Clé OCR Mistral selon les réglages, ou None en mode local
+    (en mode local, rien n'est envoyé au cloud)."""
+    settings = settings or {}
+    if settings.get("local_mode"):
+        return None
+    return (settings.get("api_keys") or {}).get("mistral")
+
+
 def extract_pdf_text(path):
     """Texte sélectionnable d'un PDF (pypdf). Vide si le PDF est une image."""
     try:
@@ -375,6 +384,68 @@ def _ocr(path, mistral_key, is_image=False):
             "Aucun OCR disponible. Renseigne une clé API Mistral dans les paramètres, "
             "ou installe l'OCR local (Tesseract). Détail : " + str(e)
         )
+
+
+def extract_any(path, filename, mistral_key=None, force_ocr=False, allow_cloud=False):
+    """Extrait le texte d'un fichier SANS le stocker (contrairement à ingest_file).
+
+    Politique « cloud sur confirmation » : si le document nécessite un OCR et qu'une
+    clé Mistral est disponible, l'envoi au cloud n'a lieu que si allow_cloud=True ;
+    sinon on renvoie {'status':'confirmation_required', ...}. Sans clé Mistral, l'OCR
+    local (Tesseract) est utilisé directement (rien ne quitte la machine).
+
+    Retourne l'un de :
+      {'status':'ok', 'text':..., 'method':...}
+      {'status':'confirmation_required', 'reason':...}
+      {'status':'error', 'message':...}
+    """
+    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
+
+    def _do_ocr(is_image):
+        # OCR requis : appliquer la politique cloud-sur-confirmation.
+        if mistral_key and not allow_cloud:
+            return ('confirm', None)
+        if mistral_key and allow_cloud:
+            return ('ok', ocr_mistral(path, mistral_key, is_image=is_image))
+        return ('ok', ocr_local(path, is_image=is_image))  # pas de clé -> OCR local
+
+    try:
+        if ext == "docx":
+            return {'status': 'ok', 'text': extract_docx(path), 'method': 'Word'}
+        if ext == "pdf":
+            if force_ocr:
+                kind, txt = _do_ocr(False)
+            else:
+                txt = extract_pdf_text(path)
+                if len((txt or "").strip()) >= _SEUIL_PDF_IMAGE:
+                    return {'status': 'ok', 'text': txt, 'method': 'PDF (texte)'}
+                kind, txt = _do_ocr(False)  # PDF scanné -> OCR
+            if kind == 'confirm':
+                return {'status': 'confirmation_required',
+                        'reason': "Ce PDF est scanné (pas de texte sélectionnable). Pour le lire, son image sera envoyée à l'OCR Mistral (cloud)."}
+            return {'status': 'ok', 'text': txt, 'method': 'PDF (OCR)'}
+        if ext in _EXT_IMAGE:
+            kind, txt = _do_ocr(True)
+            if kind == 'confirm':
+                return {'status': 'confirmation_required',
+                        'reason': "Cette image sera envoyée à l'OCR Mistral (cloud) pour en extraire le texte."}
+            return {'status': 'ok', 'text': txt, 'method': 'image (OCR)'}
+        if ext == "rtf":
+            return {'status': 'ok', 'text': extract_rtf(path), 'method': 'RTF'}
+        if ext == "odt":
+            return {'status': 'ok', 'text': extract_odt(path), 'method': 'ODT'}
+        if ext == "epub":
+            return {'status': 'ok', 'text': extract_epub(path), 'method': 'EPUB'}
+        if ext in ("html", "htm"):
+            return {'status': 'ok', 'text': extract_html_file(path), 'method': 'HTML'}
+        if ext in _EXT_TEXTE:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return {'status': 'ok', 'text': f.read(), 'method': 'texte'}
+        return {'status': 'error', 'message': f"Format non pris en charge : .{ext}"}
+    except RuntimeError as e:
+        return {'status': 'error', 'message': str(e)}
+    except Exception as e:
+        return {'status': 'error', 'message': f"Impossible de lire ce fichier : {e}"}
 
 
 def ingest_file(path, filename, mistral_key=None, expiration=None, force_ocr=False):

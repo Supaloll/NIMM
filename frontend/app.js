@@ -6980,9 +6980,11 @@ document.addEventListener('click', () => {
 // ══════════════════════════════════════════
 
 // { kind: 'script'|'explore'|'generated', scriptId?, label, consigne?, needs_explore? }
+const COANIMM_MAX_REPAIR = 2;  // tentatives d'auto-reparation apres echec d'execution
 let _coanimmPendingAction = null;
 let _coanimmCurrentConsigne = ''; // conservée pour le flux Plan→Execute et la boucle agentique
 let _coanimmOverrideProvider  = null; // provider temporaire (crapauduc)
+let _coanimmCancelled = false;   // l'utilisateur a demandé l'arrêt du script
 
 // ── Helpers UI ──
 
@@ -6993,6 +6995,7 @@ function _coanimmSetBusy(busy) {
     btn.disabled = busy;
     if (busy) btn.setAttribute('aria-busy', 'true');
     else btn.removeAttribute('aria-busy');
+    if (!busy) document.getElementById('coanimm-stop-btn')?.classList.add('hidden');
 }
 
 function _coanimmAnnounce(msg) {
@@ -7176,6 +7179,81 @@ function _coanimmShowResult(data, label) {
 document.getElementById('toggle-coanimm')?.addEventListener('click', function() {
     document.getElementById('coanimm-modal').classList.remove('hidden');
     loadCoanimm();
+    loadCoanimmPaths();
+});
+
+async function loadCoanimmPaths() {
+    try {
+        const r = await fetch('/api/coanimm/paths');
+        const d = await r.json();
+        _renderCoanimmPaths(d.paths || []);
+    } catch (e) { console.error('[COANIMM] Erreur chargement dossiers :', e); }
+}
+function _renderCoanimmPaths(paths) {
+    const ul = document.getElementById('coanimm-paths-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!paths.length) {
+        const li = document.createElement('li');
+        li.style.color = 'var(--text-muted)';
+        li.textContent = 'Aucun dossier autorisé (espace de travail uniquement).';
+        ul.appendChild(li);
+        return;
+    }
+    paths.forEach(p => {
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;';
+        const span = document.createElement('span');
+        span.textContent = p;
+        span.style.cssText = 'word-break:break-all;';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Retirer';
+        btn.setAttribute('aria-label', 'Retirer le dossier ' + p);
+        btn.style.cssText = 'font-size:0.78rem;padding:2px 8px;border:1px solid var(--border);border-radius:5px;background:var(--bg-input);color:var(--text);cursor:pointer;flex:0 0 auto;';
+        btn.addEventListener('click', () => _removeCoanimmPath(p));
+        li.appendChild(span); li.appendChild(btn);
+        ul.appendChild(li);
+    });
+}
+async function _addCoanimmPath() {
+    const input = document.getElementById('coanimm-path-input');
+    const fb = document.getElementById('coanimm-path-feedback');
+    const p = (input && input.value || '').trim();
+    if (!p) return;
+    try {
+        const r = await fetch('/api/coanimm/paths', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: p }),
+        });
+        const d = await r.json();
+        if (d.status === 'error') {
+            if (fb) fb.textContent = '🔴 ' + d.message;
+            _coanimmAnnounce(d.message);
+            return;
+        }
+        if (input) input.value = '';
+        if (fb) fb.textContent = 'Dossier ajouté.';
+        _coanimmAnnounce('Dossier ajouté aux dossiers autorisés.');
+        _renderCoanimmPaths(d.paths || []);
+    } catch (e) {
+        if (fb) fb.textContent = '🔴 Erreur réseau.';
+    }
+}
+async function _removeCoanimmPath(path) {
+    try {
+        const r = await fetch('/api/coanimm/paths', {
+            method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        });
+        const d = await r.json();
+        _renderCoanimmPaths(d.paths || []);
+        _coanimmAnnounce('Dossier retiré.');
+    } catch (e) { console.error('[COANIMM] Erreur retrait dossier :', e); }
+}
+document.getElementById('coanimm-path-add-btn')?.addEventListener('click', _addCoanimmPath);
+document.getElementById('coanimm-path-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); _addCoanimmPath(); }
 });
 
 async function loadCoanimm() {
@@ -7275,6 +7353,18 @@ async function runCoanimmPlan(consigne) {
         // OK réactivé par _coanimmStartCodeGen quand le code est prêt
         noBtn.disabled = false;
         okBtn.dataset.needsExplore = data.needs_explore ? '1' : '';
+
+        if (data.needs_explore) {
+            // Le code sera généré APRÈS l'exploration du disque, pour coller
+            // exactement à ce qui est trouvé (plus de code pré-généré puis jeté).
+            const _ce = document.getElementById('coanimm-code-edit');
+            const _cp = document.getElementById('coanimm-code-preview');
+            if (_ce) _ce.value = "# Le code sera généré après l'exploration du disque.";
+            if (_cp) _cp.classList.remove('hidden');
+            okBtn.disabled = false;
+            setTimeout(() => okBtn.focus(), 50);
+            return;
+        }
 
         // G\xe9n\xe9rer le code en parall\xe8le — affich\xe9 repli\xe9 sous le plan
         _coanimmStartCodeGen(consigne, '');
@@ -7425,7 +7515,7 @@ async function runCoanimmExplore(consigne, confirmScope) {
 
 // ── Ex\xe9cution du code (avec permission) ──
 
-async function runCoanimmExecuteCode(code, confirmScope) {
+async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allowRisky = false) {
     document.getElementById('coanimm-permission').classList.add('hidden');
 
     const resultBox = document.getElementById('coanimm-result');
@@ -7441,17 +7531,45 @@ async function runCoanimmExecuteCode(code, confirmScope) {
     _coanimmSetBusy(true);
 
     try {
+        _coanimmCancelled = false;
+        { const _sb = document.getElementById('coanimm-stop-btn'); if (_sb) _sb.classList.remove('hidden'); }
         const r = await fetch('/api/coanimm/run_code_stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code, thread_id: currentThreadId || null, confirm_scope: confirmScope }),
+            body: JSON.stringify({ code, thread_id: currentThreadId || null, confirm_scope: confirmScope, allow_risky: allowRisky }),
         });
 
         // Si permission requise : réponse JSON simple
         const ct = r.headers.get('content-type') || '';
         if (!ct.includes('event-stream')) {
             const data = await r.json();
+            if (data.status === 'confirmation_required') {
+                document.getElementById('coanimm-stop-btn')?.classList.add('hidden');
+                _coanimmSetBusy(false);
+                const panel = document.getElementById('coanimm-confirm-panel');
+                const txt = document.getElementById('coanimm-confirm-text');
+                if (txt) txt.textContent = '⚠️ ' + (data.message || 'Ce script demande une action sensible.');
+                if (panel) panel.classList.remove('hidden');
+                _coanimmAnnounce(data.message || 'Confirmation requise avant exécution.');
+                const yes = document.getElementById('coanimm-confirm-yes');
+                const no = document.getElementById('coanimm-confirm-no');
+                const freshYes = yes.cloneNode(true); yes.replaceWith(freshYes);
+                const freshNo = no.cloneNode(true); no.replaceWith(freshNo);
+                freshYes.addEventListener('click', () => {
+                    panel.classList.add('hidden');
+                    runCoanimmExecuteCode(code, confirmScope || 'once', 0, true);
+                });
+                freshNo.addEventListener('click', () => {
+                    panel.classList.add('hidden');
+                    const st = document.getElementById('coanimm-result-status');
+                    if (st) st.textContent = 'Exécution annulée.';
+                    _coanimmAnnounce('Exécution annulée.');
+                });
+                setTimeout(() => { const t = document.getElementById('coanimm-confirm-text'); if (t) t.focus(); }, 60);
+                return;
+            }
             if (data.status === 'permission_required') {
+                document.getElementById('coanimm-stop-btn')?.classList.add('hidden');
                 _coanimmPendingAction = { kind: 'run_code', code };
                 _coanimmShowPermission('exécuter le code Python');
                 return;
@@ -7554,6 +7672,39 @@ async function runCoanimmExecuteCode(code, confirmScope) {
                         });
                     } else {
                         // Fin normale sans interaction
+                        if (_coanimmCancelled) {
+                            statusEl.textContent = '⏹ Script arrêté.';
+                            _coanimmAnnounce('Script arrêté.');
+                            document.getElementById('coanimm-stop-btn')?.classList.add('hidden');
+                            _coanimmSetBusy(false);
+                            return;
+                        }
+                        if (rc !== 0 && repairAttempt < COANIMM_MAX_REPAIR) {
+                            const _errOut = stdoutEl.value;
+                            statusEl.textContent = '🐸 Échec — CoaNIMM corrige et réessaie (' + (repairAttempt + 1) + '/' + COANIMM_MAX_REPAIR + ')…';
+                            _coanimmAnnounce('Le script a échoué. Correction automatique, tentative ' + (repairAttempt + 1) + ' sur ' + COANIMM_MAX_REPAIR + '.');
+                            try {
+                                const _rr = await fetch('/api/coanimm/repair', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        code,
+                                        error_output: _errOut,
+                                        consigne: _coanimmCurrentConsigne || '',
+                                        thread_id: currentThreadId || null,
+                                        override_provider: _coanimmOverrideProvider || null,
+                                    }),
+                                });
+                                const _dr = await _rr.json();
+                                if (_dr.status === 'ok' && _dr.code && _dr.code.trim()) {
+                                    const _ce = document.getElementById('coanimm-result-code');
+                                    if (_ce) { _ce.value = _dr.code; document.getElementById('coanimm-result-code-box')?.classList.remove('hidden'); }
+                                    stdoutEl.value = '';
+                                    await runCoanimmExecuteCode(_dr.code, confirmScope || 'once', repairAttempt + 1);
+                                    return;
+                                }
+                            } catch (_er) { console.error('[COANIMM] Erreur réparation :', _er); }
+                        }
                         statusEl.textContent = rc === 0
                             ? '✅ Terminé (code ' + rc + ')'
                             : '⚠️ Terminé avec erreurs (code ' + rc + ')';
@@ -7564,12 +7715,12 @@ async function runCoanimmExecuteCode(code, confirmScope) {
                             const ann = document.getElementById('coanimm-status-announce');
                             if (ann) { ann.setAttribute('aria-live','assertive'); ann.textContent = ''; }
                             setTimeout(() => {
-                                if (ann) ann.textContent = 'Terminé avec erreurs. ' + lastLines.slice(0, 400);
+                                if (ann) ann.textContent = evt.summary || ('Terminé avec erreurs. ' + lastLines.slice(0, 400));
                                 stdoutEl.focus();
                             }, 100);
                             setTimeout(() => { if (ann) ann.setAttribute('aria-live','polite'); }, 3000);
                         } else {
-                            _coanimmAnnounce('Terminé avec succès.');
+                            _coanimmAnnounce(evt.summary || 'Terminé avec succès.');
                         }
                         _coanimmMaybeShowSavePanel(code, rc === 0);
                         _coanimmSetBusy(false);
@@ -7629,6 +7780,13 @@ document.getElementById('coanimm-code-toggle')?.addEventListener('click', () => 
 document.getElementById('coanimm-plan-ok')?.addEventListener('click', () => {
     const consigne = _coanimmCurrentConsigne;
     if (!consigne) return;
+    if (document.getElementById('coanimm-plan-ok').dataset.needsExplore === '1') {
+        // Exploration requise : le code est généré et exécuté après l'exploration.
+        document.getElementById('coanimm-plan-ok').disabled = true;
+        document.getElementById('coanimm-plan-no').disabled = true;
+        runCoanimmExplore(consigne, null);
+        return;
+    }
     const codeEdit = document.getElementById('coanimm-code-edit');
     const code = codeEdit?.value || '';
     if (!code.trim() || code.startsWith('# G\xe9n\xe9ration en cours')) {
@@ -7683,6 +7841,21 @@ document.getElementById('coanimm-crapauduc-select')?.addEventListener('change', 
     if (btn) btn.setAttribute('aria-expanded','false');
     e.target.value = '';
     if (_coanimmCurrentConsigne) runCoanimmPlan(_coanimmCurrentConsigne);
+});
+
+document.getElementById('coanimm-stop-btn')?.addEventListener('click', async () => {
+    _coanimmCancelled = true;
+    document.getElementById('coanimm-stop-btn')?.classList.add('hidden');
+    _coanimmAnnounce('Arrêt du script demandé.');
+    const _st = document.getElementById('coanimm-result-status');
+    if (_st) _st.textContent = '⏹ Arrêt en cours…';
+    try {
+        await fetch('/api/coanimm/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ thread_id: currentThreadId || null }),
+        });
+    } catch (e) { console.error('[COANIMM] Erreur annulation :', e); }
 });
 
 document.getElementById('coanimm-test-stream-btn')?.addEventListener('click', async () => {
