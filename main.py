@@ -892,12 +892,12 @@ async def enrich_file(file: UploadFile = File(...), force_ocr: bool = Form(False
     PDF image / image → OCR. `force_ocr` court-circuite l'extraction de texte des PDF.
     Traitement bloquant (lecture, OCR) → exécuté dans un thread."""
     import os, tempfile, asyncio, functools, contextvars
-    from modules.enrichissement import ingest_file
+    from modules.enrichissement import ingest_file, mistral_key_from_settings
     from core.hub import load_settings
     data = await file.read()
     settings = load_settings()
     # En mode local, on force l'OCR local (Tesseract) : on n'envoie pas la clé Mistral.
-    mistral_key = None if settings.get('local_mode') else (settings.get('api_keys') or {}).get('mistral')
+    mistral_key = mistral_key_from_settings(settings)
     suffix = os.path.splitext(file.filename or '')[1]
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(data)
@@ -1133,6 +1133,7 @@ class CoanimmRunCodeDirectRequest(BaseModel):
     code: str
     thread_id: Optional[str] = None
     confirm_scope: Optional[str] = None  # 'once' | 'project' | 'always'
+    allow_risky: Optional[bool] = False  # l'utilisateur a confirmé une capacité à risque (subprocess/réseau)
 
 @app.post("/api/coanimm/run_code_direct")
 async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
@@ -1170,6 +1171,8 @@ async def coanimm_test_stream():
               headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+_COANIMM_RUNS = {}  # thread_id -> process CoaNIMM en cours (pour annulation)
+
 @app.post("/api/coanimm/run_code_stream")
 async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
     """Exécute du code Python et diffuse la sortie ligne par ligne (SSE)."""
@@ -1192,10 +1195,23 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
     if syntax_err:
         return JSONResponse({"status": "error", "message": syntax_err})
 
+    from modules.coanimm_safety import classify_for_execution, build_guard_prologue
+    _risks = classify_for_execution(req.code)
+    if _risks["blocked"]:
+        return JSONResponse({"status": "error",
+            "message": "Exécution refusée pour sécurité : ce script " + " ; ".join(r["message"] for r in _risks["blocked"]) + ".",
+            "blocked": _risks["blocked"]})
+    if _risks["needs_confirmation"] and not getattr(req, "allow_risky", False):
+        return JSONResponse({"status": "confirmation_required",
+            "reasons": _risks["needs_confirmation"],
+            "message": "Ce script " + " ; ".join(r["message"] for r in _risks["needs_confirmation"]) + ". Confirmer l'exécution ?"})
+
     workdir = _workspace_dir(req.thread_id)
     os.makedirs(workdir, exist_ok=True)
     prologue = _build_prologue(req.thread_id, workdir)
-    full_code = (prologue + "\n" + req.code) if prologue else req.code
+    _allowed = _db.list_coanimm_paths()
+    guard = build_guard_prologue(_allowed, allow_network=bool(getattr(req, "allow_risky", False)))
+    full_code = guard + "\n" + ((prologue + "\n" + req.code) if prologue else req.code)
     before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
 
     fd, script_path = tempfile.mkstemp(suffix=".py", dir=workdir)
@@ -1206,8 +1222,11 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
     env["PYTHONIOENCODING"] = "utf-8:replace"
     env["PYTHONUTF8"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"  # le garde-fou bloquerait les .pyc
 
     async def stream_exec():
+        proc = None
+        _run_key = req.thread_id or "_global"
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "-u", script_path,
@@ -1216,6 +1235,7 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
                 cwd=workdir,
                 env=env,
             )
+            _COANIMM_RUNS[_run_key] = proc
             collected_lines = []
             interaction_question = None
             async def _read_and_stream():
@@ -1242,7 +1262,22 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
 
             new_files = _scan_new_files(workdir, before)
             files_info, files_list = _route_new_files(new_files, req.thread_id)
-            done_payload = {'type': 'done', 'returncode': proc.returncode, 'files_list': files_list}
+            _n = len(files_list)
+            if proc.returncode == 0:
+                if _n:
+                    _noms = ", ".join(f['filename'] for f in files_list)
+                    _summary = f"Terminé. {_n} fichier{'s' if _n > 1 else ''} produit{'s' if _n > 1 else ''} : {_noms}."
+                else:
+                    _summary = "Terminé sans erreur. Aucun fichier produit."
+            else:
+                _last = ""
+                for _ln in reversed(collected_lines):
+                    if _ln.strip():
+                        _last = _ln.strip(); break
+                _summary = f"Terminé avec une erreur (code {proc.returncode})."
+                if _last:
+                    _summary += " Dernier message : " + _last[:200]
+            done_payload = {'type': 'done', 'returncode': proc.returncode, 'files_list': files_list, 'summary': _summary}
             if interaction_question:
                 done_payload['interaction_needed'] = {
                     'question': interaction_question,
@@ -1253,12 +1288,35 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         finally:
             try:
+                if proc is not None and proc.returncode is None:
+                    proc.kill()
+            except Exception:
+                pass
+            _COANIMM_RUNS.pop(_run_key, None)
+            try:
                 os.unlink(script_path)
             except Exception:
                 pass
 
     return SR(stream_exec(), media_type="text/event-stream",
               headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+class CoanimmCancelRequest(BaseModel):
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/cancel")
+async def coanimm_cancel(req: CoanimmCancelRequest):
+    """Tue le script CoaNIMM en cours d'exécution pour ce fil, s'il y en a un."""
+    key = req.thread_id or "_global"
+    proc = _COANIMM_RUNS.get(key)
+    if proc is None:
+        return {"status": "ok", "cancelled": False, "message": "Aucun script en cours."}
+    try:
+        proc.kill()
+    except Exception as ex:
+        return {"status": "error", "message": str(ex)}
+    return {"status": "ok", "cancelled": True}
+
 
 class CoanimmContinueRequest(BaseModel):
     thread_id: Optional[str] = None
@@ -1285,6 +1343,32 @@ async def coanimm_continue(req: CoanimmContinueRequest):
     try:
         code = await generate_code(context, req.thread_id,
                                    provider_override=req.override_provider)
+        risks = _analyze_code_risks(code)
+        return {'status': 'ok', 'code': code, 'risks': risks}
+    except Exception as e:
+        import traceback
+        detail = traceback.format_exc()
+        return JSONResponse({'status': 'error', 'message': str(e), 'detail': detail[-800:]})
+
+
+class CoanimmRepairRequest(BaseModel):
+    code: str
+    error_output: str
+    consigne: Optional[str] = None
+    thread_id: Optional[str] = None
+    override_provider: Optional[str] = None
+
+@app.post("/api/coanimm/repair")
+async def coanimm_repair(req: CoanimmRepairRequest):
+    """Corrige un script CoaNIMM qui a planté, à partir de sa sortie d'erreur,
+    et renvoie le code corrigé (sans l'exécuter). Utilisé par la boucle
+    d'auto-réparation côté interface après un returncode non nul."""
+    from modules.coanimm import repair_code, _analyze_code_risks
+    if not req.code.strip():
+        return {'status': 'error', 'message': 'Aucun code à réparer.'}
+    try:
+        code = await repair_code(req.code, req.error_output or '', req.consigne or '',
+                                 req.thread_id, provider_override=req.override_provider)
         risks = _analyze_code_risks(code)
         return {'status': 'ok', 'code': code, 'risks': risks}
     except Exception as e:
@@ -1376,6 +1460,33 @@ async def coanimm_download_file(filename: str, thread_id: str = None):
         filename=filename,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+class CoanimmPathRequest(BaseModel):
+    path: str
+
+@app.get("/api/coanimm/paths")
+async def coanimm_paths_list():
+    """Liste les dossiers autorisés en écriture pour CoaNIMM."""
+    import core.database as _db
+    return {"paths": _db.list_coanimm_paths()}
+
+@app.post("/api/coanimm/paths")
+async def coanimm_paths_add(req: CoanimmPathRequest):
+    """Autorise un dossier en écriture (doit exister)."""
+    import core.database as _db, os as _os
+    p = (req.path or "").strip()
+    if not p:
+        return {"status": "error", "message": "Chemin vide."}
+    if not _os.path.isdir(p):
+        return {"status": "error", "message": "Ce dossier n'existe pas : " + p}
+    return {"status": "ok", "paths": _db.add_coanimm_path(p)}
+
+@app.delete("/api/coanimm/paths")
+async def coanimm_paths_remove(req: CoanimmPathRequest):
+    """Retire un dossier autorisé."""
+    import core.database as _db
+    return {"status": "ok", "paths": _db.remove_coanimm_path(req.path or "")}
+
 
 @app.get("/api/search")
 async def search_conversations_route(q: str = "", k: int = 8):

@@ -43,7 +43,7 @@ Tourne entièrement sur ta machine — tes conversations ne quittent jamais ton 
 - 🔎 **Recherche par sens** — retrouve un souvenir même sans les mots exacts (optionnel)
 - ✏️ **Modifier / Régénérer** — réédite ton dernier message ou demande une nouvelle réponse
 - 📤 **Export** — marque des réponses et exporte-les en TXT, DOCX, PDF, RTF, ODT, EPUB ou MP3
-- 🤖 **CoaNIMM** — exécute n'importe quelle tâche en langage naturel (organiser des fichiers, renommer, déplacer…) en générant et lançant un script Python à la demande
+- 🤖 **CoaNIMM** — exécute des tâches en langage naturel (organiser, renommer, déplacer des fichiers, extraire ou résumer un document…) en générant et lançant un script Python à la demande, **confiné aux dossiers que tu autorises** ; les actions sensibles demandent ton accord explicite
 
 ---
 
