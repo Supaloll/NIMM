@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 
 from core.database import (
-    get_messages, add_message, get_setting, set_setting,
+    get_messages, add_message, get_setting, set_setting, get_api_keys,
     count_messages, count_memories, save_anecdote,
     get_last_user_message_time,
     get_rappels_actifs, create_rappel, update_rappel_date,
@@ -187,11 +187,7 @@ def _load_api_keys() -> dict:
     import os as _os
 
     # 1. Clés de l'utilisateur courant
-    raw = get_setting('api_keys', '{}')
-    try:
-        user_keys = json.loads(raw)
-    except Exception:
-        user_keys = {}
+    user_keys = get_api_keys()
 
     # 2. Clés globales partagées
     _gpath = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', 'data', 'nimm_global.json')
@@ -891,6 +887,18 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
             f"search_carnet(sujet).]"
         )
 
+    # Skills CoaNIMM — signal léger (pull via find_skill, pas d'injection systématique)
+    try:
+        from core.database import list_prompts as _list_skills
+        if _list_skills('skill'):
+            parts.append(
+                "\n[Des skills CoaNIMM existent — des méthodes déjà validées et réutilisables. "
+                "Si la tâche demandée ressemble à un process déjà réalisé et approuvé, appelle "
+                "find_skill(consigne) avant de générer pour réutiliser la méthode.]"
+            )
+    except Exception:
+        pass
+
     # Prénom et date de naissance — toujours injectés (stockés dans settings, survivent aux nettoyages DB)
     if user_name and user_name not in ('', 'utilisateur'):
         _dob = get_setting('user_dob', '')
@@ -1425,6 +1433,29 @@ NIMM_TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_skill",
+            "description": (
+                "Recherche parmi les SKILLS de CoaNIMM -- des methodes deja validees par "
+                "l'utilisateur et reutilisables (ex. preparer une image pour la decoupe par "
+                "seuillage, quantifier une palette pour la broderie). Appelle cet outil AVANT "
+                "de generer un script quand la tache ressemble a un process deja fait et "
+                "approuve, afin de reutiliser la methode au lieu de repartir de zero."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "La consigne ou des mots-cles decrivant la tache, pour retrouver un skill pertinent"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 
@@ -1584,6 +1615,44 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         except Exception as e:
             print(f"[HUB] Erreur search_carnet : {e}")
             return '[Erreur lors de la recherche dans le carnet]'
+
+    elif name == 'find_skill':
+        try:
+            from core.database import list_prompts as _list_skills
+            skills = _list_skills('skill')
+            if not skills:
+                return '[Aucun skill enregistre pour le moment]'
+            mots = [m for m in re.findall(r'\w+', query.lower())
+                    if len(m) > 2 and m not in _MOTS_VIDES]
+            scored = []
+            for sid, sk in skills.items():
+                meta = sk.get('meta') or {}
+                hay = ' '.join([
+                    sk.get('label', ''),
+                    meta.get('description', ''),
+                    ' '.join(meta.get('mots_cles') or []),
+                ]).lower()
+                score = sum(1 for m in mots if m in hay)
+                if score > 0:
+                    scored.append((score, sk))
+            scored.sort(key=lambda t: t[0], reverse=True)
+            top = [sk for _, sk in scored[:3]]
+            if not top:
+                return '[Aucun skill ne correspond a cette consigne]'
+            blocs = []
+            for sk in top:
+                meta = sk.get('meta') or {}
+                desc = meta.get('description', '') or sk.get('label', '')
+                blocs.append(
+                    f"SKILL : {sk.get('label', '')}\n"
+                    f"Quand l'utiliser : {desc}\n"
+                    f"Methode :\n{sk.get('text', '')}"
+                )
+            print(f"[HUB] Tool find_skill({query!r}) -> {len(top)} fiche(s)")
+            return '\n\n'.join(blocs)
+        except Exception as e:
+            print(f"[HUB] Erreur find_skill : {e}")
+            return '[Erreur lors de la recherche de skills]'
 
     elif name == 'run_code':
         code = args.get('code', '').strip()

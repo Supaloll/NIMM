@@ -25,7 +25,8 @@ import httpx as _httpx
 from core.database import (
     init_db, get_threads, get_thread, create_thread, delete_thread, set_thread_mask,
     update_thread_name, update_thread_tags, get_messages, add_message, count_messages,
-    get_setting, set_setting, get_all_memory, delete_memory,
+    get_setting, set_setting, get_api_keys as _db_get_api_keys, set_api_keys as _db_set_api_keys,
+    get_all_memory, delete_memory,
     update_memory_value, save_memory,
     get_cost_summary, reset_wallet, update_wallet_rates, update_wallet_solde,
     check_auto_resets,
@@ -1686,24 +1687,16 @@ async def set_memoire_mode(req: SettingValue):
 
 @app.get("/api/settings/api-keys")
 async def get_api_keys():
-    raw = get_setting('api_keys', '{}')
-    try:
-        keys = json.loads(raw)
-    except Exception:
-        keys = {}
+    keys = _db_get_api_keys()
     # Retourner seulement si présente (booléen) — jamais la clé elle-même
     return {p: bool(keys.get(p)) for p in ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily']}
 
 @app.post("/api/settings/api-keys")
 async def save_api_keys(req: ApiKeysSetting):
-    raw = get_setting('api_keys', '{}')
-    try:
-        existing = json.loads(raw)
-    except Exception:
-        existing = {}
+    existing = _db_get_api_keys()
     updates = req.dict(exclude_none=True)
     existing.update({k: v for k, v in updates.items() if v})
-    set_setting('api_keys', json.dumps(existing))
+    _db_set_api_keys(existing)
     return {"status": "ok"}
 
 
@@ -2153,7 +2146,7 @@ async def upload_file(file: UploadFile = File(...)):
     api_keys = {}
     try:
         import json as _json
-        api_keys = _json.loads(get_setting('api_keys', '{}'))
+        api_keys = _db_get_api_keys()
     except Exception:
         pass
 
@@ -2210,7 +2203,7 @@ async def image_generate(req: ImageGenRequest):
         raise HTTPException(400, "Prompt vide.")
     api_keys = {}
     try:
-        api_keys = json.loads(get_setting('api_keys', '{}'))
+        api_keys = _db_get_api_keys()
     except Exception:
         pass
     # Lire le provider image configuré (priorité sur le paramètre de la requête)
@@ -2274,7 +2267,7 @@ async def image_edit(req: ImageEditRequest):
     api_keys = {}
     try:
         import json as _json
-        api_keys = _json.loads(get_setting('api_keys', '{}'))
+        api_keys = _db_get_api_keys()
     except Exception:
         pass
     try:
