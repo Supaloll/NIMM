@@ -8246,6 +8246,8 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
     });
     var input = document.getElementById('user-input');
     if (input) input.setAttribute('aria-keyshortcuts', 'Alt+Shift+S');
+    var _coaInput = document.getElementById('coanimm-consigne');
+    if (_coaInput) _coaInput.setAttribute('aria-keyshortcuts', 'Alt+Shift+S');
 
     function focusModal(container) {
         if (!container || container.classList.contains('hidden')) return;
@@ -8257,9 +8259,14 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
     document.addEventListener('keydown', function (e) {
         if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
         var k = (e.key || '').toLowerCase();
-        if (k === 's') {  // focus zone de saisie
+        if (k === 's') {  // focus zone de saisie (contextuel : CoaNIMM si ouvert, sinon chat)
             e.preventDefault();
-            document.getElementById('user-input')?.focus();
+            var _coa = document.getElementById('coanimm-modal');
+            if (_coa && !_coa.classList.contains('hidden')) {
+                document.getElementById('coanimm-consigne')?.focus();
+            } else {
+                document.getElementById('user-input')?.focus();
+            }
             return;
         }
         var id = SHORTCUTS[k];
