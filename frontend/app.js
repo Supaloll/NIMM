@@ -2680,6 +2680,9 @@ async function _triggerStream(content, conversationId, images = null) {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
 
         _bip(220, 80); // bip grave : début de réponse
+        // Retirer la bulle "recherche en cours" si elle est encore affichée
+        document.getElementById('web-search-loader')?.remove();
+
         // Transformer le loader en bulle de réponse — zéro saut visuel
         const loaderEl = document.getElementById('thinking-loader');
         loaderEl.removeAttribute('id');
@@ -2870,6 +2873,26 @@ async function _triggerStream(content, conversationId, images = null) {
                     continue;
                 }
 
+
+                if (data.startsWith('[WEB_SEARCH_LOADING]')) {
+                    if (!document.getElementById('web-search-loader')) {
+                        const wsDiv = document.createElement('div');
+                        wsDiv.id        = 'web-search-loader';
+                        wsDiv.className = 'message assistant';
+                        const wsEmoji = document.createElement('div');
+                        wsEmoji.className = 'bubble-emoji';
+                        wsEmoji.setAttribute('aria-hidden', 'true');
+                        const wsBubble = document.createElement('div');
+                        wsBubble.className = 'message-bubble web-search-loader';
+                        wsBubble.innerHTML = '<span>🌐 Recherche en cours…</span><span class="stt-dots"><span></span><span></span><span></span></span>';
+                        wsDiv.appendChild(wsEmoji);
+                        wsDiv.appendChild(wsBubble);
+                        document.getElementById('messages').appendChild(wsDiv);
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        _srAnnounce('Recherche sur le web en cours…');
+                    }
+                    continue;
+                }
 
                 if (data.startsWith('[IMAGE_GEN_LOADING]')) {
                     // Bulle placeholder - bretzel agrandi + label

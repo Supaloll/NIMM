@@ -2597,6 +2597,7 @@ async def process_message_stream(
     # La recherche automatique est gérée par le tool calling (search_web).
     web_context = ''
     if web_search:
+        yield "data: [WEB_SEARCH_LOADING]\n\n"
         try:
             from modules.websearch import search
             web_context = await search(user_message)
@@ -2680,6 +2681,8 @@ async def process_message_stream(
                     messages.append(event['assistant_msg'])
 
                     for call in event['calls']:
+                        if call['name'] == 'search_web':
+                            yield "data: [WEB_SEARCH_LOADING]\n\n"
                         tool_result = await _execute_tool(call['name'], call['args'], thread_id)
                         messages.append({
                             'role':         'tool',
