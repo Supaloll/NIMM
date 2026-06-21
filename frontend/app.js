@@ -2996,6 +2996,7 @@ async function _triggerStream(content, conversationId, images = null) {
                     continue;
                 }
 
+                                document.getElementById('web-search-loader')?.remove();
                                 fullText += data.replace(/\\n/g, '\n');
                 const cleaned = fullText
                     .replace(/%%DOMINANT:[^%]+%%/g, '')
