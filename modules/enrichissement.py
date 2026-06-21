@@ -488,4 +488,8 @@ def ingest_file(path, filename, mistral_key=None, expiration=None, force_ocr=Fal
             return {"ok": False, "erreur": f"Format non pris en charge : .{ext}"}
     except RuntimeError as e:
         # Messages déjà clairs (clé OCR manquante, dépendance, Tesseract introuvable…).
-        r
+        return {"ok": False, "erreur": str(e)}
+    except Exception as e:
+        print(f"[ENRICH] Échec lecture fichier : {e}")
+        return {"ok": False, "erreur": "Impossible de lire ce fichier."}
+    return ingest_text(filename, texte, source="fichier:" + filename, expiration=expiration)
