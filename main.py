@@ -1502,6 +1502,26 @@ async def coanimm_suggest_name(req: CoanimmSuggestNameRequest):
     except Exception as e:
         return {"status": "ok", "name": ""}  # silencieux, le champ reste vide
 
+class CoanimmSaveSkillRequest(BaseModel):
+    consigne: str
+    script: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/save_skill")
+async def coanimm_save_skill(req: CoanimmSaveSkillRequest):
+    """Capture la méthode d'un script validé par l'utilisateur comme fiche skill
+    réutilisable. La fiche est rédigée par le LLM (SKILL_WRITER) ; le nom est auto-généré.
+    Renvoie {status: created|skip|error}."""
+    from modules.coanimm import write_skill
+    if not (req.consigne or "").strip() and not (req.script or "").strip():
+        return {"status": "error", "message": "Rien à mémoriser : consigne et script vides."}
+    try:
+        return await write_skill(req.consigne, req.script, req.thread_id)
+    except Exception as e:
+        import traceback
+        print("[COANIMM][ERREUR] save_skill", traceback.format_exc())
+        return JSONResponse({"status": "error", "message": str(e), "detail": ""})
+
 @app.get("/api/coanimm/files/{filename}")
 async def coanimm_download_file(filename: str, thread_id: str = None):
     """Télécharge un fichier produit par CoaNIMM depuis le workspace."""

@@ -8038,10 +8038,36 @@ document.getElementById('coanimm-save-confirm')?.addEventListener('click', async
         });
         const d = await r.json();
         if (d.status === 'ok') {
+            const st = document.getElementById('coanimm-result-status');
+            let suffix = ' — script enregistré dans la Promptothèque.';
+            const wantSkill = document.getElementById('coanimm-save-skill-check')?.checked;
+            if (wantSkill) {
+                if (feedback) feedback.textContent = 'Mémorisation de la méthode en cours…';
+                try {
+                    const rs = await fetch('/api/coanimm/save_skill', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            consigne: _coanimmCurrentConsigne || '',
+                            script: code,
+                            thread_id: currentThreadId || null,
+                        }),
+                    });
+                    const ds = await rs.json();
+                    if (ds.status === 'created') {
+                        suffix += ' Méthode mémorisée comme skill' + (ds.skill && ds.skill.label ? ' : ' + ds.skill.label : '') + '.';
+                    } else if (ds.status === 'skip') {
+                        suffix += ' (Méthode non retenue : déjà couverte par un skill existant.)';
+                    } else {
+                        suffix += ' (Méthode non mémorisée : ' + (ds.message || 'erreur') + '.)';
+                    }
+                } catch (e) {
+                    suffix += ' (Méthode non mémorisée : erreur réseau.)';
+                }
+            }
             document.getElementById('coanimm-save-panel')?.setAttribute('hidden', '');
             if (feedback) feedback.textContent = '';
-            const st = document.getElementById('coanimm-result-status');
-            if (st) { st.textContent += ' — script enregistré dans la Promptothèque.'; st.focus(); }
+            if (st) { st.textContent += suffix; st.focus(); }
         } else {
             if (feedback) feedback.textContent = 'Erreur : ' + (d.detail || d.message || 'inconnue');
         }
