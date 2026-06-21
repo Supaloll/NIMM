@@ -2081,6 +2081,52 @@ def remove_coanimm_path(path: str) -> list:
 
 
 # ══════════════════════════════════════════
+# HISTORIQUE DES TÂCHES CoaNIMM (global, par profil)
+# ══════════════════════════════════════════
+#
+# Journal des tâches CoaNIMM (consigne + résultat), indépendant du fil de
+# conversation : CoaNIMM est un atelier d'automatisation, pas une notion par-fil.
+# Stocké en JSON dans les settings, le plus récent d'abord, plafonné.
+
+_COANIMM_HISTORY_MAX = 50
+
+def list_coanimm_history() -> list:
+    """Retourne la liste des tâches CoaNIMM passées (plus récente d'abord)."""
+    raw = get_setting('coanimm_history', '[]')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def add_coanimm_history(consigne: str, status: str = 'ok', summary: str = '',
+                        returncode=None, files_count: int = 0) -> list:
+    """Ajoute une tâche au journal CoaNIMM. Retourne la liste à jour (plafonnée)."""
+    consigne = (consigne or '').strip()
+    if not consigne:
+        return list_coanimm_history()
+    hist = list_coanimm_history()
+    entry = {
+        'id': uuid.uuid4().hex,
+        'ts': datetime.now().isoformat(timespec='seconds'),
+        'consigne': consigne[:2000],
+        'status': status or 'ok',
+        'summary': (summary or '')[:500],
+        'returncode': returncode,
+        'files_count': int(files_count or 0),
+    }
+    hist.insert(0, entry)
+    hist = hist[:_COANIMM_HISTORY_MAX]
+    set_setting('coanimm_history', json.dumps(hist, ensure_ascii=False))
+    return hist
+
+def clear_coanimm_history() -> None:
+    """Vide le journal des tâches CoaNIMM."""
+    set_setting('coanimm_history', '[]')
+
+
+
+# ══════════════════════════════════════════
 # PERMISSIONS AGENT (CoaNIMM)
 # ══════════════════════════════════════════
 #

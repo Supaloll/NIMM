@@ -1629,6 +1629,35 @@ async def coanimm_paths_remove(req: CoanimmPathRequest):
     return {"status": "ok", "paths": _db.remove_coanimm_path(req.path or "")}
 
 
+class CoanimmHistoryAdd(BaseModel):
+    consigne: str
+    status: Optional[str] = "ok"
+    summary: Optional[str] = ""
+    returncode: Optional[int] = None
+    files_count: Optional[int] = 0
+
+@app.get("/api/coanimm/history")
+async def coanimm_history_list():
+    """Journal global des tâches CoaNIMM (indépendant du fil)."""
+    import core.database as _db
+    return {"history": _db.list_coanimm_history()}
+
+@app.post("/api/coanimm/history")
+async def coanimm_history_add(req: CoanimmHistoryAdd):
+    """Enregistre une tâche CoaNIMM terminée dans le journal."""
+    import core.database as _db
+    hist = _db.add_coanimm_history(req.consigne, req.status or "ok", req.summary or "",
+                                   req.returncode, req.files_count or 0)
+    return {"status": "ok", "history": hist}
+
+@app.delete("/api/coanimm/history")
+async def coanimm_history_clear():
+    """Vide le journal des tâches CoaNIMM."""
+    import core.database as _db
+    _db.clear_coanimm_history()
+    return {"status": "ok", "history": []}
+
+
 @app.get("/api/search")
 async def search_conversations_route(q: str = "", k: int = 8):
     """Recherche par sens dans l'historique des conversations (embeddings)."""

@@ -847,6 +847,15 @@
                 style="margin-top:6px;font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Ajouter ce dossier</button>
             <p id="coanimm-path-feedback" role="status" aria-live="polite" style="font-size:0.8rem;margin:6px 0 0;"></p>
         </details>
+        <details id="coanimm-history-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Historique des tâches</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Vos tâches CoaNIMM passées (toutes conversations confondues). Activez une tâche pour reprendre sa consigne.
+            </p>
+            <ul id="coanimm-history-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;"></ul>
+            <button type="button" id="coanimm-history-clear-btn"
+                style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Vider l'historique</button>
+        </details>
 
 
         <div style="margin-top:14px;">
@@ -938,6 +947,11 @@
             <textarea id="coanimm-result-stdout" readonly rows="6" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
             <label for="coanimm-result-stderr" style="font-size:0.8rem;display:block;margin:8px 0 2px;">Erreurs :</label>
             <textarea id="coanimm-result-stderr" readonly rows="4" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
+            <div id="coanimm-blocked-path" role="alert" hidden style="margin-top:10px;padding:10px;border:2px solid var(--accent,#6ea8fe);border-radius:8px;">
+                <p id="coanimm-blocked-path-msg" style="font-size:0.85rem;margin:0 0 8px;"></p>
+                <button type="button" id="coanimm-blocked-path-add" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">Ajouter ce dossier aux dossiers autorisés</button>
+                <p id="coanimm-blocked-path-fb" style="font-size:0.82rem;margin:6px 0 0;" aria-live="polite"></p>
+            </div>
             <div id="coanimm-result-files" hidden style="margin-top:10px;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;" aria-label="Fichiers produits" role="region"></div>
             <div id="coanimm-interact-panel" hidden role="region" aria-label="CoaNIMM demande" style="margin-top:14px;padding:12px;border:2px solid var(--accent,#6ea8fe);border-radius:8px;">
                 <p id="coanimm-interact-question" style="font-size:0.88rem;font-weight:600;margin:0 0 8px;" aria-live="polite"></p>
@@ -1386,7 +1400,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260621-links"></script>
+<script src="/static/app.js?v=20260621-hist"></script>
 <!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
