@@ -2027,6 +2027,18 @@ body {
     40%           { transform: scale(1.2); opacity: 1; }
 }
 
+.web-search-loader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+.web-search-loader .stt-dots span {
+    background: var(--accent);
+}
+
 .stt-waves {
     display: inline-flex;
     align-items: center;
