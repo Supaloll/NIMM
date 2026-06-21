@@ -38,6 +38,23 @@ if (window.marked) {
 // Sécurité (anti-XSS) : échappement HTML + désinfection du Markdown rendu
 function _safeHTML(h){ try { return window.DOMPurify ? DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']}) : h; } catch(e){ return h; } }
 
+// Rend cliquables les URLs sans schéma (domaine + chemin) que marked n'auto-lie pas
+// (ex. "support.apple.com/fr-fr/122208"). Conservateur : exige un /chemin pour éviter
+// les faux positifs (main.py, image.png) ; ignore les liens/URLs déjà formés.
+function _linkifyBareUrls(text){
+    try {
+        return text.replace(
+            /(^|[\s(>«"*_])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(\/[^\s)<>\]»"*_]*)/gi,
+            function(m, pre, domain, path){
+                var trail = "";
+                var mt = path.match(/[.,;:!?]+$/);
+                if (mt) { trail = mt[0]; path = path.slice(0, -trail.length); }
+                return pre + "[" + domain + path + "](https://" + domain + path + ")" + trail;
+            }
+        );
+    } catch(e) { return text; }
+}
+
 // ── Accessibilité : bips de génération ──
 const _ac = new (window.AudioContext || window.webkitAudioContext)();
 function _bip(freq = 440, duration = 80, gain = 0.08) {
@@ -1886,7 +1903,7 @@ function _renderBubble(bubble, rawText) {
         .trim();
 
     // 3. Markdown
-    let html = window.marked ? marked.parse(processed) : processed.replace(/\n/g, '<br>');
+    let html = window.marked ? marked.parse(_linkifyBareUrls(processed)) : processed.replace(/\n/g, '<br>');
     html = _safeHTML(html);  // désinfection anti-XSS du contenu rendu
 
     // 4. Injecter les cartes
@@ -2793,7 +2810,7 @@ async function _triggerStream(content, conversationId, images = null) {
             for (let i = _renderedUpTo; i < limit; i++) {
                 const raw = parts[i].trim();
                 if (!raw) continue;
-                const html = window.marked ? marked.parse(raw) : raw.replace(/\n/g,'<br>');
+                const html = window.marked ? marked.parse(_linkifyBareUrls(raw)) : raw.replace(/\n/g,'<br>');
                 let span;
                 if (_paraNodes[i]) {
                     span = _paraNodes[i];
