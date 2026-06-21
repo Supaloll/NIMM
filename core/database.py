@@ -105,6 +105,126 @@ def update_user(user_id: str, name: str = None, emoji: str = None, admin: bool =
             return u
     raise ValueError(f"Profil '{user_id}' introuvable.")
 
+# ══════════════════════════════════════════
+# VERROU DE SESSION — PIN local (haché) + identité Tailscale
+# ══════════════════════════════════════════
+#
+# But : empêcher la POLLUTION de mémoire quand on bascule par erreur sur la
+# session d'un autre profil sur le PC partagé. Local : PIN par profil (haché,
+# jamais en clair). Distant : un profil peut être lié à une identité Tailscale,
+# et seul le porteur de cette identité peut écrire dans cette session.
+# INERTE par défaut : sans pin_hash ni ts_login, aucun comportement ne change.
+
+import hashlib as _hashlib, hmac as _hmac, secrets as _secrets, base64 as _b64
+
+_UNLOCK_SECRET_FILE = os.path.join(DATA_DIR, '.nimm_unlock_secret')
+
+
+def _unlock_secret() -> bytes:
+    """Secret serveur (généré une fois) pour signer les jetons de déverrouillage."""
+    try:
+        if os.path.exists(_UNLOCK_SECRET_FILE):
+            with open(_UNLOCK_SECRET_FILE, 'rb') as f:
+                data = f.read().strip()
+            if data:
+                return data
+    except Exception:
+        pass
+    sec = _secrets.token_bytes(32)
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(_UNLOCK_SECRET_FILE, 'wb') as f:
+            f.write(sec)
+        try:
+            os.chmod(_UNLOCK_SECRET_FILE, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return sec
+
+
+def _hash_pin(pin: str, salt: bytes) -> str:
+    dk = _hashlib.pbkdf2_hmac('sha256', (pin or '').encode('utf-8'), salt, 120000)
+    return _b64.b64encode(dk).decode('ascii')
+
+
+def set_user_pin(user_id: str, pin: str) -> None:
+    """Définit (pin non vide) ou retire (pin vide) le PIN d'un profil.
+    Stocké haché (PBKDF2 + sel) dans users.json — jamais en clair."""
+    users = _load_users()
+    for u in users:
+        if u['id'] == user_id:
+            if pin:
+                salt = _secrets.token_bytes(16)
+                u['pin_salt'] = _b64.b64encode(salt).decode('ascii')
+                u['pin_hash'] = _hash_pin(pin, salt)
+            else:
+                u.pop('pin_salt', None)
+                u.pop('pin_hash', None)
+            _save_users(users)
+            return
+    raise ValueError(f"Profil '{user_id}' introuvable.")
+
+
+def user_has_pin(user_id: str) -> bool:
+    for u in _load_users():
+        if u['id'] == user_id:
+            return bool(u.get('pin_hash'))
+    return False
+
+
+def verify_user_pin(user_id: str, pin: str) -> bool:
+    """True si le PIN correspond, ou si le profil n'a pas de PIN défini."""
+    for u in _load_users():
+        if u['id'] == user_id:
+            ph, ps = u.get('pin_hash'), u.get('pin_salt')
+            if not ph or not ps:
+                return True  # pas de verrou
+            try:
+                salt = _b64.b64decode(ps)
+            except Exception:
+                return False
+            return _hmac.compare_digest(_hash_pin(pin or '', salt), ph)
+    return False
+
+
+def unlock_token(user_id: str) -> str:
+    """Jeton opaque prouvant que le PIN de user_id a été fourni (HMAC du secret)."""
+    return _hmac.new(_unlock_secret(), (user_id or '').encode('utf-8'),
+                     _hashlib.sha256).hexdigest()
+
+
+def check_unlock_token(user_id: str, token: str) -> bool:
+    if not token:
+        return False
+    return _hmac.compare_digest(token, unlock_token(user_id))
+
+
+def set_user_ts_login(user_id: str, ts_login: str) -> None:
+    """Lie (ou délie si vide) un profil à une identité Tailscale (Tailscale-User-Login)."""
+    users = _load_users()
+    for u in users:
+        if u['id'] == user_id:
+            if ts_login:
+                u['ts_login'] = ts_login
+            else:
+                u.pop('ts_login', None)
+            _save_users(users)
+            return
+    raise ValueError(f"Profil '{user_id}' introuvable.")
+
+
+def find_user_by_ts_login(ts_login: str):
+    """id du profil lié à cette identité Tailscale, ou None."""
+    if not ts_login:
+        return None
+    for u in _load_users():
+        if u.get('ts_login') and u['ts_login'].lower() == ts_login.lower():
+            return u['id']
+    return None
+
+
 def init_bibliotheque(conn):
     """Crée la table bibliothèque si elle n'existe pas."""
     conn.execute('''
@@ -1735,6 +1855,86 @@ def set_setting(key: str, value: str):
 
 
 # ══════════════════════════════════════════
+# CLÉS API — CHIFFREMENT AU REPOS (Fernet)
+# ══════════════════════════════════════════
+#
+# Les clés API de l'utilisateur sont stockées CHIFFRÉES dans settings['api_keys'].
+# get_api_keys()/set_api_keys() chiffrent/déchiffrent de façon transparente : tout le
+# reste du code passe par elles et ne voit jamais ni la clé Fernet, ni le token.
+# Migration douce : une valeur encore en clair (JSON hérité) est rechiffrée à la
+# première lecture, sans perte. Modèle de menace local « accident, pas adversaire ».
+
+_API_KEYS_KEYFILE = os.path.join(DATA_DIR, '.nimm_api_keyfile')
+
+
+def _api_keys_fernet():
+    """Clé Fernet serveur (générée une fois), stockée dans data/.nimm_api_keyfile (0600).
+    Même patron que _unlock_secret()."""
+    from cryptography.fernet import Fernet
+    try:
+        if os.path.exists(_API_KEYS_KEYFILE):
+            with open(_API_KEYS_KEYFILE, 'rb') as f:
+                data = f.read().strip()
+            if data:
+                return Fernet(data)
+    except Exception:
+        pass
+    key = Fernet.generate_key()
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(_API_KEYS_KEYFILE, 'wb') as f:
+            f.write(key)
+        try:
+            os.chmod(_API_KEYS_KEYFILE, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return Fernet(key)
+
+
+def get_api_keys() -> dict:
+    """Retourne les clés API utilisateur déchiffrées (dict).
+
+    Migration douce : si la valeur stockée est encore du JSON en clair (installations
+    antérieures au chiffrement), elle est lue puis rechiffrée en place — aucune clé
+    n'est perdue."""
+    raw = get_setting('api_keys', '')
+    if not raw:
+        return {}
+    # 1. Tenter le déchiffrement Fernet (cas normal une fois migré).
+    try:
+        plain = _api_keys_fernet().decrypt(raw.encode('utf-8')).decode('utf-8')
+        return json.loads(plain)
+    except Exception:
+        pass  # soit valeur en clair héritée, soit cryptography indisponible
+    # 2. Valeur héritée en clair : la lire, puis la rechiffrer en place.
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}
+    except Exception:
+        return {}
+    try:
+        set_api_keys(data)
+    except Exception:
+        pass
+    return data
+
+
+def set_api_keys(keys: dict) -> None:
+    """Chiffre (Fernet) et stocke les clés API utilisateur dans settings['api_keys']."""
+    payload = json.dumps(keys or {}, ensure_ascii=False)
+    try:
+        token = _api_keys_fernet().encrypt(payload.encode('utf-8')).decode('utf-8')
+        set_setting('api_keys', token)
+    except Exception:
+        # cryptography indisponible : préserver le comportement legacy plutôt que
+        # de perdre les clés (le déchiffrement relira ce JSON en clair).
+        set_setting('api_keys', payload)
+
+
+# ══════════════════════════════════════════
 # PRÉRÉGLAGES (presets de configuration)
 # ══════════════════════════════════════════
 
@@ -1878,6 +2078,52 @@ def remove_coanimm_path(path: str) -> list:
     paths = [x for x in list_coanimm_paths() if x != p]
     set_setting('coanimm_allowed_paths', json.dumps(paths, ensure_ascii=False))
     return paths
+
+
+# ══════════════════════════════════════════
+# HISTORIQUE DES TÂCHES CoaNIMM (global, par profil)
+# ══════════════════════════════════════════
+#
+# Journal des tâches CoaNIMM (consigne + résultat), indépendant du fil de
+# conversation : CoaNIMM est un atelier d'automatisation, pas une notion par-fil.
+# Stocké en JSON dans les settings, le plus récent d'abord, plafonné.
+
+_COANIMM_HISTORY_MAX = 50
+
+def list_coanimm_history() -> list:
+    """Retourne la liste des tâches CoaNIMM passées (plus récente d'abord)."""
+    raw = get_setting('coanimm_history', '[]')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def add_coanimm_history(consigne: str, status: str = 'ok', summary: str = '',
+                        returncode=None, files_count: int = 0) -> list:
+    """Ajoute une tâche au journal CoaNIMM. Retourne la liste à jour (plafonnée)."""
+    consigne = (consigne or '').strip()
+    if not consigne:
+        return list_coanimm_history()
+    hist = list_coanimm_history()
+    entry = {
+        'id': uuid.uuid4().hex,
+        'ts': datetime.now().isoformat(timespec='seconds'),
+        'consigne': consigne[:2000],
+        'status': status or 'ok',
+        'summary': (summary or '')[:500],
+        'returncode': returncode,
+        'files_count': int(files_count or 0),
+    }
+    hist.insert(0, entry)
+    hist = hist[:_COANIMM_HISTORY_MAX]
+    set_setting('coanimm_history', json.dumps(hist, ensure_ascii=False))
+    return hist
+
+def clear_coanimm_history() -> None:
+    """Vide le journal des tâches CoaNIMM."""
+    set_setting('coanimm_history', '[]')
+
 
 
 # ══════════════════════════════════════════

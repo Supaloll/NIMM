@@ -43,7 +43,7 @@ Tourne entièrement sur ta machine — tes conversations ne quittent jamais ton 
 - 🔎 **Recherche par sens** — retrouve un souvenir même sans les mots exacts (optionnel)
 - ✏️ **Modifier / Régénérer** — réédite ton dernier message ou demande une nouvelle réponse
 - 📤 **Export** — marque des réponses et exporte-les en TXT, DOCX, PDF, RTF, ODT, EPUB ou MP3
-- 🤖 **CoaNIMM** — exécute des tâches en langage naturel (organiser, renommer, déplacer des fichiers, extraire ou résumer un document…) en générant et lançant un script Python à la demande, **confiné aux dossiers que tu autorises** ; les actions sensibles demandent ton accord explicite
+- 🤖 **CoaNIMM** — exécute des tâches en langage naturel (organiser, renommer, déplacer des fichiers, extraire ou résumer un document…) en générant et lançant un script Python à la demande, **confiné aux dossiers que tu autorises** ; les actions sensibles demandent ton accord explicite ; il peut aussi **retenir une méthode que tu valides** pour la réutiliser plus tard (skills)
 
 ---
 
@@ -136,7 +136,7 @@ NIMM s'ouvre automatiquement dans ton navigateur.
 ### 4. Configurer ta clé API
 
 Au premier lancement, clique sur **⚙️** en haut à droite et entre ta clé API.  
-C'est tout — NIMM est prêt.
+Elle est **chiffrée au repos** sur ta machine (jamais stockée en clair). C'est tout — NIMM est prêt.
 
 ---
 
@@ -208,6 +208,7 @@ L'ensemble de l'interface est balisé avec les attributs ARIA appropriés :
 - **Usage local uniquement** — pas d'authentification, conçu pour un usage personnel sur un réseau de confiance
 - **Une installation par personne** — chaque utilisateur installe sa propre copie
 - **Tes données restent chez toi** — seuls les messages sont envoyés au LLM choisi
+- **Clés API chiffrées au repos** — chiffrées (Fernet) dans la base locale, déchiffrées seulement à l'usage
 - NIMM s'arrête automatiquement quand tu fermes l'onglet navigateur
 
 ---
