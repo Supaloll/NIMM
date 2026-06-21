@@ -1855,6 +1855,86 @@ def set_setting(key: str, value: str):
 
 
 # ══════════════════════════════════════════
+# CLÉS API — CHIFFREMENT AU REPOS (Fernet)
+# ══════════════════════════════════════════
+#
+# Les clés API de l'utilisateur sont stockées CHIFFRÉES dans settings['api_keys'].
+# get_api_keys()/set_api_keys() chiffrent/déchiffrent de façon transparente : tout le
+# reste du code passe par elles et ne voit jamais ni la clé Fernet, ni le token.
+# Migration douce : une valeur encore en clair (JSON hérité) est rechiffrée à la
+# première lecture, sans perte. Modèle de menace local « accident, pas adversaire ».
+
+_API_KEYS_KEYFILE = os.path.join(DATA_DIR, '.nimm_api_keyfile')
+
+
+def _api_keys_fernet():
+    """Clé Fernet serveur (générée une fois), stockée dans data/.nimm_api_keyfile (0600).
+    Même patron que _unlock_secret()."""
+    from cryptography.fernet import Fernet
+    try:
+        if os.path.exists(_API_KEYS_KEYFILE):
+            with open(_API_KEYS_KEYFILE, 'rb') as f:
+                data = f.read().strip()
+            if data:
+                return Fernet(data)
+    except Exception:
+        pass
+    key = Fernet.generate_key()
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(_API_KEYS_KEYFILE, 'wb') as f:
+            f.write(key)
+        try:
+            os.chmod(_API_KEYS_KEYFILE, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return Fernet(key)
+
+
+def get_api_keys() -> dict:
+    """Retourne les clés API utilisateur déchiffrées (dict).
+
+    Migration douce : si la valeur stockée est encore du JSON en clair (installations
+    antérieures au chiffrement), elle est lue puis rechiffrée en place — aucune clé
+    n'est perdue."""
+    raw = get_setting('api_keys', '')
+    if not raw:
+        return {}
+    # 1. Tenter le déchiffrement Fernet (cas normal une fois migré).
+    try:
+        plain = _api_keys_fernet().decrypt(raw.encode('utf-8')).decode('utf-8')
+        return json.loads(plain)
+    except Exception:
+        pass  # soit valeur en clair héritée, soit cryptography indisponible
+    # 2. Valeur héritée en clair : la lire, puis la rechiffrer en place.
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}
+    except Exception:
+        return {}
+    try:
+        set_api_keys(data)
+    except Exception:
+        pass
+    return data
+
+
+def set_api_keys(keys: dict) -> None:
+    """Chiffre (Fernet) et stocke les clés API utilisateur dans settings['api_keys']."""
+    payload = json.dumps(keys or {}, ensure_ascii=False)
+    try:
+        token = _api_keys_fernet().encrypt(payload.encode('utf-8')).decode('utf-8')
+        set_setting('api_keys', token)
+    except Exception:
+        # cryptography indisponible : préserver le comportement legacy plutôt que
+        # de perdre les clés (le déchiffrement relira ce JSON en clair).
+        set_setting('api_keys', payload)
+
+
+# ══════════════════════════════════════════
 # PRÉRÉGLAGES (presets de configuration)
 # ══════════════════════════════════════════
 

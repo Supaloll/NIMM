@@ -451,11 +451,8 @@ async def search(query: str, max_results: int = 5, lang: str = None,
 
     Le quota Brave n'est incrémenté que lorsque l'appel API a abouti.
     """
-    from core.database import get_setting
-    try:
-        keys = json.loads(get_setting('api_keys', '{}'))
-    except Exception:
-        keys = {}
+    from core.database import get_api_keys
+    keys = get_api_keys()
     brave_key  = (keys.get('brave')  or '').strip()
     tavily_key = (keys.get('tavily') or '').strip()
     try:
