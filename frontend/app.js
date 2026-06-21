@@ -8128,14 +8128,29 @@ document.getElementById('coanimm-test-stream-btn')?.addEventListener('click', as
     }
 });
 
-document.getElementById('coanimm-generate-btn')?.addEventListener('click', () => {
+// Pont contexte optionnel : joint le contexte du fil courant à la demande si la case est cochée.
+async function _coanimmBuildContext() {
+    const cb = document.getElementById('coanimm-use-context');
+    if (!cb || !cb.checked || !currentThreadId) return '';
+    try {
+        const r = await fetch('/api/threads/' + currentThreadId + '/messages');
+        const msgs = await r.json();
+        if (!Array.isArray(msgs) || !msgs.length) return '';
+        const recent = msgs.slice(-8).map(function (m) {
+            return (m.role === 'user' ? 'Utilisateur' : 'Assistant') + ' : ' + (m.content || '').slice(0, 500);
+        }).join('\n');
+        return '[Contexte de la conversation en cours]\n' + recent;
+    } catch (e) { return ''; }
+}
+document.getElementById('coanimm-generate-btn')?.addEventListener('click', async () => {
     const input = document.getElementById('coanimm-consigne');
     const consigne = (input?.value || '').trim();
     if (!consigne) { input?.focus(); return; }
     const btn = document.getElementById('coanimm-generate-btn');
     if (btn) { btn.disabled = true; btn.textContent = '🐸 Réflexion…'; }
     _coanimmAnnounce('CoaNIMM réfléchit, veuillez patienter.');
-    runCoanimmPlan(consigne).finally(() => {
+    const _ctx = await _coanimmBuildContext();
+    runCoanimmPlan(_ctx ? _ctx + '\n\n' + consigne : consigne).finally(() => {
         if (btn) { btn.disabled = false; btn.textContent = 'Coa !'; }
     });
 });

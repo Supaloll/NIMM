@@ -163,13 +163,10 @@ def _sanitize_dirname(name: str) -> str:
 
 
 def _workspace_dir(thread_id: str = None) -> str:
-    """Répertoire de travail sandboxé pour CoaNIMM, par fil de conversation."""
+    """Répertoire de travail UNIQUE de CoaNIMM — atelier global, indépendant du fil
+    de conversation. Le thread_id est ignoré (un seul espace de travail partagé) :
+    CoaNIMM est une surface autonome, pas une notion par-fil."""
     base = os.path.join(db.DATA_DIR, WORKSPACE_DIRNAME)
-    if thread_id:
-        thread = db.get_thread(thread_id)
-        name = thread.get('name') if thread else None
-        folder = f"{_sanitize_dirname(name)}_{thread_id[:8]}" if name else thread_id
-        base = os.path.join(base, folder)
     os.makedirs(base, exist_ok=True)
     return base
 

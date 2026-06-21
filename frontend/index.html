@@ -866,6 +866,10 @@
             <label for="coanimm-consigne" class="sr-only">Votre demande à CoaNIMM</label>
             <textarea id="coanimm-consigne" rows="4" placeholder="Exemple : liste les fichiers du répertoire courant et écris leur nombre dans compte.txt"
                 style="width:100%;font-size:0.85rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;box-sizing:border-box;"></textarea>
+            <div style="display:flex;align-items:flex-start;gap:6px;margin-top:8px;">
+                <input type="checkbox" id="coanimm-use-context" style="width:auto;margin:2px 0 0;flex:none;">
+                <label for="coanimm-use-context" style="font-size:0.82rem;margin:0;cursor:pointer;">Partir de la conversation courante (joindre le contexte du fil actif à la demande)</label>
+            </div>
             <button id="coanimm-generate-btn" style="margin-top:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">Coa !<//button>
         </div>
 
@@ -1400,7 +1404,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260621-kbd"></script>
+<script src="/static/app.js?v=20260621-auto"></script>
 <!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
