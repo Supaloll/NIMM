@@ -119,7 +119,14 @@ GENERATE_SYSTEM_PROMPT = (
     "  nimm_generate_image(prompt: str) -> str\n"
     "  Génère une image IA à partir du prompt et retourne le chemin absolu du fichier PNG "
     "dans le répertoire de travail courant.\n"
-    "N'importe pas nimm_generate_image : elle est déjà présente dans l'environnement."
+    "  nimm_web_search(query: str) -> str\n"
+    "  Recherche web : passe une REQUÊTE en langage naturel (jamais une URL), retourne un "
+    "texte de résultats. Pour une info à jour ou un exemple.\n"
+    "  nimm_github_search(query: str) -> str\n"
+    "  Recherche GitHub (dépôts ou code) à partir d'une requête, retourne un texte de "
+    "résultats avec liens, pour s'inspirer d'exemples de code.\n"
+    "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search) : "
+    "ils sont déjà présents dans l'environnement."
 )
 
 SKILL_WRITER_SYSTEM_PROMPT = (
@@ -237,6 +244,20 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        raise RuntimeError(\"nimm_generate_image : \" + _res.get(\"message\", \"?\"))\n"
         "    print(\"Image g\xc3\xa9n\xc3\xa9r\xc3\xa9e :\" + _res[\"filepath\"])\n"
         "    return _res[\"filepath\"]\n"
+        "def nimm_web_search(query, _tid='" + tid + "'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/web_search\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+        "def nimm_github_search(query, _tid='" + tid + "'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/github_search\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     )
 
 
