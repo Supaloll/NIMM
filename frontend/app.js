@@ -35,6 +35,26 @@ if (window.marked) {
     marked.setOptions({ renderer: _renderer });
 }
 
+// Sécurité (anti-XSS) : échappement HTML + désinfection du Markdown rendu
+function _safeHTML(h){ try { return window.DOMPurify ? DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']}) : h; } catch(e){ return h; } }
+
+// Rend cliquables les URLs sans schéma (domaine + chemin) que marked n'auto-lie pas
+// (ex. "support.apple.com/fr-fr/122208"). Conservateur : exige un /chemin pour éviter
+// les faux positifs (main.py, image.png) ; ignore les liens/URLs déjà formés.
+function _linkifyBareUrls(text){
+    try {
+        return text.replace(
+            /(^|[\s(>«"*_])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(\/[^\s)<>\]»"*_]*)/gi,
+            function(m, pre, domain, path){
+                var trail = "";
+                var mt = path.match(/[.,;:!?]+$/);
+                if (mt) { trail = mt[0]; path = path.slice(0, -trail.length); }
+                return pre + "[" + domain + path + "](https://" + domain + path + ")" + trail;
+            }
+        );
+    } catch(e) { return text; }
+}
+
 // ── Accessibilité : bips de génération ──
 const _ac = new (window.AudioContext || window.webkitAudioContext)();
 function _bip(freq = 440, duration = 80, gain = 0.08) {
@@ -251,15 +271,41 @@ function stopTTS() {
 let _selectedVoice  = localStorage.getItem('nimm-voice') || 'ff_siwis';
 let _autoTTS        = localStorage.getItem('nimm-autotts') === 'true';
 let _currentUserId  = localStorage.getItem('nimm-user-id') || '';
+let _unlockTokens   = {};   // userId -> jeton de session (memoire seule, non persiste)
 
-// ── Intercepteur fetch — injecte X-User-ID sur tous les appels /api ──
+// ── Intercepteur fetch — injecte X-User-ID (+ jeton de session) sur tous les appels /api ──
 const _nimmOrigFetch = window.fetch.bind(window);
 window.fetch = (url, opts = {}) => {
     if (typeof url === 'string' && url.startsWith('/api') && _currentUserId) {
-        opts = { ...opts, headers: { 'X-User-ID': _currentUserId, ...(opts.headers || {}) } };
+        const _h = { 'X-User-ID': _currentUserId, ...(opts.headers || {}) };
+        if (_unlockTokens[_currentUserId]) _h['X-Unlock-Token'] = _unlockTokens[_currentUserId];
+        opts = { ...opts, headers: _h };
     }
     return _nimmOrigFetch(url, opts);
 };
+
+// ── Verrou de session : deverrouille un profil a PIN avant d'ecrire (anti-pollution memoire) ──
+async function _ensureUnlocked(userId) {
+    if (!userId || _unlockTokens[userId]) return true;
+    let hasPin = false;
+    try {
+        const users = await fetch('/api/users').then(r => r.json());
+        const u = (users || []).find(x => x.id === userId);
+        hasPin = !!(u && u.has_pin);
+    } catch (e) { hasPin = false; }
+    if (!hasPin) return true;
+    const pin = window.prompt('Code PIN pour la session « ' + userId + ' » :');
+    if (pin === null || pin === '') return false;
+    try {
+        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/unlock', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin })
+        });
+        if (!r.ok) { window.alert('PIN incorrect.'); return false; }
+        _unlockTokens[userId] = (await r.json()).token;
+        return true;
+    } catch (e) { window.alert('Deverrouillage impossible.'); return false; }
+}
 
 // Cache masques : id → label (ex: "Glaude 🐺")
 let _maskCache = {};
@@ -584,6 +630,7 @@ async function showUserPicker(switchMode = false) {
 }
 
 async function _selectUser(user, switchMode = false) {
+    _unlockTokens = {};   // changer de session re-verrouille les profils a PIN
     _currentUserId = user.id;
     localStorage.setItem('nimm-user-id',    user.id);
     localStorage.setItem('nimm-user-name',  user.name);
@@ -606,6 +653,40 @@ async function _selectUser(user, switchMode = false) {
         return;
     }
     await init();
+}
+
+// ── Tuile admin : verrou PIN + identité Tailscale par profil ──
+async function _setUserPin(userId, hasPin) {
+    let current = '';
+    if (hasPin) {
+        current = window.prompt('Code PIN actuel de « ' + userId + ' » :');
+        if (current === null) return;
+    }
+    const np = window.prompt(hasPin ? 'Nouveau code PIN (laisser vide pour RETIRER le PIN) :' : 'Nouveau code PIN pour « ' + userId + ' » :');
+    if (np === null) return;
+    try {
+        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/set-pin', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: np, current_pin: current })
+        });
+        if (!r.ok) { window.alert('Échec (code PIN actuel incorrect ?).'); return; }
+        window.alert(np ? 'Code PIN défini.' : 'Code PIN retiré.');
+        _loadUsersTab();
+    } catch (e) { window.alert('Opération impossible.'); }
+}
+
+async function _setUserTs(userId) {
+    const v = window.prompt('Identité Tailscale à lier à « ' + userId + ' » (ex : prenom@gmail.com ; vide = délier) :');
+    if (v === null) return;
+    try {
+        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/ts-login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ts_login: v })
+        });
+        if (!r.ok) { window.alert('Échec.'); return; }
+        window.alert(v ? 'Identité Tailscale liée.' : 'Identité Tailscale déliée.');
+        _loadUsersTab();
+    } catch (e) { window.alert('Opération impossible.'); }
 }
 
 async function _loadUsersTab() {
@@ -646,10 +727,12 @@ const isAdmin = me.admin;
         <h4>👥 Gérer les profils</h4>
         <div id="users-list-inner" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">`;
         users.forEach(u => {
-            html += `<div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input)">
+            html += `<div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);flex-wrap:wrap">
                 <span style="font-size:1.4rem">${u.emoji || '👤'}</span>
-                <span style="flex:1;font-weight:${u.id === _currentUserId ? '700' : '400'}">${u.name}${u.id === _currentUserId ? ' (moi)' : ''}</span>
-                ${u.id !== _currentUserId ? `<button onclick="_deleteUser('${u.id}')" style="padding:3px 10px;border:none;background:#e55;color:#fff;border-radius:6px;cursor:pointer;font-size:0.8rem">✕</button>` : ''}
+                <span style="flex:1;font-weight:${u.id === _currentUserId ? '700' : '400'}">${u.name}${u.id === _currentUserId ? ' (moi)' : ''}${u.ts_login ? ' 🔗' : ''}</span>
+                <button onclick="_setUserPin('${u.id}', ${u.has_pin ? 'true' : 'false'})" aria-label="${u.has_pin ? 'Modifier le code PIN de ' + u.name : 'Definir un code PIN pour ' + u.name}" style="padding:3px 10px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.8rem">${u.has_pin ? '🔒' : '🔓'} PIN</button>
+                <button onclick="_setUserTs('${u.id}')" aria-label="Lier une identite Tailscale a ${u.name}" style="padding:3px 10px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.8rem">🔗 Tailscale</button>
+                ${u.id !== _currentUserId ? `<button onclick="_deleteUser('${u.id}')" aria-label="Supprimer le profil ${u.name}" style="padding:3px 10px;border:none;background:#e55;color:#fff;border-radius:6px;cursor:pointer;font-size:0.8rem">✕</button>` : ''}
             </div>`;
         });
         html += `</div>
@@ -771,6 +854,27 @@ function _slugify(str) {
 }
 
 async function init() {
+    // Reconnaissance Tailscale (distant) : identité tailnet liée à un profil → on s'y place d'office.
+    let _tsMapped = false;
+    try {
+        const sess = await fetch('/api/session/identity').then(r => r.json()).catch(() => ({}));
+        if (sess && sess.mapped_user) {
+            _currentUserId = sess.mapped_user;
+            localStorage.setItem('nimm-user-id', sess.mapped_user);
+            _tsMapped = true;
+        }
+    } catch (e) {}
+
+    // Verrou par profil au démarrage : un profil à PIN doit être déverrouillé avant d'entrer.
+    // (les proches reconnus par identité Tailscale entrent sans saisir de PIN)
+    if (_currentUserId && !_tsMapped) {
+        if (!(await _ensureUnlocked(_currentUserId))) {
+            _currentUserId = '';
+            await showUserPicker();
+            return;
+        }
+    }
+
     // Sélection profil — avant tout le reste
     if (!_currentUserId) {
         // Vérifier si le mode serveur est actif
@@ -1799,7 +1903,8 @@ function _renderBubble(bubble, rawText) {
         .trim();
 
     // 3. Markdown
-    let html = window.marked ? marked.parse(processed) : processed.replace(/\n/g, '<br>');
+    let html = window.marked ? marked.parse(_linkifyBareUrls(processed)) : processed.replace(/\n/g, '<br>');
+    html = _safeHTML(html);  // désinfection anti-XSS du contenu rendu
 
     // 4. Injecter les cartes
     quizBlocks.forEach((data, idx) => {
@@ -2705,7 +2810,7 @@ async function _triggerStream(content, conversationId, images = null) {
             for (let i = _renderedUpTo; i < limit; i++) {
                 const raw = parts[i].trim();
                 if (!raw) continue;
-                const html = window.marked ? marked.parse(raw) : raw.replace(/\n/g,'<br>');
+                const html = window.marked ? marked.parse(_linkifyBareUrls(raw)) : raw.replace(/\n/g,'<br>');
                 let span;
                 if (_paraNodes[i]) {
                     span = _paraNodes[i];
@@ -2812,7 +2917,7 @@ async function _triggerStream(content, conversationId, images = null) {
                         const imgBubble = document.createElement('div');
                         imgBubble.className = 'message-bubble';
                         const imgB64 = img.b64 || '';
-                        imgBubble.innerHTML = `<img src="${src}" alt="${img.prompt}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${displayPrompt}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+                        imgBubble.innerHTML = `<img src="${src}" alt="${_esc(img.prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${_esc(displayPrompt)}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
                         imgBubble.querySelector('.img-download-btn').addEventListener('click', async () => {
                             try {
                                 const resp = await fetch(src);
@@ -3297,6 +3402,7 @@ async function requestSummary(conversationId) {
 async function sendMessage() {
     const content = userInput.value.trim();
     if (!content && !_pendingFile) return;
+    if (!(await _ensureUnlocked(_currentUserId))) return;  // session a PIN : deverrouiller avant d'ecrire
 
     userInput.value = '';
     userInput.style.height = '44px';
@@ -3340,9 +3446,9 @@ async function sendMessage() {
             bubble.className = 'message-bubble';
             const promptLabel = revisedPrompt && revisedPrompt !== prompt
                 ? `<span style="font-size:0.8rem;color:var(--text-muted);">${revisedPrompt}</span>`
-                : `<span style="font-size:0.8rem;color:var(--text-muted);">${prompt}</span>`;
+                : `<span style="font-size:0.8rem;color:var(--text-muted);">${_esc(prompt)}</span>`;
             const editB64 = data.b64 || '';
-            bubble.innerHTML = `<img src="${src}" alt="${prompt}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">${promptLabel}<br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+            bubble.innerHTML = `<img src="${src}" alt="${_esc(prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">${promptLabel}<br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
             bubble.querySelector('.img-download-btn').addEventListener('click', async () => {
                 try {
                     const resp = await fetch(src);
@@ -4592,7 +4698,7 @@ document.getElementById('image-edit-ok')?.addEventListener('click', async () => 
         emoji.textContent = '🎨';
         const bubble   = document.createElement('div');
         bubble.className = 'message-bubble';
-        bubble.innerHTML = `<img src="${src}" alt="${prompt}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${prompt}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+        bubble.innerHTML = `<img src="${src}" alt="${_esc(prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${_esc(prompt)}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
         bubble.querySelector('.img-download-btn').addEventListener('click', async () => {
             try {
                 const resp = await fetch(src);
@@ -4819,7 +4925,7 @@ function renderAgenda(rappels) {
 }
 
 function _esc(str) {
-    return String(str || '').replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/\"/g,'"');
+    return String(str == null ? '' : str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 // ══════════════════════════════════════════
@@ -4847,10 +4953,10 @@ async function _galerieLoad() {
             const displayName = img.filename.replace(/\.png$/, '');
             card.innerHTML = `
                 <img src="/api/images/file/${encodeURIComponent(img.filename)}"
-                     alt="${img.prompt || img.filename}"
+                     alt="${_esc(img.prompt || img.filename)}"
                      loading="lazy"
                      style="width:100%;aspect-ratio:1;object-fit:cover;display:block;cursor:pointer;"
-                     title="${img.prompt || ''}"
+                     title="${_esc(img.prompt || '')}"
                      data-img-id="${img.id}">
                 <div style="padding:6px 8px;font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${displayName}">${displayName}</div>
                 <div style="display:flex;gap:4px;padding:0 6px 6px;flex-wrap:wrap;">
@@ -7005,6 +7111,55 @@ function _coanimmAnnounce(msg) {
     setTimeout(() => { el.textContent = msg; }, 200);
 }
 
+// Détecte un blocage du confinement (écriture hors dossiers autorisés) dans la sortie
+// du script — même si le script s'est terminé sans code d'erreur. Renvoie le chemin ou null.
+function _coanimmDetectBlockedPath(data) {
+    if (!data) return null;
+    const txt = [data.stdout, data.stderr, data.message].filter(Boolean).join("\n");
+    const m = txt.match(/hors des dossiers autoris\w*\s*:\s*([\s\S]+?)\.\s*Ajoute ce dossier/i);
+    return m ? m[1].trim() : null;
+}
+
+// Affiche une alerte accessible (role=alert) proposant d'autoriser le dossier bloqué.
+function _coanimmShowBlockedPath(path) {
+    const box = document.getElementById('coanimm-blocked-path');
+    const msg = document.getElementById('coanimm-blocked-path-msg');
+    const addBtn = document.getElementById('coanimm-blocked-path-add');
+    const fb = document.getElementById('coanimm-blocked-path-fb');
+    if (!box || !path) return false;
+    if (msg) msg.textContent = "CoaNIMM a bloqué une action dans un dossier non autorisé en écriture : "
+        + path + ". Pour permettre cette tâche, autorise ce dossier puis relance la tâche.";
+    if (fb) fb.textContent = '';
+    if (addBtn) addBtn.dataset.path = path;
+    box.removeAttribute('hidden');
+    return true;
+}
+
+document.getElementById('coanimm-blocked-path-add')?.addEventListener('click', async function () {
+    const path = this.dataset.path || '';
+    const fb = document.getElementById('coanimm-blocked-path-fb');
+    if (!path) return;
+    try {
+        const r = await fetch('/api/coanimm/paths', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        });
+        const d = await r.json();
+        if (d.status === 'error') {
+            if (fb) fb.textContent = '🔴 ' + (d.message || 'erreur');
+            _coanimmAnnounce(d.message || "Erreur lors de l'ajout du dossier.");
+            return;
+        }
+        if (fb) fb.textContent = "Dossier autorisé. Tu peux relancer la tâche.";
+        _coanimmAnnounce("Dossier autorisé en écriture. Relance la tâche pour qu'elle s'exécute.");
+        if (typeof _renderCoanimmPaths === 'function') _renderCoanimmPaths(d.paths || []);
+        document.getElementById('coanimm-blocked-path')?.setAttribute('hidden', '');
+    } catch (e) {
+        if (fb) fb.textContent = '🔴 Erreur réseau.';
+        _coanimmAnnounce("Erreur réseau lors de l'ajout du dossier.");
+    }
+});
+
 function _coanimmHideAll() {
     document.getElementById('coanimm-plan').classList.add('hidden');
     document.getElementById('coanimm-code-preview').classList.add('hidden');
@@ -7167,10 +7322,20 @@ function _coanimmShowResult(data, label) {
             savePanel.setAttribute('hidden', '');
         }
     }
-    // Focus sur le textarea stdout : les lecteurs d'écran lisent son contenu
+    // Détection d'un blocage de confinement (écriture hors dossiers autorisés), accessible.
+    document.getElementById('coanimm-blocked-path')?.setAttribute('hidden', '');
+    const _blockedPath = _coanimmDetectBlockedPath(data);
+    if (_blockedPath) _coanimmShowBlockedPath(_blockedPath);
+    const _hasError = (data.status !== 'ok')
+        || (data.returncode !== undefined && data.returncode !== 0) || !!_blockedPath;
+
+    // Focus accessible : sur l'alerte/erreur si échec, sinon sur la sortie standard.
     setTimeout(() => {
-        const t = document.getElementById('coanimm-result-stdout');
-        if (t) t.focus();
+        let target = null;
+        if (_blockedPath) target = document.getElementById('coanimm-blocked-path-add');
+        else if (_hasError) target = document.getElementById('coanimm-result-status');
+        if (!target) target = document.getElementById('coanimm-result-stdout');
+        if (target) target.focus();
     }, 100);
 }
 
@@ -7180,6 +7345,7 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     document.getElementById('coanimm-modal').classList.remove('hidden');
     loadCoanimm();
     loadCoanimmPaths();
+    loadCoanimmHistory();
 });
 
 async function loadCoanimmPaths() {
@@ -7252,6 +7418,65 @@ async function _removeCoanimmPath(path) {
     } catch (e) { console.error('[COANIMM] Erreur retrait dossier :', e); }
 }
 document.getElementById('coanimm-path-add-btn')?.addEventListener('click', _addCoanimmPath);
+
+// ── Historique des tâches CoaNIMM (global, indépendant du fil) ──
+function _renderCoanimmHistory(list) {
+    const ul = document.getElementById('coanimm-history-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!list || !list.length) {
+        const li = document.createElement('li');
+        li.textContent = "Aucune tâche enregistrée pour le moment.";
+        li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+        ul.appendChild(li);
+        return;
+    }
+    list.forEach(item => {
+        const li = document.createElement('li');
+        li.style.cssText = 'padding:4px 0;border-bottom:1px solid var(--border);';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const date = (item.ts || '').replace('T', ' ').slice(0, 16);
+        const statusTxt = item.status === 'ok' ? 'réussi' : 'échec';
+        const cons = (item.consigne || '').slice(0, 140);
+        btn.textContent = date + ' — ' + statusTxt + ' : ' + cons;
+        btn.setAttribute('aria-label', 'Reprendre cette tâche du ' + date + ', ' + statusTxt + ' : ' + cons);
+        btn.style.cssText = 'background:none;border:none;color:var(--text);text-align:left;cursor:pointer;font-size:0.82rem;padding:2px 0;width:100%;';
+        btn.addEventListener('click', () => {
+            const input = document.getElementById('coanimm-consigne');
+            if (input) { input.value = item.consigne || ''; input.focus(); }
+            _coanimmAnnounce("Consigne reprise dans le champ. Vous pouvez la relancer.");
+        });
+        li.appendChild(btn);
+        ul.appendChild(li);
+    });
+}
+async function loadCoanimmHistory() {
+    try {
+        const r = await fetch('/api/coanimm/history');
+        const d = await r.json();
+        _renderCoanimmHistory(d.history || []);
+    } catch (e) { /* silencieux */ }
+}
+function _recordCoanimmHistory(status, returncode, filesCount) {
+    const consigne = (_coanimmCurrentConsigne || '').trim();
+    if (!consigne) return;
+    const out = (document.getElementById('coanimm-result-stdout')?.value || '').trim();
+    const summary = out.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 300);
+    fetch('/api/coanimm/history', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consigne, status, returncode, files_count: filesCount || 0, summary }),
+    }).then(r => r.json()).then(d => { if (d && d.history) _renderCoanimmHistory(d.history); }).catch(() => {});
+}
+async function _clearCoanimmHistory() {
+    try {
+        const r = await fetch('/api/coanimm/history', { method: 'DELETE' });
+        const d = await r.json();
+        _renderCoanimmHistory(d.history || []);
+        _coanimmAnnounce("Historique vidé.");
+    } catch (e) { /* silencieux */ }
+}
+document.getElementById('coanimm-history-clear-btn')?.addEventListener('click', _clearCoanimmHistory);
 document.getElementById('coanimm-path-input')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); _addCoanimmPath(); }
 });
@@ -7708,6 +7933,7 @@ async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allo
                         statusEl.textContent = rc === 0
                             ? '✅ Terminé (code ' + rc + ')'
                             : '⚠️ Terminé avec erreurs (code ' + rc + ')';
+                        _recordCoanimmHistory(rc === 0 ? 'ok' : 'error', rc, (evt.files_list || []).length);
                         if (rc !== 0) {
                             const lines = stdoutEl.value.trim().split('\n').filter(Boolean);
                             const lastLines = lines.slice(-5).join(' ');
@@ -7902,14 +8128,29 @@ document.getElementById('coanimm-test-stream-btn')?.addEventListener('click', as
     }
 });
 
-document.getElementById('coanimm-generate-btn')?.addEventListener('click', () => {
+// Pont contexte optionnel : joint le contexte du fil courant à la demande si la case est cochée.
+async function _coanimmBuildContext() {
+    const cb = document.getElementById('coanimm-use-context');
+    if (!cb || !cb.checked || !currentThreadId) return '';
+    try {
+        const r = await fetch('/api/threads/' + currentThreadId + '/messages');
+        const msgs = await r.json();
+        if (!Array.isArray(msgs) || !msgs.length) return '';
+        const recent = msgs.slice(-8).map(function (m) {
+            return (m.role === 'user' ? 'Utilisateur' : 'Assistant') + ' : ' + (m.content || '').slice(0, 500);
+        }).join('\n');
+        return '[Contexte de la conversation en cours]\n' + recent;
+    } catch (e) { return ''; }
+}
+document.getElementById('coanimm-generate-btn')?.addEventListener('click', async () => {
     const input = document.getElementById('coanimm-consigne');
     const consigne = (input?.value || '').trim();
     if (!consigne) { input?.focus(); return; }
     const btn = document.getElementById('coanimm-generate-btn');
     if (btn) { btn.disabled = true; btn.textContent = '🐸 Réflexion…'; }
     _coanimmAnnounce('CoaNIMM réfléchit, veuillez patienter.');
-    runCoanimmPlan(consigne).finally(() => {
+    const _ctx = await _coanimmBuildContext();
+    runCoanimmPlan(_ctx ? _ctx + '\n\n' + consigne : consigne).finally(() => {
         if (btn) { btn.disabled = false; btn.textContent = 'Coa !'; }
     });
 });
@@ -7949,10 +8190,36 @@ document.getElementById('coanimm-save-confirm')?.addEventListener('click', async
         });
         const d = await r.json();
         if (d.status === 'ok') {
+            const st = document.getElementById('coanimm-result-status');
+            let suffix = ' — script enregistré dans la Promptothèque.';
+            const wantSkill = document.getElementById('coanimm-save-skill-check')?.checked;
+            if (wantSkill) {
+                if (feedback) feedback.textContent = 'Mémorisation de la méthode en cours…';
+                try {
+                    const rs = await fetch('/api/coanimm/save_skill', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            consigne: _coanimmCurrentConsigne || '',
+                            script: code,
+                            thread_id: currentThreadId || null,
+                        }),
+                    });
+                    const ds = await rs.json();
+                    if (ds.status === 'created') {
+                        suffix += ' Méthode mémorisée comme skill' + (ds.skill && ds.skill.label ? ' : ' + ds.skill.label : '') + '.';
+                    } else if (ds.status === 'skip') {
+                        suffix += ' (Méthode non retenue : déjà couverte par un skill existant.)';
+                    } else {
+                        suffix += ' (Méthode non mémorisée : ' + (ds.message || 'erreur') + '.)';
+                    }
+                } catch (e) {
+                    suffix += ' (Méthode non mémorisée : erreur réseau.)';
+                }
+            }
             document.getElementById('coanimm-save-panel')?.setAttribute('hidden', '');
             if (feedback) feedback.textContent = '';
-            const st = document.getElementById('coanimm-result-status');
-            if (st) { st.textContent += ' — script enregistré dans la Promptothèque.'; st.focus(); }
+            if (st) { st.textContent += suffix; st.focus(); }
         } else {
             if (feedback) feedback.textContent = 'Erreur : ' + (d.detail || d.message || 'inconnue');
         }
@@ -7994,6 +8261,8 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
     });
     var input = document.getElementById('user-input');
     if (input) input.setAttribute('aria-keyshortcuts', 'Alt+Shift+S');
+    var _coaInput = document.getElementById('coanimm-consigne');
+    if (_coaInput) _coaInput.setAttribute('aria-keyshortcuts', 'Alt+Shift+S');
 
     function focusModal(container) {
         if (!container || container.classList.contains('hidden')) return;
@@ -8005,9 +8274,14 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
     document.addEventListener('keydown', function (e) {
         if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
         var k = (e.key || '').toLowerCase();
-        if (k === 's') {  // focus zone de saisie
+        if (k === 's') {  // focus zone de saisie (contextuel : CoaNIMM si ouvert, sinon chat)
             e.preventDefault();
-            document.getElementById('user-input')?.focus();
+            var _coa = document.getElementById('coanimm-modal');
+            if (_coa && !_coa.classList.contains('hidden')) {
+                document.getElementById('coanimm-consigne')?.focus();
+            } else {
+                document.getElementById('user-input')?.focus();
+            }
             return;
         }
         var id = SHORTCUTS[k];

@@ -205,6 +205,8 @@ data/nimm_*.db-shm
 data/nimm_*.db-wal
 data/nimm_global.json
 data/users.json
+data/.nimm_unlock_secret
+data/.nimm_api_keyfile
 
 # Espaces de travail CoaNIMM (générés par fil, données utilisateur)
 data/coanimm_workspace/

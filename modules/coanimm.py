@@ -119,7 +119,38 @@ GENERATE_SYSTEM_PROMPT = (
     "  nimm_generate_image(prompt: str) -> str\n"
     "  Génère une image IA à partir du prompt et retourne le chemin absolu du fichier PNG "
     "dans le répertoire de travail courant.\n"
-    "N'importe pas nimm_generate_image : elle est déjà présente dans l'environnement."
+    "  nimm_web_search(query: str) -> str\n"
+    "  Recherche web : passe une REQUÊTE en langage naturel (jamais une URL), retourne un "
+    "texte de résultats. Pour une info à jour ou un exemple.\n"
+    "  nimm_github_search(query: str) -> str\n"
+    "  Recherche GitHub (dépôts ou code) à partir d'une requête, retourne un texte de "
+    "résultats avec liens, pour s'inspirer d'exemples de code.\n"
+    "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search) : "
+    "ils sont déjà présents dans l'environnement."
+)
+
+SKILL_WRITER_SYSTEM_PROMPT = (
+    "Tu es CoaNIMM en mode rédaction de fiche skill.\n"
+    "Une fiche skill capture une MÉTHODE qui vient d'être validée par Laurent, pour pouvoir "
+    "la redemander plus tard. Ce n'est pas un script figé : c'est un mode d'emploi en langage "
+    "naturel qui enseigne la LOGIQUE de la méthode.\n\n"
+    "RÈGLE CARDINALE : enseigne par la logique de la méthode, jamais en recopiant l'exemple. "
+    "Une fiche collée au cas précis (« convertir CETTE image-ci ») ne sert à rien la fois "
+    "suivante ; une fiche trop vague (« retoucher des images ») perd les nuances. Capture le "
+    "PRINCIPE qui a fait que ça a marché (par exemple « seuillage binaire » ou « quantification "
+    "de palette »), pas les valeurs précises du test ni le fichier d'exemple particulier.\n\n"
+    "Tu reçois en entrée la consigne d'origine de Laurent et le script validé. Produis la fiche.\n\n"
+    "FORMAT OBLIGATOIRE de ta réponse, en TEXTE BRUT uniquement (Laurent lit sur plage braille : "
+    "aucun markdown, aucune balise, aucun astérisque, aucun titre #, aucun backtick, aucune puce) :\n\n"
+    "Ligne 1, exactement, la description « quand l'utiliser » en une seule phrase :\n"
+    "  DESCRIPTION: <une phrase qui dit dans quel cas ce skill s'applique>\n"
+    "Ligne 2, exactement, les déclencheurs séparés par des virgules :\n"
+    "  MOTS-CLES: <mot1, mot2, mot3, ...>\n"
+    "Puis une ligne vide, puis le CORPS de la fiche : la méthode en langage naturel, "
+    "3 à 8 phrases, qui explique le principe et comment l'appliquer. Ne mentionne pas le "
+    "fichier d'exemple. Ne recopie pas le code.\n\n"
+    "Réponds UNIQUEMENT « SKIP » (et rien d'autre) si l'entrée ne décrit pas une méthode "
+    "réutilisable (résultat improvisé une seule fois, sans principe généralisable)."
 )
 
 
@@ -132,13 +163,10 @@ def _sanitize_dirname(name: str) -> str:
 
 
 def _workspace_dir(thread_id: str = None) -> str:
-    """Répertoire de travail sandboxé pour CoaNIMM, par fil de conversation."""
+    """Répertoire de travail UNIQUE de CoaNIMM — atelier global, indépendant du fil
+    de conversation. Le thread_id est ignoré (un seul espace de travail partagé) :
+    CoaNIMM est une surface autonome, pas une notion par-fil."""
     base = os.path.join(db.DATA_DIR, WORKSPACE_DIRNAME)
-    if thread_id:
-        thread = db.get_thread(thread_id)
-        name = thread.get('name') if thread else None
-        folder = f"{_sanitize_dirname(name)}_{thread_id[:8]}" if name else thread_id
-        base = os.path.join(base, folder)
     os.makedirs(base, exist_ok=True)
     return base
 
@@ -213,6 +241,20 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        raise RuntimeError(\"nimm_generate_image : \" + _res.get(\"message\", \"?\"))\n"
         "    print(\"Image g\xc3\xa9n\xc3\xa9r\xc3\xa9e :\" + _res[\"filepath\"])\n"
         "    return _res[\"filepath\"]\n"
+        "def nimm_web_search(query, _tid='" + tid + "'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/web_search\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+        "def nimm_github_search(query, _tid='" + tid + "'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/github_search\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     )
 
 
@@ -395,6 +437,198 @@ async def repair_code(code: str, error_output: str, consigne: str = '',
         "Sortie observée (les dernières lignes contiennent généralement l'erreur) :\n"
         f"{(error_output or '')[-2000:]}\n\n"
         "Ne réexplique pas, ne t'excuse pas : renvoie seulement le script corrigé."
+    )
+    return await generate_code(message, thread_id, provider_override)
+
+
+def _parse_skill_fiche(raw: str) -> dict:
+    """Découpe la sortie du writer (DESCRIPTION / MOTS-CLES / corps) en parties.
+
+    Retourne {'skip': True} si le modèle a renvoyé SKIP. Sinon
+    {'description': str, 'mots_cles': [..], 'corps': str}. Tolère l'absence d'une
+    ligne d'en-tête (description/corps recalculés au mieux)."""
+    text = (raw or '').strip()
+    if not text:
+        return {'skip': True}
+    if text.strip().upper() == 'SKIP':
+        return {'skip': True}
+
+    description = ''
+    mots_cles = []
+    corps_lines = []
+    header_done = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        low = stripped.lower()
+        if not header_done and low.startswith('description:'):
+            description = stripped.split(':', 1)[1].strip()
+            continue
+        if not header_done and (low.startswith('mots-cles:') or low.startswith('mots-clés:')):
+            valeur = stripped.split(':', 1)[1].strip()
+            mots_cles = [m.strip() for m in re.split(r'[,;]', valeur) if m.strip()]
+            continue
+        # Première ligne non-en-tête (et non vide) : on bascule dans le corps.
+        if not header_done and not stripped:
+            continue
+        header_done = True
+        corps_lines.append(line)
+
+    corps = '\n'.join(corps_lines).strip()
+    # Filets : si pas de description explicite, prendre la 1re phrase du corps.
+    if not description and corps:
+        description = corps.split('.')[0].strip()[:200]
+    return {'skip': False, 'description': description,
+            'mots_cles': mots_cles, 'corps': corps}
+
+
+async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
+                      label: str = None, script_ref: str = None,
+                      provider_override: str = None) -> dict:
+    """Rédige et enregistre une fiche skill à partir d'un script validé par Laurent.
+
+    Calqué sur maybe_generate_carnet_note : appel LLM en arrière-plan, lecture des
+    fiches déjà écrites pour éviter un doublon, option SKIP si rien de réutilisable,
+    puis écriture via save_prompt(type='skill').
+
+    Une fiche n'existe qu'après accord explicite de Laurent : cette fonction est donc
+    appelée APRÈS validation. Elle pose valide_par_laurent=True et version=1.
+
+    Retourne {'status': 'created', 'skill': <entrée>} en cas de succès,
+    {'status': 'skip'} si le modèle juge l'entrée non réutilisable, ou
+    {'status': 'error', 'message': ...}.
+    """
+    import core.engine as engine
+    import core.hub as hub
+
+    consigne_origine = (consigne_origine or '').strip()
+    script = (script or '').strip()
+    if not consigne_origine and not script:
+        return {'status': 'error', 'message': "Ni consigne ni script : rien à capturer."}
+
+    settings = hub.load_settings(thread_id)
+    provider, model = hub.get_task_provider_model('coanimm', settings)
+    if provider_override:
+        provider, model = provider_override, None
+
+    # Fiches déjà écrites — évite de recréer un skill équivalent (cf. carnet de bord).
+    existing = db.list_prompts('skill')
+    existing_block = ''
+    if existing:
+        lignes = []
+        for e in list(existing.values())[-8:]:
+            desc = (e.get('meta') or {}).get('description', '') or e.get('label', '')
+            if desc:
+                lignes.append(f"- {desc}")
+        if lignes:
+            existing_block = (
+                "Fiches skill déjà existantes (ne recrée pas un doublon ; réponds SKIP "
+                "si ta fiche serait équivalente à l'une d'elles) :\n"
+                + '\n'.join(lignes) + "\n\n"
+            )
+
+    message = (
+        existing_block +
+        "Consigne d'origine de Laurent :\n"
+        f"{consigne_origine or '(non précisée)'}\n\n"
+        "Script validé :\n"
+        f"{script or '(aucun script)'}\n\n"
+        "Rédige la fiche skill selon le format imposé."
+    )
+
+    try:
+        raw = await engine.call_llm(
+            messages=[{'role': 'user', 'content': message}],
+            provider=provider,
+            model=model,
+            system_prompt=SKILL_WRITER_SYSTEM_PROMPT,
+            max_tokens=600,
+            temperature=0.3,
+            api_keys=settings['api_keys'],
+        )
+    except Exception as e:
+        detail = str(e) or type(e).__name__
+        return {'status': 'error', 'message': f"Erreur génération de la fiche : {detail}"}
+
+    fiche = _parse_skill_fiche(raw)
+    if fiche.get('skip'):
+        print("[SKILL] Fiche ignorée (SKIP : rien de réutilisable ou doublon).")
+        return {'status': 'skip'}
+
+    corps = fiche['corps']
+    if not corps:
+        return {'status': 'error', 'message': "La fiche générée est vide."}
+
+    label = (label or fiche['description'] or 'Skill sans titre')[:120]
+    meta = {
+        'description': fiche['description'],
+        'mots_cles': fiche['mots_cles'],
+        'script_ref': script_ref or '',
+        'consigne_origine': consigne_origine,
+        'valide_par_laurent': True,
+        'version': 1,
+    }
+    entry = db.save_prompt(None, label, corps, type='skill', meta=meta)
+    print(f"[SKILL] Fiche créée : {label!r} — mots-clés : {', '.join(fiche['mots_cles']) or '(aucun)'}")
+    return {'status': 'created', 'skill': entry}
+
+
+def _skill_to_text(sk: dict) -> str:
+    """Met une fiche skill en texte lisible pour l'audit (label + description + corps)."""
+    meta = sk.get('meta') or {}
+    desc = meta.get('description', '') or sk.get('label', '')
+    return (
+        f"SKILL : {sk.get('label', '')}\n"
+        f"Quand l'utiliser : {desc}\n"
+        f"Méthode :\n{sk.get('text', '')}"
+    )
+
+
+def _find_relevant_skill(consigne: str):
+    """Retourne la fiche skill la plus proche de la consigne (recouvrement de mots-clés),
+    ou None. Même logique simple que find_skill côté hub. Inerte s'il n'existe aucune fiche."""
+    try:
+        import re as _re
+        try:
+            from core.hub import _MOTS_VIDES as _stop
+        except Exception:
+            _stop = set()
+        skills = db.list_prompts('skill')
+        if not skills:
+            return None
+        mots = [m for m in _re.findall(r'\w+', (consigne or '').lower())
+                if len(m) > 2 and m not in _stop]
+        if not mots:
+            return None
+        best, best_score = None, 0
+        for sid, sk in skills.items():
+            meta = sk.get('meta') or {}
+            hay = ' '.join([sk.get('label', ''), meta.get('description', ''),
+                            ' '.join(meta.get('mots_cles') or [])]).lower()
+            score = sum(1 for m in mots if m in hay)
+            if score > best_score:
+                best, best_score = sk, score
+        return best if best_score > 0 else None
+    except Exception:
+        return None
+
+
+async def audit_against_skill(code: str, fiche_text: str, consigne: str = '',
+                              thread_id: str = None, provider_override: str = None) -> str:
+    """Relit un script généré à la lumière d'une fiche skill validée et le corrige s'il
+    s'écarte de la méthode décrite. Réutilise generate_code (nettoyage des balises +
+    filet anti-troncature) : c'est repair_code déclenché par un écart à la fiche plutôt
+    que par une erreur d'exécution. Renvoie le script (corrigé ou inchangé)."""
+    objectif = (consigne or '').strip() or "(objectif initial non précisé)"
+    message = (
+        "Une MÉTHODE déjà validée par l'utilisateur (fiche skill) décrit comment réaliser "
+        "ce type de tâche.\n\n"
+        f"Fiche skill :\n{fiche_text}\n\n"
+        f"Objectif :\n{objectif}\n\n"
+        "Script généré :\n"
+        f"{code}\n\n"
+        "Le script respecte-t-il la méthode décrite dans la fiche ? S'il la respecte déjà, "
+        "renvoie-le tel quel. Sinon, corrige-le pour qu'il applique cette méthode. "
+        "Ne réexplique pas : renvoie seulement le script Python complet."
     )
     return await generate_code(message, thread_id, provider_override)
 
@@ -624,6 +858,17 @@ async def run_generated(consigne: str, thread_id: str = None,
                 ),
                 'code': code,
             }
+
+    # Auto-audit à la lumière d'un skill validé (Étape C) — inerte si aucune fiche ne correspond.
+    _fiche = _find_relevant_skill(consigne)
+    if _fiche:
+        try:
+            _audited = await audit_against_skill(code, _skill_to_text(_fiche), consigne, thread_id)
+            if _audited.strip() and _check_syntax(_audited) is None:
+                code = _audited
+                print("[COANIMM] Auto-audit skill appliqué avant exécution.")
+        except Exception as _e:
+            print(f"[COANIMM] Auto-audit skill ignoré : {_e}")
 
     workdir = _workspace_dir(thread_id)
     before  = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()

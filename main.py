@@ -12,7 +12,7 @@ import threading
 import time
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -25,7 +25,8 @@ import httpx as _httpx
 from core.database import (
     init_db, get_threads, get_thread, create_thread, delete_thread, set_thread_mask,
     update_thread_name, update_thread_tags, get_messages, add_message, count_messages,
-    get_setting, set_setting, get_all_memory, delete_memory,
+    get_setting, set_setting, get_api_keys as _db_get_api_keys, set_api_keys as _db_set_api_keys,
+    get_all_memory, delete_memory,
     update_memory_value, save_memory,
     get_cost_summary, reset_wallet, update_wallet_rates, update_wallet_solde,
     check_auto_resets,
@@ -186,6 +187,57 @@ async def _user_ctx_middleware(request, call_next):
     user_id = request.headers.get('x-user-id', '') or ''
     if user_id:
         set_user_context(user_id)
+    return await call_next(request)
+
+def _sec_host_allowed(host: str) -> bool:
+    """Host/Origine autorisé : local, nom tailnet (.ts.net), ou NIMM_ALLOWED_HOSTS."""
+    if not host:
+        return True  # client local sans en-tête Host : on n'enferme pas
+    h = host.strip().lower()
+    if h.startswith('['):
+        h = h[1:].split(']')[0]
+    elif h.count(':') == 1:
+        h = h.split(':')[0]
+    if h in ('127.0.0.1', 'localhost', '::1'):
+        return True
+    if h.endswith('.ts.net'):
+        return True
+    extra = [x.strip().lower() for x in _os_main.environ.get('NIMM_ALLOWED_HOSTS', '').split(',') if x.strip()]
+    return h in extra
+
+@app.middleware("http")
+async def _security_middleware(request, call_next):
+    """Anti DNS-rebinding / CSRF + capture de l'identité Tailscale.
+    Le binding sur 127.0.0.1 limite déjà l'accès distant à `tailscale serve`."""
+    if not _sec_host_allowed(request.headers.get('host', '')):
+        return JSONResponse({'detail': 'Host non autorisé.'}, status_code=400)
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        origin = request.headers.get('origin')
+        if origin:
+            from urllib.parse import urlparse as _up
+            if not _sec_host_allowed(_up(origin).netloc):
+                return JSONResponse({'detail': 'Origine non autorisée.'}, status_code=403)
+    # Identité fournie par `tailscale serve`
+    ts_user = request.headers.get('tailscale-user-login') or ''
+    try:
+        request.state.tailscale_user = ts_user
+    except Exception:
+        pass
+    # Verrou de session (anti-pollution mémoire) sur les écritures de chat.
+    # Distant : seul le porteur de l'identité Tailscale liée peut écrire dans sa session.
+    # Local : un profil à PIN exige un jeton de déverrouillage valide.
+    if request.method == 'POST':
+        _p = request.url.path
+        if _p.startswith('/api/chat') or _p.endswith('/messages'):
+            import core.database as _dbsec
+            _target = request.headers.get('x-user-id', '') or ''
+            _bound = _dbsec.find_user_by_ts_login(ts_user) if ts_user else None
+            if _bound is not None:
+                if _target and _target != _bound:
+                    return JSONResponse({'detail': 'tailscale_identity_mismatch'}, status_code=403)
+            elif _target and _dbsec.user_has_pin(_target):
+                if not _dbsec.check_unlock_token(_target, request.headers.get('x-unlock-token', '')):
+                    return JSONResponse({'detail': 'session_locked', 'user': _target}, status_code=403)
     return await call_next(request)
 
 # Fichiers statiques
@@ -1043,6 +1095,14 @@ async def delete_prompt_route(prompt_id: str):
 # COANIMM — agent d'exécution
 # ══════════════════════════════════════════
 
+def _ephemeral_scope(scope):
+    """Sécurité (anti auto-grant RCE) : aucune permission d'exécution n'est
+    rendue durable via les routes d'exécution. Tout 'project'/'always' reçu dans
+    la requête est ramené à 'once' (exécute maintenant, ne persiste rien). Les
+    accords durables par identité seront gérés à part, après cartographie."""
+    return 'once' if scope in ('project', 'always') else scope
+
+
 class CoanimmRunScriptRequest(BaseModel):
     script_id: str
     args: Optional[List[str]] = None
@@ -1057,7 +1117,7 @@ async def coanimm_run_script(req: CoanimmRunScriptRequest):
     from modules.coanimm import run_script
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
-    return run_script(req.script_id, req.args, req.thread_id, req.confirm_scope)
+    return run_script(req.script_id, req.args, req.thread_id, _ephemeral_scope(req.confirm_scope))
 
 class CoanimmPlanRequest(BaseModel):
     consigne: str
@@ -1089,7 +1149,7 @@ async def coanimm_explore(req: CoanimmExploreRequest):
     from modules.coanimm import explore_directory
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide.")
-    return await explore_directory(req.consigne, req.thread_id, req.confirm_scope)
+    return await explore_directory(req.consigne, req.thread_id, _ephemeral_scope(req.confirm_scope))
 
 class CoanimmGenerateRequest(BaseModel):
     consigne: str
@@ -1102,7 +1162,7 @@ async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
     from modules.coanimm import run_generated
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide.")
-    return await run_generated(req.consigne, req.thread_id, req.confirm_scope)
+    return await run_generated(req.consigne, req.thread_id, _ephemeral_scope(req.confirm_scope))
 
 class CoanimmGenerateOnlyRequest(BaseModel):
     consigne: str
@@ -1125,9 +1185,10 @@ async def coanimm_generate(req: CoanimmGenerateOnlyRequest):
     except Exception as e:
         import traceback
         detail = traceback.format_exc()
+        print('[COANIMM][ERREUR]', detail)
         return JSONResponse({'status': 'error',
                              'message': str(e),
-                             'detail': detail[-800:]})  # derniers 800 car. du traceback
+                             'detail': ''})  # derniers 800 car. du traceback
 
 class CoanimmRunCodeDirectRequest(BaseModel):
     code: str
@@ -1142,11 +1203,8 @@ async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
     import core.database as _db
     if not req.code.strip():
         return {'status': 'error', 'message': 'Le code est vide.'}
-    if req.confirm_scope in ('project', 'always'):
-        _db.grant_agent_permission(GENERATED_ACTION, req.confirm_scope, req.thread_id)
-    # 'once' = l'utilisateur vient d'autoriser → on exécute directement
-    # None = pas encore autorisé → vérifier la DB
-    if req.confirm_scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+    scope = _ephemeral_scope(req.confirm_scope)  # anti auto-grant RCE : pas de persistance via exécution
+    if scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
         return {'status': 'permission_required', 'action': GENERATED_ACTION,
                 'label': "exécuter le code Python"}
     return execute_code(req.code, req.thread_id)
@@ -1185,9 +1243,8 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
 
     if not req.code.strip():
         return JSONResponse({"status": "error", "message": "Le code est vide."})
-    if req.confirm_scope in ("project", "always"):
-        _db.grant_agent_permission(GENERATED_ACTION, req.confirm_scope, req.thread_id)
-    if req.confirm_scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
+    scope = _ephemeral_scope(req.confirm_scope)  # anti auto-grant RCE : pas de persistance via exécution
+    if scope is None and not _db.agent_permission_granted(GENERATED_ACTION, req.thread_id):
         return JSONResponse({"status": "permission_required", "action": GENERATED_ACTION,
                              "label": "exécuter le code Python"})
 
@@ -1348,7 +1405,8 @@ async def coanimm_continue(req: CoanimmContinueRequest):
     except Exception as e:
         import traceback
         detail = traceback.format_exc()
-        return JSONResponse({'status': 'error', 'message': str(e), 'detail': detail[-800:]})
+        print('[COANIMM][ERREUR]', detail)
+        return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
 
 
 class CoanimmRepairRequest(BaseModel):
@@ -1374,7 +1432,8 @@ async def coanimm_repair(req: CoanimmRepairRequest):
     except Exception as e:
         import traceback
         detail = traceback.format_exc()
-        return JSONResponse({'status': 'error', 'message': str(e), 'detail': detail[-800:]})
+        print('[COANIMM][ERREUR]', detail)
+        return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
 
 
 @app.post("/api/coanimm/generate_image")
@@ -1443,6 +1502,88 @@ async def coanimm_suggest_name(req: CoanimmSuggestNameRequest):
     except Exception as e:
         return {"status": "ok", "name": ""}  # silencieux, le champ reste vide
 
+class CoanimmSaveSkillRequest(BaseModel):
+    consigne: str
+    script: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/save_skill")
+async def coanimm_save_skill(req: CoanimmSaveSkillRequest):
+    """Capture la méthode d'un script validé par l'utilisateur comme fiche skill
+    réutilisable. La fiche est rédigée par le LLM (SKILL_WRITER) ; le nom est auto-généré.
+    Renvoie {status: created|skip|error}."""
+    from modules.coanimm import write_skill
+    if not (req.consigne or "").strip() and not (req.script or "").strip():
+        return {"status": "error", "message": "Rien à mémoriser : consigne et script vides."}
+    try:
+        return await write_skill(req.consigne, req.script, req.thread_id)
+    except Exception as e:
+        import traceback
+        print("[COANIMM][ERREUR] save_skill", traceback.format_exc())
+        return JSONResponse({"status": "error", "message": str(e), "detail": ""})
+
+class CoanimmWebSearchRequest(BaseModel):
+    query: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/web_search")
+async def coanimm_web_search(req: CoanimmWebSearchRequest):
+    """Recherche web pour un script CoaNIMM confiné (Étape D). Réutilise l'infra Brave/
+    Tavily existante (endpoint FIXE). Le script passe une REQUÊTE, jamais une URL ; le
+    sous-processus ne sort jamais (il appelle ce localhost). Résultat borné en taille."""
+    from modules.websearch import search
+    q = (req.query or "").strip()
+    if not q:
+        return {"status": "ok", "result": "(requête vide)"}
+    try:
+        result = await search(q, max_results=5)
+    except Exception as e:
+        return {"status": "ok", "result": f"[Erreur recherche web : {e}]"}
+    return {"status": "ok", "result": (result or "")[:4000]}
+
+@app.post("/api/coanimm/github_search")
+async def coanimm_github_search(req: CoanimmWebSearchRequest):
+    """Recherche GitHub pour un script CoaNIMM confiné (Étape D). Endpoint FIXE
+    api.github.com ; le script passe une REQUÊTE, jamais une URL. Recherche de code si
+    GITHUB_TOKEN présent (en-tête d'env), sinon recherche de dépôts (API publique).
+    Résultat borné en taille."""
+    import os as _os, asyncio as _aio
+    import requests as _rq
+    q = (req.query or "").strip()
+    if not q:
+        return {"status": "ok", "result": "(requête vide)"}
+    token = (_os.getenv("GITHUB_TOKEN", "") or "").strip()
+    def _do():
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "NIMM-CoaNIMM"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+            url, code_mode = "https://api.github.com/search/code", True
+        else:
+            url, code_mode = "https://api.github.com/search/repositories", False
+        try:
+            r = _rq.get(url, params={"q": q, "per_page": 5}, headers=headers, timeout=15)
+        except Exception as e:
+            return f"[Erreur réseau GitHub : {e}]"
+        if r.status_code != 200:
+            return f"[GitHub a répondu {r.status_code}]"
+        try:
+            items = (r.json() or {}).get("items", [])[:5]
+        except Exception:
+            return "[Réponse GitHub illisible]"
+        if not items:
+            return "[Aucun résultat GitHub]"
+        lines = []
+        for it in items:
+            if code_mode:
+                repo = (it.get("repository") or {}).get("full_name", "?")
+                lines.append(f"- {repo} : {it.get('path', '?')}\n  {it.get('html_url', '')}")
+            else:
+                desc = (it.get("description") or "").strip()
+                lines.append(f"- {it.get('full_name', '?')} (etoiles {it.get('stargazers_count', 0)}) : {desc}\n  {it.get('html_url', '')}")
+        return "\n".join(lines)
+    result = await _aio.get_event_loop().run_in_executor(None, _do)
+    return {"status": "ok", "result": (result or "")[:4000]}
+
 @app.get("/api/coanimm/files/{filename}")
 async def coanimm_download_file(filename: str, thread_id: str = None):
     """Télécharge un fichier produit par CoaNIMM depuis le workspace."""
@@ -1486,6 +1627,35 @@ async def coanimm_paths_remove(req: CoanimmPathRequest):
     """Retire un dossier autorisé."""
     import core.database as _db
     return {"status": "ok", "paths": _db.remove_coanimm_path(req.path or "")}
+
+
+class CoanimmHistoryAdd(BaseModel):
+    consigne: str
+    status: Optional[str] = "ok"
+    summary: Optional[str] = ""
+    returncode: Optional[int] = None
+    files_count: Optional[int] = 0
+
+@app.get("/api/coanimm/history")
+async def coanimm_history_list():
+    """Journal global des tâches CoaNIMM (indépendant du fil)."""
+    import core.database as _db
+    return {"history": _db.list_coanimm_history()}
+
+@app.post("/api/coanimm/history")
+async def coanimm_history_add(req: CoanimmHistoryAdd):
+    """Enregistre une tâche CoaNIMM terminée dans le journal."""
+    import core.database as _db
+    hist = _db.add_coanimm_history(req.consigne, req.status or "ok", req.summary or "",
+                                   req.returncode, req.files_count or 0)
+    return {"status": "ok", "history": hist}
+
+@app.delete("/api/coanimm/history")
+async def coanimm_history_clear():
+    """Vide le journal des tâches CoaNIMM."""
+    import core.database as _db
+    _db.clear_coanimm_history()
+    return {"status": "ok", "history": []}
 
 
 @app.get("/api/search")
@@ -1628,24 +1798,16 @@ async def set_memoire_mode(req: SettingValue):
 
 @app.get("/api/settings/api-keys")
 async def get_api_keys():
-    raw = get_setting('api_keys', '{}')
-    try:
-        keys = json.loads(raw)
-    except Exception:
-        keys = {}
+    keys = _db_get_api_keys()
     # Retourner seulement si présente (booléen) — jamais la clé elle-même
     return {p: bool(keys.get(p)) for p in ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily']}
 
 @app.post("/api/settings/api-keys")
 async def save_api_keys(req: ApiKeysSetting):
-    raw = get_setting('api_keys', '{}')
-    try:
-        existing = json.loads(raw)
-    except Exception:
-        existing = {}
+    existing = _db_get_api_keys()
     updates = req.dict(exclude_none=True)
     existing.update({k: v for k, v in updates.items() if v})
-    set_setting('api_keys', json.dumps(existing))
+    _db_set_api_keys(existing)
     return {"status": "ok"}
 
 
@@ -2033,6 +2195,13 @@ async def get_identity():
     except (RuntimeError, Exception):
         return {"name": ""}
 
+@app.get("/api/session/identity")
+async def session_identity(request: Request):
+    """Identité Tailscale de la requête et profil NIMM lié (pour l'écran de démarrage)."""
+    import core.database as _db
+    ts = getattr(request.state, 'tailscale_user', '') or ''
+    return {"ts_user": ts, "mapped_user": (_db.find_user_by_ts_login(ts) if ts else None)}
+
 
 # ══════════════════════════════════════════
 # TTS
@@ -2088,7 +2257,7 @@ async def upload_file(file: UploadFile = File(...)):
     api_keys = {}
     try:
         import json as _json
-        api_keys = _json.loads(get_setting('api_keys', '{}'))
+        api_keys = _db_get_api_keys()
     except Exception:
         pass
 
@@ -2145,7 +2314,7 @@ async def image_generate(req: ImageGenRequest):
         raise HTTPException(400, "Prompt vide.")
     api_keys = {}
     try:
-        api_keys = json.loads(get_setting('api_keys', '{}'))
+        api_keys = _db_get_api_keys()
     except Exception:
         pass
     # Lire le provider image configuré (priorité sur le paramètre de la requête)
@@ -2209,7 +2378,7 @@ async def image_edit(req: ImageEditRequest):
     api_keys = {}
     try:
         import json as _json
-        api_keys = _json.loads(get_setting('api_keys', '{}'))
+        api_keys = _db_get_api_keys()
     except Exception:
         pass
     try:
@@ -2504,7 +2673,48 @@ class UserUpdate(BaseModel):
 
 @app.get("/api/users")
 async def list_users():
-    return get_all_users()
+    # Ne jamais exposer pin_hash/pin_salt — seulement la présence d'un PIN.
+    out = []
+    for u in get_all_users():
+        out.append({
+            'id': u.get('id'), 'name': u.get('name'),
+            'emoji': u.get('emoji', '👤'), 'admin': u.get('admin', False),
+            'has_pin': bool(u.get('pin_hash')),
+            'ts_login': u.get('ts_login', ''),
+        })
+    return out
+
+class PinSet(BaseModel):
+    pin: str = ''
+    current_pin: Optional[str] = None
+
+@app.post("/api/users/{user_id}/set-pin")
+async def set_pin(user_id: str, req: PinSet):
+    import core.database as _db
+    # Si un PIN existe déjà, exiger l'actuel pour le changer ou le retirer.
+    if _db.user_has_pin(user_id) and not _db.verify_user_pin(user_id, req.current_pin or ''):
+        raise HTTPException(403, "PIN actuel incorrect.")
+    _db.set_user_pin(user_id, req.pin or '')
+    return {"status": "ok", "has_pin": _db.user_has_pin(user_id)}
+
+class PinUnlock(BaseModel):
+    pin: str
+
+@app.post("/api/users/{user_id}/unlock")
+async def unlock_session(user_id: str, req: PinUnlock):
+    import core.database as _db
+    if _db.user_has_pin(user_id) and not _db.verify_user_pin(user_id, req.pin or ''):
+        raise HTTPException(401, "PIN incorrect.")
+    return {"status": "ok", "token": _db.unlock_token(user_id)}
+
+class TsLogin(BaseModel):
+    ts_login: str = ''
+
+@app.post("/api/users/{user_id}/ts-login")
+async def set_ts_login(user_id: str, req: TsLogin):
+    import core.database as _db
+    _db.set_user_ts_login(user_id, req.ts_login or '')
+    return {"status": "ok"}
 
 @app.post("/api/users")
 async def add_user(req: UserCreate):
@@ -2636,4 +2846,4 @@ async def images_delete(img_id: int):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8080)

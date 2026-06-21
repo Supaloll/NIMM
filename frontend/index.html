@@ -17,6 +17,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/styles.css?v=20260619-2">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
 <body>
 
@@ -846,6 +847,15 @@
                 style="margin-top:6px;font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Ajouter ce dossier</button>
             <p id="coanimm-path-feedback" role="status" aria-live="polite" style="font-size:0.8rem;margin:6px 0 0;"></p>
         </details>
+        <details id="coanimm-history-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Historique des tâches</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Vos tâches CoaNIMM passées (toutes conversations confondues). Activez une tâche pour reprendre sa consigne.
+            </p>
+            <ul id="coanimm-history-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;"></ul>
+            <button type="button" id="coanimm-history-clear-btn"
+                style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Vider l'historique</button>
+        </details>
 
 
         <div style="margin-top:14px;">
@@ -856,6 +866,10 @@
             <label for="coanimm-consigne" class="sr-only">Votre demande à CoaNIMM</label>
             <textarea id="coanimm-consigne" rows="4" placeholder="Exemple : liste les fichiers du répertoire courant et écris leur nombre dans compte.txt"
                 style="width:100%;font-size:0.85rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;box-sizing:border-box;"></textarea>
+            <div style="display:flex;align-items:flex-start;gap:6px;margin-top:8px;">
+                <input type="checkbox" id="coanimm-use-context" style="width:auto;margin:2px 0 0;flex:none;">
+                <label for="coanimm-use-context" style="font-size:0.82rem;margin:0;cursor:pointer;">Partir de la conversation courante (joindre le contexte du fil actif à la demande)</label>
+            </div>
             <button id="coanimm-generate-btn" style="margin-top:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">Coa !<//button>
         </div>
 
@@ -937,6 +951,11 @@
             <textarea id="coanimm-result-stdout" readonly rows="6" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
             <label for="coanimm-result-stderr" style="font-size:0.8rem;display:block;margin:8px 0 2px;">Erreurs :</label>
             <textarea id="coanimm-result-stderr" readonly rows="4" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
+            <div id="coanimm-blocked-path" role="alert" hidden style="margin-top:10px;padding:10px;border:2px solid var(--accent,#6ea8fe);border-radius:8px;">
+                <p id="coanimm-blocked-path-msg" style="font-size:0.85rem;margin:0 0 8px;"></p>
+                <button type="button" id="coanimm-blocked-path-add" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">Ajouter ce dossier aux dossiers autorisés</button>
+                <p id="coanimm-blocked-path-fb" style="font-size:0.82rem;margin:6px 0 0;" aria-live="polite"></p>
+            </div>
             <div id="coanimm-result-files" hidden style="margin-top:10px;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;" aria-label="Fichiers produits" role="region"></div>
             <div id="coanimm-interact-panel" hidden role="region" aria-label="CoaNIMM demande" style="margin-top:14px;padding:12px;border:2px solid var(--accent,#6ea8fe);border-radius:8px;">
                 <p id="coanimm-interact-question" style="font-size:0.88rem;font-weight:600;margin:0 0 8px;" aria-live="polite"></p>
@@ -949,6 +968,10 @@
                 <label for="coanimm-save-label" style="font-size:0.82rem;display:block;margin-bottom:4px;">Nom du script :</label>
                 <input id="coanimm-save-label" type="text" placeholder="Ex. : Trier les fichiers par date"
                     style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.85rem;margin-bottom:8px;">
+                <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:8px;">
+                    <input type="checkbox" id="coanimm-save-skill-check" style="width:auto;margin:2px 0 0;flex:none;">
+                    <label for="coanimm-save-skill-check" style="font-size:0.82rem;margin:0;cursor:pointer;">Aussi mémoriser la méthode comme skill réutilisable (la prochaine tâche semblable la réutilisera)</label>
+                </div>
                 <div style="display:flex;gap:8px;">
                     <button id="coanimm-save-confirm" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">Enregistrer</button>
                     <button id="coanimm-save-cancel"  style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">Pas maintenant</button>
@@ -1381,7 +1404,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260619-2"></script>
+<script src="/static/app.js?v=20260621-auto"></script>
 <!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>

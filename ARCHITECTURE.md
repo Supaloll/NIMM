@@ -353,13 +353,15 @@ Appelé par `search_bibliotheque` (tool calling). Recherche FTS5 → injecte dan
 
 ## Tool calling
 
-Le LLM reçoit 4 outils et décide lui-même s'il en a besoin :
+Le LLM reçoit plusieurs outils et décide lui-même s'il en a besoin :
 
 ```
 search_memory(query)        → recall() dans memory.py
 search_bibliotheque(query)  → recall_bibliotheque() dans hub.py
 search_anecdotes(query)     → recall_anecdotes() dans memory.py
 search_web(query)           → websearch.search() via Brave Search
+search_carnet(query)        → notes du carnet de bord du fil (hub.py)
+find_skill(query)           → fiches skills CoaNIMM réutilisables (hub.py)
 ```
 
 **Règles de déclenchement** (dans le system prompt) :
@@ -367,6 +369,7 @@ search_web(query)           → websearch.search() via Brave Search
 - Référence à une discussion passée → `search_bibliotheque`
 - Référence à un moment vécu, souvenir partagé → `search_anecdotes`
 - Information datée par nature (actualité, météo, prix) → `search_web`
+- Tâche d'automatisation ressemblant à un process déjà validé → `find_skill` (avant de générer)
 - Question générale, factuelle, technique → aucun outil
 
 `_execute_tool()` est **async**. `search_web` ne doit jamais être appelé pour analyser un document fourni dans le message.
@@ -650,6 +653,24 @@ Texte brut uniquement (interdictions explicites de tout markdown, balises, asté
 - Pour les tâches sans risque : exécuter directement sans demander confirmation
 - Encodage : `utf-8` explicite sur toutes les opérations fichier
 
+### Skills CoaNIMM (méthodes réutilisables)
+
+Capturer une méthode qui a fonctionné pour pouvoir la redemander, sans auto-apprentissage autonome : rien ne s'écrit sans l'accord explicite de l'utilisateur. Cycle : demande → génération/exécution → validation → rédaction d'une fiche skill → une consigne ressemblante retrouve le skill et s'en sert. Schéma de cadrage complet : `CoaNIMM_schema_skills.md` (gardé local).
+
+**Stockage** — extension de la Promptothèque, `type='skill'` (aucune table nouvelle, aucune migration). `core/database.py` : `save_prompt(id, label, text, type='skill', meta={...})` / `list_prompts('skill')`. `meta` porte `description` (« quand l'utiliser »), `mots_cles`, `script_ref`, `consigne_origine`, `valide_par_laurent`, `version`.
+
+**Rédaction — Étape A** (`modules/coanimm.py`) — `SKILL_WRITER_SYSTEM_PROMPT` (4e consigne, même famille que PLANNING/EXPLORE/GENERATE) ; `write_skill(consigne_origine, script, …)` async, calqué sur `maybe_generate_carnet_note` (appel LLM de fond, lecture des fiches existantes pour éviter les doublons, option SKIP). Règle cardinale : enseigner la LOGIQUE de la méthode — « seuillage binaire » pour la découpe/vectorisation, « quantification de palette » pour la broderie : deux skills distincts, jamais une fonction « retouche » générique — et non l'exemple précis. Sortie texte brut accessible plage braille. `_parse_skill_fiche()` découpe la sortie en DESCRIPTION / MOTS-CLES / corps.
+
+**Rappel — Étape B** (`core/hub.py`, calqué sur `search_carnet`) — signal léger dans `build_system_prompt` (présent uniquement si au moins un skill existe), outil `find_skill(query)` déclaré dans `NIMM_TOOLS`, handler dans `_execute_tool` : recouvrement de mots-clés (filtré par `_MOTS_VIDES`) sur label + description + mots-clés, renvoie les 1 à 3 fiches les plus proches en texte brut. Comparaison volontairement simple au départ ; embeddings éventuellement plus tard.
+
+**Auto-audit — Étape C** (`modules/coanimm.py`) — avant l'exécution dans `run_generated`, si une fiche correspond à la consigne (`_find_relevant_skill`, même appariement que find_skill), le script généré est relu à la lumière de la fiche (`audit_against_skill`, qui réutilise `generate_code` et donc son filet anti-troncature) et corrigé s'il s'en écarte ; le résultat n'est gardé que s'il reste syntaxiquement valide. Inerte tant qu'aucune fiche n'existe.
+
+**Déclencheur d'écriture** (`frontend` + `main.py`) — dans le panneau de validation post-exécution de CoaNIMM (affiché après un run réussi), une case « Aussi mémoriser la méthode comme skill réutilisable ». Si cochée, « Enregistrer » sauve le script (type='script') ET appelle `POST /api/coanimm/save_skill` → `write_skill()` (fiche rédigée par le LLM, nom auto-généré). Le résultat (créée / déjà couverte / erreur) est annoncé dans la zone de statut accessible. C'est ce qui rend l'Étape A active.
+
+**Outils externes — Étape D** (`modules/coanimm.py` + `main.py`) — deux helpers injectés dans le prologue confiné : `nimm_web_search(query)` (réutilise Brave/Tavily) et `nimm_github_search(query)` (api.github.com : code si `GITHUB_TOKEN`, sinon dépôts). Cadrage sécurité retenu : le script passe une REQUÊTE, jamais une URL ; le serveur tape des endpoints FIXES ; le sous-processus reste `allow_network=False` et n'appelle que localhost (exactement comme `nimm_generate_image`) — le confinement réseau n'est pas touché. Résultats bornés en taille. Routes : `POST /api/coanimm/web_search`, `POST /api/coanimm/github_search`.
+
+Le volet skills est complet : capture (A) → rappel (B) → auto-audit (C) → déclencheur d'écriture → outils externes (D).
+
 ---
 
 ## Export (export_nimm.py)
@@ -686,6 +707,7 @@ Route : `POST /api/export` — retourne le fichier en téléchargement direct.
 
 | Session | Changements clés |
 |---|---|
+| 21/06/2026 | **Skills CoaNIMM + chiffrement des clés API**. [coanimm.py] `SKILL_WRITER_SYSTEM_PROMPT` + `write_skill()` + `_parse_skill_fiche()` (Étape A) : capture d'une méthode validée comme fiche réutilisable (`type='skill'` dans la Promptothèque, `meta` description/mots_cles/script_ref), writer de fond calqué sur le carnet de bord. [hub.py] `find_skill(query)` (Étape B) : signal léger dans `build_system_prompt` (si skills existants) + outil déclaré dans `NIMM_TOOLS` + handler (recouvrement de mots-clés filtré par `_MOTS_VIDES`, top 1-3 fiches). [coanimm.py] **auto-audit (Étape C)** : avant exécution, `run_generated` relit le script à la lumière d'une fiche correspondante (`_find_relevant_skill` + `audit_against_skill`), inerte sans fiche. [database.py] **Sécurité point 6/7** : clés API chiffrées au repos (Fernet) — `get_api_keys()`/`set_api_keys()` + keyfile `data/.nimm_api_keyfile` (0600) + migration douce d'une valeur en clair ; tous les sites d'accès (`hub._load_api_keys`, `main.py`, `websearch.py`) branchés sur ce point unique. [requirements.txt] `cryptography>=42` ajouté, ligne `rapidfuzz` réparée. [.gitignore] keyfiles exclus. `modules/main.py` confirmé code mort (exclu). Déclencheur skill câblé : case à cocher dans le panneau CoaNIMM (frontend) + route `/api/coanimm/save_skill` → `write_skill` (Étape A active). [coanimm.py + main.py] **Étape D** : helpers confinés `nimm_web_search` / `nimm_github_search` (routes serveur vers endpoints fixes Brave/Tavily et api.github.com ; le script passe une requête, jamais une URL ; `allow_network=False` inchangé). |
 | 14/05/2026 | Génération image DALL-E → Gemini. Retouche image. Accessibilité NVDA. Installateur refait. |
 | 15/05/2026 | Carnet de bord remplace OS. Tool calling `search_web` actif. Web patterns désactivés. |
 | 16/05/2026 | Auto-update au lancement (`git pull` dans LANCER_NIMM.bat). HTTPS + PWA mobile via Tailscale. Géolocalisation Nominatim injectée dans le system prompt. TTS mobile : 5 correctifs sync boutons. Topbar mobile : hamburger visible, titre caché. Reprise depuis bibliothèque (bouton ▶ Reprendre). Correctifs mémoire : symétrie, TAG multi-valeurs. |
