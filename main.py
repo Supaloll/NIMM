@@ -1522,6 +1522,68 @@ async def coanimm_save_skill(req: CoanimmSaveSkillRequest):
         print("[COANIMM][ERREUR] save_skill", traceback.format_exc())
         return JSONResponse({"status": "error", "message": str(e), "detail": ""})
 
+class CoanimmWebSearchRequest(BaseModel):
+    query: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/web_search")
+async def coanimm_web_search(req: CoanimmWebSearchRequest):
+    """Recherche web pour un script CoaNIMM confiné (Étape D). Réutilise l'infra Brave/
+    Tavily existante (endpoint FIXE). Le script passe une REQUÊTE, jamais une URL ; le
+    sous-processus ne sort jamais (il appelle ce localhost). Résultat borné en taille."""
+    from modules.websearch import search
+    q = (req.query or "").strip()
+    if not q:
+        return {"status": "ok", "result": "(requête vide)"}
+    try:
+        result = await search(q, max_results=5)
+    except Exception as e:
+        return {"status": "ok", "result": f"[Erreur recherche web : {e}]"}
+    return {"status": "ok", "result": (result or "")[:4000]}
+
+@app.post("/api/coanimm/github_search")
+async def coanimm_github_search(req: CoanimmWebSearchRequest):
+    """Recherche GitHub pour un script CoaNIMM confiné (Étape D). Endpoint FIXE
+    api.github.com ; le script passe une REQUÊTE, jamais une URL. Recherche de code si
+    GITHUB_TOKEN présent (en-tête d'env), sinon recherche de dépôts (API publique).
+    Résultat borné en taille."""
+    import os as _os, asyncio as _aio
+    import requests as _rq
+    q = (req.query or "").strip()
+    if not q:
+        return {"status": "ok", "result": "(requête vide)"}
+    token = (_os.getenv("GITHUB_TOKEN", "") or "").strip()
+    def _do():
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "NIMM-CoaNIMM"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+            url, code_mode = "https://api.github.com/search/code", True
+        else:
+            url, code_mode = "https://api.github.com/search/repositories", False
+        try:
+            r = _rq.get(url, params={"q": q, "per_page": 5}, headers=headers, timeout=15)
+        except Exception as e:
+            return f"[Erreur réseau GitHub : {e}]"
+        if r.status_code != 200:
+            return f"[GitHub a répondu {r.status_code}]"
+        try:
+            items = (r.json() or {}).get("items", [])[:5]
+        except Exception:
+            return "[Réponse GitHub illisible]"
+        if not items:
+            return "[Aucun résultat GitHub]"
+        lines = []
+        for it in items:
+            if code_mode:
+                repo = (it.get("repository") or {}).get("full_name", "?")
+                lines.append(f"- {repo} : {it.get('path', '?')}\n  {it.get('html_url', '')}")
+            else:
+                desc = (it.get("description") or "").strip()
+                lines.append(f"- {it.get('full_name', '?')} (etoiles {it.get('stargazers_count', 0)}) : {desc}\n  {it.get('html_url', '')}")
+        return "\n".join(lines)
+    result = await _aio.get_event_loop().run_in_executor(None, _do)
+    return {"status": "ok", "result": (result or "")[:4000]}
+
 @app.get("/api/coanimm/files/{filename}")
 async def coanimm_download_file(filename: str, thread_id: str = None):
     """Télécharge un fichier produit par CoaNIMM depuis le workspace."""
