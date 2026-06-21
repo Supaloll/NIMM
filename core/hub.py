@@ -1567,8 +1567,8 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         try:
             from modules.websearch import search_with_cache as brave_search
             result = await brave_search(query, classify=classify_perissabilite_jours)
-            print(f"[HUB] 🌐 Tool search_web({query!r}) → {len(result)} chars")
-            return result
+            print(f"[HUB] 🌐 Tool search_web({query!r}) → {len(result or '')} chars")
+            return result or '[Aucun résultat web pour cette requête]'
         except Exception as e:
             print(f"[HUB] ⚠️ Erreur search_web : {e}")
             return '[Erreur lors de la recherche web]'

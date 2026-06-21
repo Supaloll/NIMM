@@ -637,4 +637,8 @@ async def search_with_cache(query: str, max_results: int = 5, classify=None) -> 
     result = await search(query, max_results)
 
     # On ne mémorise que les vraies réponses (ni erreur, ni absence de résultat),
-    # et on le
+    # et on le fait en arrière-plan pour ne pas retarder la réponse.
+    indesirable = (not result) or result.startswith("⚠️") or result.startswith("Aucun résultat")
+    if not indesirable:
+        _schedule_store(_store_task(query, norm, result, qvec, classify))
+    return result
