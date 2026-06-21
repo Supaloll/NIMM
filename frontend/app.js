@@ -7111,6 +7111,55 @@ function _coanimmAnnounce(msg) {
     setTimeout(() => { el.textContent = msg; }, 200);
 }
 
+// Détecte un blocage du confinement (écriture hors dossiers autorisés) dans la sortie
+// du script — même si le script s'est terminé sans code d'erreur. Renvoie le chemin ou null.
+function _coanimmDetectBlockedPath(data) {
+    if (!data) return null;
+    const txt = [data.stdout, data.stderr, data.message].filter(Boolean).join("\n");
+    const m = txt.match(/hors des dossiers autoris\w*\s*:\s*([\s\S]+?)\.\s*Ajoute ce dossier/i);
+    return m ? m[1].trim() : null;
+}
+
+// Affiche une alerte accessible (role=alert) proposant d'autoriser le dossier bloqué.
+function _coanimmShowBlockedPath(path) {
+    const box = document.getElementById('coanimm-blocked-path');
+    const msg = document.getElementById('coanimm-blocked-path-msg');
+    const addBtn = document.getElementById('coanimm-blocked-path-add');
+    const fb = document.getElementById('coanimm-blocked-path-fb');
+    if (!box || !path) return false;
+    if (msg) msg.textContent = "CoaNIMM a bloqué une action dans un dossier non autorisé en écriture : "
+        + path + ". Pour permettre cette tâche, autorise ce dossier puis relance la tâche.";
+    if (fb) fb.textContent = '';
+    if (addBtn) addBtn.dataset.path = path;
+    box.removeAttribute('hidden');
+    return true;
+}
+
+document.getElementById('coanimm-blocked-path-add')?.addEventListener('click', async function () {
+    const path = this.dataset.path || '';
+    const fb = document.getElementById('coanimm-blocked-path-fb');
+    if (!path) return;
+    try {
+        const r = await fetch('/api/coanimm/paths', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        });
+        const d = await r.json();
+        if (d.status === 'error') {
+            if (fb) fb.textContent = '🔴 ' + (d.message || 'erreur');
+            _coanimmAnnounce(d.message || "Erreur lors de l'ajout du dossier.");
+            return;
+        }
+        if (fb) fb.textContent = "Dossier autorisé. Tu peux relancer la tâche.";
+        _coanimmAnnounce("Dossier autorisé en écriture. Relance la tâche pour qu'elle s'exécute.");
+        if (typeof _renderCoanimmPaths === 'function') _renderCoanimmPaths(d.paths || []);
+        document.getElementById('coanimm-blocked-path')?.setAttribute('hidden', '');
+    } catch (e) {
+        if (fb) fb.textContent = '🔴 Erreur réseau.';
+        _coanimmAnnounce("Erreur réseau lors de l'ajout du dossier.");
+    }
+});
+
 function _coanimmHideAll() {
     document.getElementById('coanimm-plan').classList.add('hidden');
     document.getElementById('coanimm-code-preview').classList.add('hidden');
@@ -7273,10 +7322,20 @@ function _coanimmShowResult(data, label) {
             savePanel.setAttribute('hidden', '');
         }
     }
-    // Focus sur le textarea stdout : les lecteurs d'écran lisent son contenu
+    // Détection d'un blocage de confinement (écriture hors dossiers autorisés), accessible.
+    document.getElementById('coanimm-blocked-path')?.setAttribute('hidden', '');
+    const _blockedPath = _coanimmDetectBlockedPath(data);
+    if (_blockedPath) _coanimmShowBlockedPath(_blockedPath);
+    const _hasError = (data.status !== 'ok')
+        || (data.returncode !== undefined && data.returncode !== 0) || !!_blockedPath;
+
+    // Focus accessible : sur l'alerte/erreur si échec, sinon sur la sortie standard.
     setTimeout(() => {
-        const t = document.getElementById('coanimm-result-stdout');
-        if (t) t.focus();
+        let target = null;
+        if (_blockedPath) target = document.getElementById('coanimm-blocked-path-add');
+        else if (_hasError) target = document.getElementById('coanimm-result-status');
+        if (!target) target = document.getElementById('coanimm-result-stdout');
+        if (target) target.focus();
     }, 100);
 }
 
@@ -7286,6 +7345,7 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     document.getElementById('coanimm-modal').classList.remove('hidden');
     loadCoanimm();
     loadCoanimmPaths();
+    loadCoanimmHistory();
 });
 
 async function loadCoanimmPaths() {
@@ -7358,6 +7418,65 @@ async function _removeCoanimmPath(path) {
     } catch (e) { console.error('[COANIMM] Erreur retrait dossier :', e); }
 }
 document.getElementById('coanimm-path-add-btn')?.addEventListener('click', _addCoanimmPath);
+
+// ── Historique des tâches CoaNIMM (global, indépendant du fil) ──
+function _renderCoanimmHistory(list) {
+    const ul = document.getElementById('coanimm-history-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!list || !list.length) {
+        const li = document.createElement('li');
+        li.textContent = "Aucune tâche enregistrée pour le moment.";
+        li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+        ul.appendChild(li);
+        return;
+    }
+    list.forEach(item => {
+        const li = document.createElement('li');
+        li.style.cssText = 'padding:4px 0;border-bottom:1px solid var(--border);';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const date = (item.ts || '').replace('T', ' ').slice(0, 16);
+        const statusTxt = item.status === 'ok' ? 'réussi' : 'échec';
+        const cons = (item.consigne || '').slice(0, 140);
+        btn.textContent = date + ' — ' + statusTxt + ' : ' + cons;
+        btn.setAttribute('aria-label', 'Reprendre cette tâche du ' + date + ', ' + statusTxt + ' : ' + cons);
+        btn.style.cssText = 'background:none;border:none;color:var(--text);text-align:left;cursor:pointer;font-size:0.82rem;padding:2px 0;width:100%;';
+        btn.addEventListener('click', () => {
+            const input = document.getElementById('coanimm-consigne');
+            if (input) { input.value = item.consigne || ''; input.focus(); }
+            _coanimmAnnounce("Consigne reprise dans le champ. Vous pouvez la relancer.");
+        });
+        li.appendChild(btn);
+        ul.appendChild(li);
+    });
+}
+async function loadCoanimmHistory() {
+    try {
+        const r = await fetch('/api/coanimm/history');
+        const d = await r.json();
+        _renderCoanimmHistory(d.history || []);
+    } catch (e) { /* silencieux */ }
+}
+function _recordCoanimmHistory(status, returncode, filesCount) {
+    const consigne = (_coanimmCurrentConsigne || '').trim();
+    if (!consigne) return;
+    const out = (document.getElementById('coanimm-result-stdout')?.value || '').trim();
+    const summary = out.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 300);
+    fetch('/api/coanimm/history', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consigne, status, returncode, files_count: filesCount || 0, summary }),
+    }).then(r => r.json()).then(d => { if (d && d.history) _renderCoanimmHistory(d.history); }).catch(() => {});
+}
+async function _clearCoanimmHistory() {
+    try {
+        const r = await fetch('/api/coanimm/history', { method: 'DELETE' });
+        const d = await r.json();
+        _renderCoanimmHistory(d.history || []);
+        _coanimmAnnounce("Historique vidé.");
+    } catch (e) { /* silencieux */ }
+}
+document.getElementById('coanimm-history-clear-btn')?.addEventListener('click', _clearCoanimmHistory);
 document.getElementById('coanimm-path-input')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); _addCoanimmPath(); }
 });
@@ -7814,6 +7933,7 @@ async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allo
                         statusEl.textContent = rc === 0
                             ? '✅ Terminé (code ' + rc + ')'
                             : '⚠️ Terminé avec erreurs (code ' + rc + ')';
+                        _recordCoanimmHistory(rc === 0 ? 'ok' : 'error', rc, (evt.files_list || []).length);
                         if (rc !== 0) {
                             const lines = stdoutEl.value.trim().split('\n').filter(Boolean);
                             const lastLines = lines.slice(-5).join(' ');
