@@ -7397,6 +7397,7 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     loadCoanimmPaths();
     loadCoanimmHistory();
     loadCoanimmCapabilities();
+    loadCoanimmWorkflows();
 });
 
 async function loadCoanimmPaths() {
@@ -7568,9 +7569,226 @@ async function _toggleCoanimmCapability(cap, grant) {
         _coanimmAnnounce(grant ? "Capacité autorisée durablement pour les scripts." : "Capacité retirée.");
     } catch (e) { _coanimmAnnounce("Erreur lors de la mise à jour de la capacité."); }
 }
+
+// ── Workflows CoaNIMM ──────────────────────────────────────────────────────────
+
+let _coanimmWfSteps = []; // [{skill_id, label}]
+
+async function loadCoanimmWorkflows() {
+    try {
+        const r = await fetch('/api/coanimm/workflows');
+        const d = await r.json();
+        _renderCoanimmWorkflows(d.workflows || []);
+        // Peupler le sélecteur de skills pour la composition
+        await _coanimmWfPopulateSkillPicker();
+    } catch (e) { console.error('[COANIMM-WF] Erreur chargement workflows :', e); }
+}
+
+function _renderCoanimmWorkflows(workflows) {
+    const list = document.getElementById('coanimm-workflows-list');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!workflows.length) {
+        const li = document.createElement('li');
+        li.style.cssText = 'color:var(--text-muted);font-size:0.8rem;margin-bottom:6px;';
+        li.textContent = 'Aucun workflow enregistré.';
+        list.appendChild(li);
+        return;
+    }
+    workflows.forEach(wf => {
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = wf.label || '(sans titre)';
+        nameSpan.style.cssText = 'flex:1;min-width:0;';
+
+        const caps = (wf.meta?.capacites || []).join(', ');
+        if (caps) {
+            const capSpan = document.createElement('span');
+            capSpan.textContent = `[${caps}]`;
+            capSpan.style.cssText = 'font-size:0.75rem;color:var(--text-muted);';
+            nameSpan.appendChild(document.createTextNode(' '));
+            nameSpan.appendChild(capSpan);
+        }
+
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.textContent = '▶ Lancer';
+        runBtn.style.cssText = 'padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.8rem;cursor:pointer;';
+        runBtn.setAttribute('aria-label', `Lancer le workflow ${wf.label}`);
+        runBtn.addEventListener('click', () => _runCoanimmWorkflow(wf.id, wf.label));
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.textContent = '✕';
+        delBtn.style.cssText = 'padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.8rem;cursor:pointer;';
+        delBtn.setAttribute('aria-label', `Supprimer le workflow ${wf.label}`);
+        delBtn.addEventListener('click', async () => {
+            await fetch(`/api/coanimm/workflows/${wf.id}`, { method: 'DELETE' });
+            loadCoanimmWorkflows();
+        });
+
+        li.appendChild(nameSpan);
+        li.appendChild(runBtn);
+        li.appendChild(delBtn);
+        list.appendChild(li);
+    });
+}
+
+async function _runCoanimmWorkflow(wfId, label) {
+    const resultDiv = document.getElementById('coanimm-wf-result');
+    if (!resultDiv) return;
+    resultDiv.style.display = 'block';
+    resultDiv.textContent = `Exécution du workflow « ${label} »…`;
+
+    try {
+        const r = await fetch(`/api/coanimm/workflows/${wfId}/run?thread_id=${encodeURIComponent(currentThreadId || '')}`, {
+            method: 'POST',
+        });
+        const data = await r.json();
+        let html = `<strong>${data.status === 'ok' ? '✓' : '✗'} ${_escHtml(data.message || '')}</strong>`;
+        if (Array.isArray(data.steps) && data.steps.length) {
+            html += '<ul style="margin:6px 0 0;padding-left:1.2em;">';
+            data.steps.forEach(s => {
+                const icon = s.status === 'ok' ? '✓' : '✗';
+                html += `<li>${icon} <em>${_escHtml(s.label)}</em>`;
+                if (s.error) html += ` — <span style="color:var(--error,#f87171)">${_escHtml(s.error)}</span>`;
+                if (s.output) html += `<br><pre style="white-space:pre-wrap;font-size:0.78rem;margin:2px 0 0;">${_escHtml(s.output.slice(0,400))}</pre>`;
+                html += '</li>';
+            });
+            html += '</ul>';
+        }
+        if (data.files_info) html += `<p style="margin:6px 0 0;font-size:0.82rem;">${_escHtml(data.files_info)}</p>`;
+        resultDiv.innerHTML = html;
+    } catch (e) {
+        resultDiv.textContent = `Erreur réseau lors de l'exécution du workflow.`;
+    }
+}
+
+async function _coanimmWfPopulateSkillPicker() {
+    const sel = document.getElementById('coanimm-wf-skill-pick');
+    if (!sel) return;
+    try {
+        const r = await fetch('/api/prompts?type=skill');
+        const d = await r.json();
+        const skills = Object.entries(d.prompts || {});
+        // Conserver la première option vide
+        sel.innerHTML = '<option value="">— Ajouter un skill —</option>';
+        skills.forEach(([id, sk]) => {
+            if (!sk.meta?.valide_par_laurent) return; // skills validés seulement
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = sk.label || id;
+            sel.appendChild(opt);
+        });
+    } catch (e) { /* silencieux */ }
+}
+
+function _coanimmWfAddStep() {
+    const sel = document.getElementById('coanimm-wf-skill-pick');
+    if (!sel || !sel.value) return;
+    const label = sel.options[sel.selectedIndex]?.text || sel.value;
+    _coanimmWfSteps.push({ skill_id: sel.value, label });
+    _renderCoanimmWfSteps();
+    sel.value = '';
+}
+
+function _renderCoanimmWfSteps() {
+    const ul = document.getElementById('coanimm-wf-steps');
+    if (!ul) return;
+    ul.innerHTML = '';
+    _coanimmWfSteps.forEach((step, idx) => {
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:5px;';
+
+        const numSpan = document.createElement('span');
+        numSpan.textContent = `${idx + 1}.`;
+        numSpan.style.cssText = 'color:var(--text-muted);min-width:1.5em;';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = step.label;
+        nameSpan.style.flex = '1';
+
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button'; upBtn.textContent = '↑';
+        upBtn.setAttribute('aria-label', `Monter l'étape ${step.label}`);
+        upBtn.style.cssText = 'padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);cursor:pointer;font-size:0.8rem;';
+        upBtn.disabled = idx === 0;
+        upBtn.addEventListener('click', () => {
+            [_coanimmWfSteps[idx-1], _coanimmWfSteps[idx]] = [_coanimmWfSteps[idx], _coanimmWfSteps[idx-1]];
+            _renderCoanimmWfSteps();
+        });
+
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button'; downBtn.textContent = '↓';
+        downBtn.setAttribute('aria-label', `Descendre l'étape ${step.label}`);
+        downBtn.style.cssText = 'padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);cursor:pointer;font-size:0.8rem;';
+        downBtn.disabled = idx === _coanimmWfSteps.length - 1;
+        downBtn.addEventListener('click', () => {
+            [_coanimmWfSteps[idx], _coanimmWfSteps[idx+1]] = [_coanimmWfSteps[idx+1], _coanimmWfSteps[idx]];
+            _renderCoanimmWfSteps();
+        });
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button'; delBtn.textContent = '✕';
+        delBtn.setAttribute('aria-label', `Retirer l'étape ${step.label}`);
+        delBtn.style.cssText = 'padding:2px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);cursor:pointer;font-size:0.8rem;';
+        delBtn.addEventListener('click', () => {
+            _coanimmWfSteps.splice(idx, 1);
+            _renderCoanimmWfSteps();
+        });
+
+        li.append(numSpan, nameSpan, upBtn, downBtn, delBtn);
+        ul.appendChild(li);
+    });
+    if (!_coanimmWfSteps.length) {
+        const li = document.createElement('li');
+        li.style.cssText = 'color:var(--text-muted);font-size:0.8rem;';
+        li.textContent = 'Aucune étape ajoutée.';
+        ul.appendChild(li);
+    }
+}
+
+async function _coanimmWfSave() {
+    const nameInput = document.getElementById('coanimm-wf-name');
+    const status = document.getElementById('coanimm-wf-save-status');
+    const label = nameInput?.value?.trim();
+    if (!label) { if (status) status.textContent = 'Donnez un nom au workflow.'; return; }
+    if (!_coanimmWfSteps.length) { if (status) status.textContent = 'Ajoutez au moins un skill.'; return; }
+    if (status) status.textContent = 'Enregistrement…';
+    try {
+        const r = await fetch('/api/coanimm/workflows', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label, etapes: _coanimmWfSteps }),
+        });
+        const d = await r.json();
+        if (d.status === 'created') {
+            if (status) status.textContent = 'Workflow enregistré !';
+            _coanimmWfSteps = [];
+            _renderCoanimmWfSteps();
+            if (nameInput) nameInput.value = '';
+            loadCoanimmWorkflows();
+        } else {
+            if (status) status.textContent = d.message || 'Erreur.';
+        }
+    } catch (e) {
+        if (status) status.textContent = 'Erreur réseau.';
+    }
+}
+
+function _escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+
 document.getElementById('coanimm-path-input')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); _addCoanimmPath(); }
 });
+document.getElementById('coanimm-wf-add-step-btn')?.addEventListener('click', _coanimmWfAddStep);
+document.getElementById('coanimm-wf-save-btn')?.addEventListener('click', _coanimmWfSave);
+
 
 async function loadCoanimm() {
     const list = document.getElementById('coanimm-script-list');

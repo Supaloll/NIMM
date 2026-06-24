@@ -1688,6 +1688,38 @@ async def coanimm_capabilities_remove(req: CoanimmCapabilityRequest):
     return {"status": "ok", "granted": _db.remove_coanimm_capability(req.capability or "")}
 
 
+# ── WORKFLOWS ──────────────────────────────────────────────────────────────────
+
+class CoanimmWorkflowRequest(BaseModel):
+    label: str
+    etapes: list   # [{skill_id, label}]
+
+@app.get("/api/coanimm/workflows")
+async def coanimm_workflows_list():
+    """Liste les workflows enregistrés."""
+    from modules.coanimm import list_workflows
+    return {"workflows": list_workflows()}
+
+@app.post("/api/coanimm/workflows")
+async def coanimm_workflows_save(req: CoanimmWorkflowRequest):
+    """Enregistre un nouveau workflow (séquence de skills validés)."""
+    from modules.coanimm import save_workflow
+    return save_workflow(req.label or "", req.etapes or [])
+
+@app.post("/api/coanimm/workflows/{workflow_id}/run")
+async def coanimm_workflows_run(workflow_id: str, thread_id: str = ""):
+    """Exécute un workflow pas à pas."""
+    from modules.coanimm import run_workflow
+    return await run_workflow(workflow_id, thread_id or None)
+
+@app.delete("/api/coanimm/workflows/{workflow_id}")
+async def coanimm_workflows_delete(workflow_id: str):
+    """Supprime un workflow."""
+    import core.database as _db
+    _db.delete_prompt(workflow_id)
+    return {"status": "ok"}
+
+
 @app.get("/api/search")
 async def search_conversations_route(q: str = "", k: int = 8):
     """Recherche par sens dans l'historique des conversations (embeddings)."""
