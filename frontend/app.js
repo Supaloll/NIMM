@@ -7396,6 +7396,7 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     loadCoanimm();
     loadCoanimmPaths();
     loadCoanimmHistory();
+    loadCoanimmCapabilities();
 });
 
 async function loadCoanimmPaths() {
@@ -7527,6 +7528,46 @@ async function _clearCoanimmHistory() {
     } catch (e) { /* silencieux */ }
 }
 document.getElementById('coanimm-history-clear-btn')?.addEventListener('click', _clearCoanimmHistory);
+
+// ── Capacités autorisées (réseau / programme / e-mail) ──
+function _renderCoanimmCapabilities(data) {
+    const ul = document.getElementById('coanimm-caps-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const granted = new Set(data.granted || []);
+    (data.grantable || []).forEach(item => {
+        const li = document.createElement('li');
+        li.style.cssText = 'padding:4px 0;display:flex;align-items:flex-start;gap:6px;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.id = 'coanimm-cap-' + item.capability;
+        cb.checked = granted.has(item.capability);
+        cb.style.cssText = 'width:auto;margin:2px 0 0;flex:none;';
+        cb.addEventListener('change', () => _toggleCoanimmCapability(item.capability, cb.checked));
+        const lab = document.createElement('label');
+        lab.setAttribute('for', cb.id);
+        lab.style.cssText = 'font-size:0.82rem;margin:0;cursor:pointer;';
+        lab.textContent = item.label;
+        li.appendChild(cb); li.appendChild(lab);
+        ul.appendChild(li);
+    });
+}
+async function loadCoanimmCapabilities() {
+    try {
+        const r = await fetch('/api/coanimm/capabilities');
+        _renderCoanimmCapabilities(await r.json());
+    } catch (e) { /* silencieux */ }
+}
+async function _toggleCoanimmCapability(cap, grant) {
+    try {
+        await fetch('/api/coanimm/capabilities', {
+            method: grant ? 'POST' : 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ capability: cap }),
+        });
+        _coanimmAnnounce(grant ? "Capacité autorisée durablement pour les scripts." : "Capacité retirée.");
+    } catch (e) { _coanimmAnnounce("Erreur lors de la mise à jour de la capacité."); }
+}
 document.getElementById('coanimm-path-input')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); _addCoanimmPath(); }
 });
