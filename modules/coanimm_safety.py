@@ -96,6 +96,94 @@ def classify_for_execution(code: str) -> dict:
 
 
 # ──────────────────────────────────────────
+# 1bis) Capacités déclarées : projection LISIBLE de l'analyse statique
+# ──────────────────────────────────────────
+#
+# capabilities_of() ne bloque RIEN : il déclare ce qu'un script fait, pour l'afficher
+# et (plus tard) le faire approuver capacité par capacité. Une seule source de vérité :
+# il réutilise la même analyse AST que classify_for_execution.
+
+CAPABILITY_LABELS = {
+    'ecriture':       "écrit, déplace ou supprime des fichiers",
+    'recherche':      "fait une recherche web ou GitHub (via NIMM, sans sortir du bac à sable)",
+    'image':          "génère une image",
+    'reseau':         "ouvre des connexions réseau brutes",
+    'programme':      "lance d'autres programmes",
+    'email':          "envoie des e-mails",
+    'systeme':        "accède à des fonctions système de bas niveau",
+    'shell':          "lance des commandes shell",
+    'code_dynamique': "exécute du code dynamique (eval/exec)",
+}
+
+# imports -> capacité normalisée (réseau NIMM via helpers = 'recherche', distinct du réseau brut)
+_CAP_IMPORTS = {
+    'ctypes': 'systeme', 'winreg': 'systeme', 'win32api': 'systeme', 'win32security': 'systeme',
+    'subprocess': 'programme',
+    'socket': 'reseau', 'requests': 'reseau', 'urllib': 'reseau', 'http': 'reseau',
+    'ftplib': 'reseau', 'paramiko': 'reseau', 'telnetlib': 'reseau',
+    'smtplib': 'email',
+}
+# Appels aux helpers NIMM injectés (réseau confiné via localhost) -> capacités douces
+_CAP_HELPER_CALLS = {
+    'nimm_web_search': 'recherche', 'nimm_github_search': 'recherche',
+    'nimm_generate_image': 'image',
+}
+# Appels (obj, attr) qui écrivent/déplacent/suppriment
+_WRITE_ATTR_CALLS = {
+    ('shutil', 'move'), ('shutil', 'copy'), ('shutil', 'copy2'), ('shutil', 'copyfile'),
+    ('shutil', 'copytree'), ('shutil', 'rmtree'),
+    ('os', 'rename'), ('os', 'replace'), ('os', 'remove'), ('os', 'unlink'),
+    ('os', 'mkdir'), ('os', 'makedirs'), ('os', 'rmdir'),
+}
+# Méthodes pathlib.Path d'écriture (heuristique : on déclare 'ecriture' par prudence)
+_WRITE_PATH_METHODS = {'write_text', 'write_bytes', 'mkdir', 'unlink', 'rename', 'replace', 'rmdir', 'touch'}
+
+def _open_is_write(call) -> bool:
+    mode = None
+    if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
+        mode = call.args[1].value
+    for kw in call.keywords:
+        if kw.arg == 'mode' and isinstance(kw.value, ast.Constant):
+            mode = kw.value.value
+    return isinstance(mode, str) and any(c in mode for c in ('w', 'a', 'x', '+'))
+
+def capabilities_of(code: str) -> list:
+    """Liste TRIÉE des capacités sensibles d'un script (lecture seule, ne bloque rien).
+    Projection de la même analyse AST que classify_for_execution."""
+    caps = set()
+    try:
+        tree = ast.parse(code or '')
+    except SyntaxError:
+        return []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = ([node.module] if isinstance(node, ast.ImportFrom)
+                     else [a.name for a in node.names])
+            for nm in (names or []):
+                root = (nm or '').split('.')[0]
+                if root in _CAP_IMPORTS:
+                    caps.add(_CAP_IMPORTS[root])
+        elif isinstance(node, ast.Call):
+            f = node.func
+            if isinstance(f, ast.Name):
+                if f.id in ('eval', 'exec'):
+                    caps.add('code_dynamique')
+                elif f.id in _CAP_HELPER_CALLS:
+                    caps.add(_CAP_HELPER_CALLS[f.id])
+                elif f.id == 'open' and _open_is_write(node):
+                    caps.add('ecriture')
+            elif isinstance(f, ast.Attribute):
+                obj = f.value.id if isinstance(f.value, ast.Name) else None
+                if (obj, f.attr) in (('os', 'system'), ('os', 'popen')):
+                    caps.add('shell')
+                elif (obj, f.attr) in _WRITE_ATTR_CALLS:
+                    caps.add('ecriture')
+                elif f.attr in _WRITE_PATH_METHODS:
+                    caps.add('ecriture')
+    return sorted(caps)
+
+
+# ──────────────────────────────────────────
 # 2) Garde-fou runtime : confiner les écritures aux dossiers autorisés
 # ──────────────────────────────────────────
 
