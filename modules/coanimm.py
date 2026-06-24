@@ -258,7 +258,7 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     )
 
 
-def _execute(code: str, args: list, workdir: str, thread_id: str = None) -> dict:
+def _execute(code: str, args: list, workdir: str, thread_id: str = None, granted_caps=None) -> dict:
     """Écrit `code` dans un fichier temporaire de `workdir` et l'exécute.
 
     Retourne {'status':'ok', 'stdout':..., 'stderr':..., 'returncode':...} ou
@@ -279,12 +279,23 @@ def _execute(code: str, args: list, workdir: str, thread_id: str = None) -> dict
                 'blocked': _risks['blocked'],
                 'stdout': '', 'stderr': '', 'returncode': 1}
     if _risks['needs_confirmation']:
-        raisons = ' ; '.join(r['message'] for r in _risks['needs_confirmation'])
-        return {'status': 'error',
-                'message': (f"Ce script {raisons} : ouvre le panneau CoaNIMM pour "
-                            "l'exécuter et confirmer explicitement cette action."),
-                'needs_confirmation': _risks['needs_confirmation'],
-                'stdout': '', 'stderr': '', 'returncode': 1}
+        if granted_caps is None:
+            # Comportement historique (run_script, exécution directe) : on bloque.
+            raisons = ' ; '.join(r['message'] for r in _risks['needs_confirmation'])
+            return {'status': 'error',
+                    'message': (f"Ce script {raisons} : ouvre le panneau CoaNIMM pour "
+                                "l'exécuter et confirmer explicitement cette action."),
+                    'needs_confirmation': _risks['needs_confirmation'],
+                    'stdout': '', 'stderr': '', 'returncode': 1}
+        # granted_caps fourni (ex. workflow) : autorisation PAR CAPACITÉ pré-accordée.
+        _caps_needed = set(_safety.capabilities_of(code)) & {'reseau', 'programme', 'email'}
+        _missing = _caps_needed - set(granted_caps)
+        if _missing:
+            return {'status': 'error',
+                    'message': ("Capacité non autorisée : " + ', '.join(sorted(_missing))
+                                + ". Autorise-la dans « Capacités autorisées en exécution »."),
+                    'missing_capabilities': sorted(_missing),
+                    'stdout': '', 'stderr': '', 'returncode': 1}
 
     # Prologue = garde-fou d'écriture (confinement aux dossiers autorisés) +
     # helpers CoaNIMM (nimm_generate_image…).
@@ -292,7 +303,7 @@ def _execute(code: str, args: list, workdir: str, thread_id: str = None) -> dict
         _allowed = db.list_coanimm_paths()
     except Exception:
         _allowed = []
-    guard = _safety.build_guard_prologue(_allowed, allow_network=False)
+    guard = _safety.build_guard_prologue(_allowed, allow_network=('reseau' in set(granted_caps or ())))
     prologue = _build_prologue(thread_id, workdir)
     full_code = guard + '\n' + (prologue + '\n' + code if prologue else code)
     fd, script_path = tempfile.mkstemp(suffix='.py', dir=workdir)
@@ -960,6 +971,17 @@ async def run_workflow(workflow_id: str, thread_id: str = None) -> dict:
     if not etapes:
         return {'status': 'error', 'message': "Ce workflow ne contient aucune étape."}
 
+    # Capacités requises par le workflow vs capacités pré-accordées (Étape 2).
+    _granted = set(db.list_coanimm_capabilities())
+    _wf_caps = set(wf.get('meta', {}).get('capacites', [])) & {'reseau', 'programme', 'email'}
+    _missing_caps = _wf_caps - _granted
+    if _missing_caps:
+        return {'status': 'error',
+                'message': ("Ce workflow requiert des capacités non autorisées : "
+                            + ', '.join(sorted(_missing_caps))
+                            + ". Autorise-les dans « Capacités autorisées en exécution » avant de le lancer."),
+                'missing_capabilities': sorted(_missing_caps)}
+
     skills = db.list_prompts('skill')
     workdir = _workspace_dir(thread_id)
     steps_results = []
@@ -1004,7 +1026,7 @@ async def run_workflow(workflow_id: str, thread_id: str = None) -> dict:
                 print(f"[COANIMM-WF] Auto-audit ignoré étape {i + 1} : {_ae}")
 
         before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
-        result = _execute(code, None, workdir, thread_id)
+        result = _execute(code, None, workdir, thread_id, granted_caps=_granted)
 
         if result.get('status') == 'error':
             steps_results.append({'label': elabel, 'status': 'error',
