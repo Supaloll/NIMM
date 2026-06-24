@@ -7121,11 +7121,37 @@ let _coanimmCancelled = false;   // l'utilisateur a demandé l'arrêt du script
 // Annonce accessible pour lecteurs d'écran
 function _coanimmSetBusy(busy) {
     const btn = document.getElementById('coanimm-generate-btn');
-    if (!btn) return;
-    btn.disabled = busy;
-    if (busy) btn.setAttribute('aria-busy', 'true');
-    else btn.removeAttribute('aria-busy');
+    if (btn) {
+        btn.disabled = busy;
+        if (busy) btn.setAttribute('aria-busy', 'true');
+        else btn.removeAttribute('aria-busy');
+    }
     if (!busy) document.getElementById('coanimm-stop-btn')?.classList.add('hidden');
+
+    // Loader VISUEL uniquement (aria-hidden) : le lecteur d'ecran ne le repete jamais ;
+    // l'info lui parvient une seule fois via _coanimmAnnounce (deja en place).
+    var existing = document.getElementById('coanimm-loader');
+    if (busy) {
+        if (!existing && btn && btn.parentNode) {
+            var loader = document.createElement('div');
+            loader.id = 'coanimm-loader';
+            loader.className = 'loader-bretzel';
+            loader.setAttribute('aria-hidden', 'true');
+            loader.style.marginTop = '8px';
+            try {
+                var svg = _buildBretzelSVG(30, 20);
+                loader.appendChild(svg);
+                btn.parentNode.insertBefore(loader, btn.nextSibling);
+                requestAnimationFrame(function () { _startBretzelAnim(svg, loader); });
+            } catch (e) {
+                loader.textContent = '\u23F3';
+                btn.parentNode.insertBefore(loader, btn.nextSibling);
+            }
+        }
+    } else if (existing) {
+        if (existing._cancelAnim) existing._cancelAnim();
+        existing.remove();
+    }
 }
 
 function _coanimmAnnounce(msg) {
