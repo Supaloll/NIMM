@@ -2125,6 +2125,46 @@ def clear_coanimm_history() -> None:
     set_setting('coanimm_history', '[]')
 
 
+# ══════════════════════════════════════════
+# CAPACITÉS CoaNIMM ACCORDÉES (durables, par capacité)
+# ══════════════════════════════════════════
+#
+# Capacités « accordables » par l'utilisateur, qui sinon déclenchent une confirmation
+# à chaque exécution : réseau brut, lancement de programmes, e-mail. Une capacité ici
+# = approuvée DURABLEMENT (Laurent l'a validée une fois pour toutes). Les capacités
+# bloquées (système/shell/code dynamique) ne sont PAS accordables ; l'écriture reste
+# gérée par la liste des dossiers autorisés ; la recherche NIMM est confinée et libre.
+
+_COANIMM_GRANTABLE_CAPS = {'reseau', 'programme', 'email'}
+
+def list_coanimm_capabilities() -> list:
+    """Capacités accordées durablement pour CoaNIMM (sous-ensemble de _COANIMM_GRANTABLE_CAPS)."""
+    raw = get_setting('coanimm_capabilities', '[]')
+    try:
+        data = json.loads(raw)
+        return [c for c in data if c in _COANIMM_GRANTABLE_CAPS] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def add_coanimm_capability(cap: str) -> list:
+    """Accorde durablement une capacité (si accordable). Retourne la liste à jour."""
+    cap = (cap or '').strip()
+    if cap not in _COANIMM_GRANTABLE_CAPS:
+        return list_coanimm_capabilities()
+    caps = list_coanimm_capabilities()
+    if cap not in caps:
+        caps.append(cap)
+        set_setting('coanimm_capabilities', json.dumps(caps, ensure_ascii=False))
+    return caps
+
+def remove_coanimm_capability(cap: str) -> list:
+    """Retire une capacité accordée. Retourne la liste à jour."""
+    cap = (cap or '').strip()
+    caps = [c for c in list_coanimm_capabilities() if c != cap]
+    set_setting('coanimm_capabilities', json.dumps(caps, ensure_ascii=False))
+    return caps
+
+
 
 # ══════════════════════════════════════════
 # PERMISSIONS AGENT (CoaNIMM)

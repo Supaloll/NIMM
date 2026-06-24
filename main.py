@@ -1252,22 +1252,28 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
     if syntax_err:
         return JSONResponse({"status": "error", "message": syntax_err})
 
-    from modules.coanimm_safety import classify_for_execution, build_guard_prologue
+    from modules.coanimm_safety import classify_for_execution, build_guard_prologue, capabilities_of
     _risks = classify_for_execution(req.code)
     if _risks["blocked"]:
         return JSONResponse({"status": "error",
             "message": "Exécution refusée pour sécurité : ce script " + " ; ".join(r["message"] for r in _risks["blocked"]) + ".",
             "blocked": _risks["blocked"]})
-    if _risks["needs_confirmation"] and not getattr(req, "allow_risky", False):
+    # Capacités déjà accordées durablement -> on ne redemande pas (rétro-compatible :
+    # si rien n'est accordé, _missing == _caps et le comportement reste identique).
+    _caps_needing = set(capabilities_of(req.code)) & {"reseau", "programme", "email"}
+    _granted_caps = set(_db.list_coanimm_capabilities())
+    _missing_caps = _caps_needing - _granted_caps
+    if _risks["needs_confirmation"] and not getattr(req, "allow_risky", False) and _missing_caps:
         return JSONResponse({"status": "confirmation_required",
             "reasons": _risks["needs_confirmation"],
+            "missing_capabilities": sorted(_missing_caps),
             "message": "Ce script " + " ; ".join(r["message"] for r in _risks["needs_confirmation"]) + ". Confirmer l'exécution ?"})
 
     workdir = _workspace_dir(req.thread_id)
     os.makedirs(workdir, exist_ok=True)
     prologue = _build_prologue(req.thread_id, workdir)
     _allowed = _db.list_coanimm_paths()
-    guard = build_guard_prologue(_allowed, allow_network=bool(getattr(req, "allow_risky", False)))
+    guard = build_guard_prologue(_allowed, allow_network=(bool(getattr(req, "allow_risky", False)) or ("reseau" in _granted_caps)))
     full_code = guard + "\n" + ((prologue + "\n" + req.code) if prologue else req.code)
     before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
 
@@ -1656,6 +1662,30 @@ async def coanimm_history_clear():
     import core.database as _db
     _db.clear_coanimm_history()
     return {"status": "ok", "history": []}
+
+class CoanimmCapabilityRequest(BaseModel):
+    capability: str
+
+@app.get("/api/coanimm/capabilities")
+async def coanimm_capabilities_list():
+    """Capacités accordées durablement + liste des capacités accordables (libellés)."""
+    import core.database as _db
+    from modules.coanimm_safety import CAPABILITY_LABELS
+    grantable = [{"capability": c, "label": CAPABILITY_LABELS.get(c, c)}
+                 for c in sorted(_db._COANIMM_GRANTABLE_CAPS)]
+    return {"granted": _db.list_coanimm_capabilities(), "grantable": grantable}
+
+@app.post("/api/coanimm/capabilities")
+async def coanimm_capabilities_add(req: CoanimmCapabilityRequest):
+    """Accorde durablement une capacité (réseau / programme / e-mail)."""
+    import core.database as _db
+    return {"status": "ok", "granted": _db.add_coanimm_capability(req.capability or "")}
+
+@app.delete("/api/coanimm/capabilities")
+async def coanimm_capabilities_remove(req: CoanimmCapabilityRequest):
+    """Retire une capacité accordée."""
+    import core.database as _db
+    return {"status": "ok", "granted": _db.remove_coanimm_capability(req.capability or "")}
 
 
 @app.get("/api/search")

@@ -847,6 +847,13 @@
                 style="margin-top:6px;font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Ajouter ce dossier</button>
             <p id="coanimm-path-feedback" role="status" aria-live="polite" style="font-size:0.8rem;margin:6px 0 0;"></p>
         </details>
+        <details id="coanimm-caps-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Capacités autorisées en exécution</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Par défaut, NIMM demande confirmation à chaque fois qu'un script veut accéder à Internet, lancer un programme ou envoyer un e-mail. Cochez ici les capacités que vous autorisez durablement, pour ne plus être redemandé.
+            </p>
+            <ul id="coanimm-caps-list" style="list-style:none;padding:0;margin:0;font-size:0.82rem;"></ul>
+        </details>
         <details id="coanimm-history-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
             <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Historique des tâches</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
@@ -1404,7 +1411,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260621-3"></script>
+<script src="/static/app.js?v=20260621-caps"></script>
 <!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
