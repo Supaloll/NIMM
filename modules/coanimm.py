@@ -559,11 +559,14 @@ async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
         return {'status': 'error', 'message': "La fiche générée est vide."}
 
     label = (label or fiche['description'] or 'Skill sans titre')[:120]
+    import modules.coanimm_safety as _safety
+    capacites = _safety.capabilities_of(script)
     meta = {
         'description': fiche['description'],
         'mots_cles': fiche['mots_cles'],
         'script_ref': script_ref or '',
         'consigne_origine': consigne_origine,
+        'capacites': capacites,
         'valide_par_laurent': True,
         'version': 1,
     }

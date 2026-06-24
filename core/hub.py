@@ -1643,9 +1643,12 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             for sk in top:
                 meta = sk.get('meta') or {}
                 desc = meta.get('description', '') or sk.get('label', '')
+                _caps = ('non évalué' if 'capacites' not in meta
+                         else (', '.join(meta['capacites']) or 'aucune capacité sensible'))
                 blocs.append(
                     f"SKILL : {sk.get('label', '')}\n"
                     f"Quand l'utiliser : {desc}\n"
+                    f"Capacités : {_caps}\n"
                     f"Methode :\n{sk.get('text', '')}"
                 )
             print(f"[HUB] Tool find_skill({query!r}) -> {len(top)} fiche(s)")
