@@ -864,6 +864,43 @@
                 style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Vider l'historique</button>
         </details>
 
+        <details id="coanimm-workflows-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Workflows enregistrés</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Enchaînez plusieurs skills validés en une seule action. Créez un workflow depuis la liste des skills ou depuis l'historique.
+            </p>
+            <!-- Liste des workflows existants -->
+            <ul id="coanimm-workflows-list" style="list-style:none;padding:0;margin:0 0 10px;font-size:0.82rem;" aria-label="Workflows enregistrés"></ul>
+            <!-- Résultat d'exécution d'un workflow -->
+            <div id="coanimm-wf-result" role="status" aria-live="polite" style="display:none;margin-bottom:8px;"></div>
+            <!-- Composer un nouveau workflow -->
+            <details id="coanimm-wf-compose-details" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
+                <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;">Composer un nouveau workflow</summary>
+                <div style="margin-top:8px;">
+                    <label for="coanimm-wf-name" style="display:block;font-size:0.82rem;margin-bottom:4px;">Nom du workflow</label>
+                    <input type="text" id="coanimm-wf-name" placeholder="Ex. : Préparer les images pour la machine"
+                           style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);font-size:0.82rem;" />
+                    <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0 4px;">Skills à enchaîner (glisser/déposer ou boutons ↑↓ pour réordonner) :</p>
+                    <ul id="coanimm-wf-steps" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;" aria-label="Étapes du workflow en cours de composition"></ul>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <select id="coanimm-wf-skill-pick" aria-label="Choisir un skill à ajouter"
+                                style="flex:1;min-width:0;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);font-size:0.82rem;">
+                            <option value="">— Ajouter un skill —</option>
+                        </select>
+                        <button type="button" id="coanimm-wf-add-step-btn"
+                                style="padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;font-size:0.82rem;"
+                                aria-label="Ajouter le skill sélectionné au workflow">Ajouter</button>
+                    </div>
+                    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+                        <button type="button" id="coanimm-wf-save-btn"
+                                style="padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;font-size:0.82rem;"
+                                aria-label="Enregistrer le workflow">Enregistrer le workflow</button>
+                        <span id="coanimm-wf-save-status" role="status" aria-live="polite" style="font-size:0.8rem;color:var(--text-muted);line-height:2;"></span>
+                    </div>
+                </div>
+            </details>
+        </details>
+
 
         <div style="margin-top:14px;">
             <h4 style="margin:0 0 6px;font-size:0.9rem;">Demande libre</h4>
@@ -1411,7 +1448,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260621-caps"></script>
+<script src="/static/app.js?v=20260624-workflows"></script>
 <!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>

@@ -567,6 +567,7 @@ async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
         'script_ref': script_ref or '',
         'consigne_origine': consigne_origine,
         'capacites': capacites,
+        'script': script,
         'valide_par_laurent': True,
         'version': 1,
     }
@@ -881,3 +882,156 @@ async def run_generated(consigne: str, thread_id: str = None,
     result['files_info'], result['files_list'] = _route_new_files(new_files, thread_id)
     result['files_count'] = len(new_files)
     return result
+
+
+# ══════════════════════════════════════════════════════════════════════
+# WORKFLOWS — Étape 3 : séquences de skills rejouables
+# ══════════════════════════════════════════════════════════════════════
+
+def save_workflow(label: str, etapes: list, thread_id: str = None) -> dict:
+    """Enregistre un workflow (séquence ordonnée de skills) dans la Promptothèque.
+
+    etapes : liste de dicts {skill_id, label}
+    Calcule l'union des capacités de toutes les étapes et la stocke dans meta.
+    Seuls les skills valide_par_laurent=True sont acceptés.
+    """
+    skills = db.list_prompts('skill')
+
+    etapes_valides = []
+    for e in etapes:
+        sid = e.get('skill_id', '')
+        if sid not in skills:
+            return {'status': 'error', 'message': f"Skill inconnu : {sid}"}
+        sk = skills[sid]
+        if not sk.get('meta', {}).get('valide_par_laurent', False):
+            return {'status': 'error',
+                    'message': f"Le skill « {sk.get('label', sid)} » n'est pas validé par Laurent."}
+        etapes_valides.append({'skill_id': sid, 'label': sk.get('label', sid)})
+
+    # Union des capacités de toutes les étapes
+    all_caps = set()
+    for e in etapes_valides:
+        sk = skills[e['skill_id']]
+        all_caps.update(sk.get('meta', {}).get('capacites', []))
+
+    meta = {
+        'etapes': etapes_valides,
+        'capacites': sorted(all_caps),
+        'valide_par_laurent': True,
+        'version': 1,
+    }
+    result = db.save_prompt(None, label, '', type='workflow', meta=meta)
+    return {'status': 'created', 'workflow': result}
+
+
+def list_workflows() -> list:
+    """Retourne la liste des workflows enregistrés, triés du plus récent au plus ancien."""
+    raw = db.list_prompts('workflow')
+    out = []
+    for wid, w in raw.items():
+        out.append({
+            'id': wid,
+            'label': w.get('label', ''),
+            'created_at': w.get('created_at', ''),
+            'meta': w.get('meta', {}),
+        })
+    out.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    return out
+
+
+async def run_workflow(workflow_id: str, thread_id: str = None) -> dict:
+    """Exécute un workflow étape par étape.
+
+    Pour chaque étape :
+    - charge le script du skill ;
+    - applique l'auto-audit si une fiche skill correspond (Étape C) ;
+    - exécute via _execute dans le workspace CoaNIMM global ;
+    - s'arrête et rapporte à la première erreur.
+
+    Retourne : {status, message, steps: [{label, status, output?, error?}],
+                files_info?, files_list?, files_count?}
+    """
+    workflows = db.list_prompts('workflow')
+    if workflow_id not in workflows:
+        return {'status': 'error', 'message': f"Workflow introuvable : {workflow_id}"}
+
+    wf = workflows[workflow_id]
+    etapes = wf.get('meta', {}).get('etapes', [])
+    if not etapes:
+        return {'status': 'error', 'message': "Ce workflow ne contient aucune étape."}
+
+    skills = db.list_prompts('skill')
+    workdir = _workspace_dir(thread_id)
+    steps_results = []
+    all_new_files = []
+
+    for i, etape in enumerate(etapes):
+        sid = etape.get('skill_id', '')
+        elabel = etape.get('label', f"Étape {i + 1}")
+
+        if sid not in skills:
+            steps_results.append({'label': elabel, 'status': 'error',
+                                   'error': f"Skill introuvable : {sid}"})
+            return {
+                'status': 'error',
+                'message': f"Arrêt sur l'étape « {elabel} » : skill introuvable.",
+                'steps': steps_results,
+            }
+
+        sk = skills[sid]
+        code = sk.get('meta', {}).get('script', '')
+        consigne = sk.get('meta', {}).get('consigne_origine', elabel)
+
+        if not code.strip():
+            steps_results.append({'label': elabel, 'status': 'error',
+                                   'error': "Ce skill n'a pas de script exécutable enregistré."})
+            return {
+                'status': 'error',
+                'message': (f"Arrêt sur l'étape « {elabel} » : ce skill n'a pas de script "
+                            f"exécutable enregistré (recrée-le pour l'utiliser dans un workflow)."),
+                'steps': steps_results,
+            }
+
+        # Auto-audit à la lumière d'un skill correspondant (Étape C)
+        fiche = _find_relevant_skill(consigne)
+        if fiche:
+            try:
+                audited = await audit_against_skill(code, _skill_to_text(fiche),
+                                                    consigne, thread_id)
+                if audited.strip() and _check_syntax(audited) is None:
+                    code = audited
+            except Exception as _ae:
+                print(f"[COANIMM-WF] Auto-audit ignoré étape {i + 1} : {_ae}")
+
+        before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
+        result = _execute(code, None, workdir, thread_id)
+
+        if result.get('status') == 'error':
+            steps_results.append({'label': elabel, 'status': 'error',
+                                   'error': result.get('message', 'Erreur inconnue')})
+            return {
+                'status': 'error',
+                'message': f"Arrêt sur l'étape « {elabel} » : {result.get('message', '')}",
+                'steps': steps_results,
+            }
+
+        new_files = _scan_new_files(workdir, before)
+        all_new_files.extend(new_files)
+        steps_results.append({
+            'label': elabel,
+            'status': 'ok',
+            'output': result.get('output', ''),
+        })
+
+    files_info, files_list = '', []
+    if all_new_files:
+        files_info, files_list = _route_new_files(all_new_files, thread_id)
+
+    return {
+        'status': 'ok',
+        'message': f"Workflow « {wf.get('label', '')} » terminé ({len(etapes)} étapes).",
+        'steps': steps_results,
+        'files_info': files_info,
+        'files_list': files_list,
+        'files_count': len(all_new_files),
+    }
