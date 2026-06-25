@@ -587,6 +587,31 @@ async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
     return {'status': 'created', 'skill': entry}
 
 
+def update_skill(skill_id, label=None, description=None, mots_cles=None, corps=None):
+    """Met à jour un skill validé (nom, description, mots-clés, méthode) et incrémente
+    sa version. Le script enregistré et les capacités sont préservés tels quels."""
+    skills = db.list_prompts('skill')
+    if skill_id not in skills:
+        return {'status': 'error', 'message': "Skill introuvable."}
+    sk = skills[skill_id]
+    meta = dict(sk.get('meta') or {})
+    new_label = (label if label is not None else sk.get('label', '')).strip() or sk.get('label', '')
+    new_text = corps if corps is not None else sk.get('text', '')
+    if description is not None:
+        meta['description'] = description.strip()
+    if mots_cles is not None:
+        if isinstance(mots_cles, str):
+            mots_cles = [m.strip() for m in mots_cles.split(',') if m.strip()]
+        meta['mots_cles'] = list(mots_cles)
+    try:
+        meta['version'] = int(meta.get('version', 1)) + 1
+    except Exception:
+        meta['version'] = 2
+    entry = db.save_prompt(skill_id, new_label, new_text, type='skill', meta=meta)
+    print(f"[SKILL] Fiche modifiée : {new_label!r} (v{meta['version']})")
+    return {'status': 'ok', 'skill': entry}
+
+
 def _skill_to_text(sk: dict) -> str:
     """Met une fiche skill en texte lisible pour l'audit (label + description + corps)."""
     meta = sk.get('meta') or {}
@@ -598,64 +623,82 @@ def _skill_to_text(sk: dict) -> str:
     )
 
 
-def _find_relevant_skill(consigne: str):
-    """Retourne la fiche skill la plus proche de la consigne (recouvrement de mots-clés),
-    ou None. Même logique simple que find_skill côté hub. Inerte s'il n'existe aucune fiche."""
+def _skill_haystack(sk: dict) -> str:
+    """Texte représentatif d'un skill pour l'appariement (nom + quand l'utiliser + mots-clés)."""
+    meta = sk.get('meta') or {}
+    return ' '.join([sk.get('label', ''), meta.get('description', ''),
+                     ' '.join(meta.get('mots_cles') or [])]).strip()
+
+
+def rank_skills(query: str, top_n: int = 1):
+    """Classe les skills VALIDÉS par pertinence pour `query`.
+    Essaie d'abord la similarité SÉMANTIQUE (embeddings « recherche par sens ») ;
+    repli automatique sur le recouvrement de mots-clés si les embeddings sont
+    indisponibles (modèle non installé / option désactivée). Renvoie une liste
+    [(sid, sk, score)] décroissante, longueur <= top_n."""
+    skills = db.list_prompts('skill')
+    skills = {k: v for k, v in skills.items() if (v.get('meta') or {}).get('valide_par_laurent')}
+    if not skills or not (query or '').strip():
+        return []
+    # 1) Sémantique (si la recherche par sens est active)
     try:
-        import re as _re
-        try:
-            from core.hub import _MOTS_VIDES as _stop
-        except Exception:
-            _stop = set()
-        skills = db.list_prompts('skill')
-        if not skills:
-            return None
-        mots = [m for m in _re.findall(r'\w+', (consigne or '').lower())
-                if len(m) > 2 and m not in _stop]
-        if not mots:
-            return None
-        best, best_score = None, 0
-        for sid, sk in skills.items():
-            meta = sk.get('meta') or {}
-            hay = ' '.join([sk.get('label', ''), meta.get('description', ''),
-                            ' '.join(meta.get('mots_cles') or [])]).lower()
-            score = sum(1 for m in mots if m in hay)
-            if score > best_score:
-                best, best_score = sk, score
-        return best if best_score > 0 else None
+        import modules.memory as _mem
+        qv = _mem._embed(query)
+        if qv is not None:
+            import numpy as _np
+            scored = []
+            for sid, sk in skills.items():
+                hay = _skill_haystack(sk)
+                if not hay:
+                    continue
+                sv = _mem._embed(hay)
+                if sv is None:
+                    continue
+                scored.append((sid, sk, float(_np.dot(qv, sv))))
+            scored = [t for t in scored if t[2] >= 0.35]
+            if scored:
+                scored.sort(key=lambda x: x[2], reverse=True)
+                return scored[:max(1, top_n)]
     except Exception:
-        return None
-
-
-def match_skills_for_consignes(consignes):
-    """Pour chaque consigne, renvoie le skill VALIDÉ le plus proche (ou rien).
-    Même appariement que _find_relevant_skill, mais expose l'id du skill pour
-    composer un workflow. Renvoie une liste alignée sur l'entrée :
-    {'consigne', 'skill_id', 'label', 'matched'}."""
+        pass
+    # 2) Repli mots-clés
     import re as _re
     try:
         from core.hub import _MOTS_VIDES as _stop
     except Exception:
         _stop = set()
-    skills = db.list_prompts('skill')
+    mots = [m for m in _re.findall(r'\w+', (query or '').lower())
+            if len(m) > 2 and m not in _stop]
+    if not mots:
+        return []
+    scored = []
+    for sid, sk in skills.items():
+        hay = _skill_haystack(sk).lower()
+        score = sum(1 for m in mots if m in hay)
+        if score > 0:
+            scored.append((sid, sk, score))
+    scored.sort(key=lambda x: x[2], reverse=True)
+    return scored[:max(1, top_n)]
+
+
+def _find_relevant_skill(consigne: str):
+    """Retourne la fiche skill la plus proche de la consigne (sémantique si dispo,
+    sinon mots-clés), ou None. Inerte s'il n'existe aucune fiche validée."""
+    res = rank_skills(consigne, top_n=1)
+    return res[0][1] if res else None
+
+
+def match_skills_for_consignes(consignes):
+    """Pour chaque consigne, renvoie le skill VALIDÉ le plus proche (ou rien), en
+    exposant l'id du skill pour composer un workflow. Renvoie une liste alignée sur
+    l'entrée : {'consigne', 'skill_id', 'label', 'matched'}."""
     out = []
     for consigne in (consignes or []):
         entry = {'consigne': consigne, 'skill_id': '', 'label': '', 'matched': False}
-        mots = [m for m in _re.findall(r'\w+', (consigne or '').lower())
-                if len(m) > 2 and m not in _stop]
-        best_id, best_label, best_score = '', '', 0
-        if mots and skills:
-            for sid, sk in skills.items():
-                meta = sk.get('meta') or {}
-                if not meta.get('valide_par_laurent'):
-                    continue
-                hay = ' '.join([sk.get('label', ''), meta.get('description', ''),
-                                ' '.join(meta.get('mots_cles') or [])]).lower()
-                score = sum(1 for m in mots if m in hay)
-                if score > best_score:
-                    best_id, best_label, best_score = sid, sk.get('label', ''), score
-        if best_score > 0:
-            entry.update({'skill_id': best_id, 'label': best_label, 'matched': True})
+        res = rank_skills(consigne, top_n=1)
+        if res:
+            sid, sk, _score = res[0]
+            entry.update({'skill_id': sid, 'label': sk.get('label', ''), 'matched': True})
         out.append(entry)
     return out
 

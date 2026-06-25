@@ -4815,16 +4815,17 @@ async function _loadGhostMode(threadId) {
         _ghostMode = d.ghost || false;
     } catch(e) { _ghostMode = false; }
     const btn = document.getElementById('ghost-toggle');
-    if (btn) btn.classList.toggle('active', _ghostMode);
+    if (btn) { btn.classList.toggle('active', _ghostMode); btn.setAttribute('aria-pressed', _ghostMode ? 'true' : 'false'); }
 }
 
 (function setupGhostToggle() {
     const btn = document.createElement('button');
     btn.id        = 'ghost-toggle';
-    btn.title     = 'Mode fantôme — mémoire désactivée';
+    btn.title     = 'Mode confidentiel — mémoire et carnet de bord désactivés pour ce fil (aucune trace)';
     btn.className = 'topbar-icon-btn';
     btn.textContent = '👻';
-    btn.setAttribute('aria-label', 'Mode fantôme');
+    btn.setAttribute('aria-label', 'Mode confidentiel (mémoire et carnet désactivés pour ce fil)');
+    btn.setAttribute('aria-pressed', 'false');
     btn.addEventListener('click', async () => {
         if (!currentThreadId) return;
         try {
@@ -4832,6 +4833,10 @@ async function _loadGhostMode(threadId) {
             const d = await r.json();
             _ghostMode = d.ghost;
             btn.classList.toggle('active', _ghostMode);
+            btn.setAttribute('aria-pressed', _ghostMode ? 'true' : 'false');
+            if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_ghostMode
+                ? 'Mode confidentiel activé : ce fil ne laissera aucune trace, ni mémoire, ni carnet.'
+                : 'Mode confidentiel désactivé.');
         } catch(e) {}
     });
     const topRight = document.getElementById('top-right');
@@ -7398,6 +7403,7 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     loadCoanimmHistory();
     loadCoanimmCapabilities();
     loadCoanimmWorkflows();
+    loadCoanimmSkills();
 });
 
 async function loadCoanimmPaths() {
@@ -7580,6 +7586,124 @@ async function _coanimmComposeWorkflowFromHistory() {
     }
 }
 document.getElementById('coanimm-history-to-wf-btn')?.addEventListener('click', _coanimmComposeWorkflowFromHistory);
+
+// ── Skills enregistrés : liste, édition, suppression ──
+let _coanimmEditingSkillId = null;
+async function loadCoanimmSkills() {
+    try {
+        const r = await fetch('/api/prompts?type=skill');
+        const d = await r.json();
+        _renderCoanimmSkills(d.prompts || {});
+    } catch (e) { /* silencieux */ }
+}
+function _renderCoanimmSkills(prompts) {
+    const ul = document.getElementById('coanimm-skills-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const ids = Object.keys(prompts || {});
+    if (!ids.length) {
+        const li = document.createElement('li');
+        li.textContent = "Aucun skill enregistré pour le moment.";
+        li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+        ul.appendChild(li);
+        return;
+    }
+    ids.forEach(id => {
+        const sk = prompts[id];
+        const meta = sk.meta || {};
+        const li = document.createElement('li');
+        li.style.cssText = 'padding:6px 0;border-bottom:1px solid var(--border);';
+        const v = meta.version ? (' (v' + meta.version + ')') : '';
+        const head = document.createElement('div');
+        head.style.cssText = 'font-weight:600;';
+        head.textContent = (sk.label || '(sans nom)') + v;
+        li.appendChild(head);
+        if (meta.description) {
+            const desc = document.createElement('div');
+            desc.style.cssText = 'color:var(--text-muted);font-size:0.8rem;margin:2px 0;';
+            desc.textContent = meta.description;
+            li.appendChild(desc);
+        }
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:8px;margin-top:4px;';
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.textContent = 'Modifier';
+        edit.setAttribute('aria-label', 'Modifier le skill ' + (sk.label || ''));
+        edit.style.cssText = 'font-size:0.8rem;padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+        edit.addEventListener('click', () => _coanimmEditSkill(id, sk));
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.textContent = 'Supprimer';
+        del.setAttribute('aria-label', 'Supprimer le skill ' + (sk.label || ''));
+        del.style.cssText = 'font-size:0.8rem;padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+        del.addEventListener('click', () => _coanimmDeleteSkill(id, sk.label || ''));
+        actions.appendChild(edit); actions.appendChild(del);
+        li.appendChild(actions);
+        ul.appendChild(li);
+    });
+}
+function _coanimmEditSkill(id, sk) {
+    _coanimmEditingSkillId = id;
+    const meta = sk.meta || {};
+    const form = document.getElementById('coanimm-skill-edit');
+    const name = document.getElementById('coanimm-skill-edit-name');
+    const desc = document.getElementById('coanimm-skill-edit-desc');
+    const kw = document.getElementById('coanimm-skill-edit-keywords');
+    const method = document.getElementById('coanimm-skill-edit-method');
+    if (name) name.value = sk.label || '';
+    if (desc) desc.value = meta.description || '';
+    if (kw) kw.value = (meta.mots_cles || []).join(', ');
+    if (method) method.value = sk.text || '';
+    if (form) form.classList.remove('hidden');
+    const title = document.getElementById('coanimm-skill-edit-title');
+    setTimeout(() => { if (title) title.focus(); }, 50);
+}
+async function _coanimmSaveSkillEdit() {
+    if (!_coanimmEditingSkillId) return;
+    const status = document.getElementById('coanimm-skills-status');
+    const name = document.getElementById('coanimm-skill-edit-name');
+    const desc = document.getElementById('coanimm-skill-edit-desc');
+    const kw = document.getElementById('coanimm-skill-edit-keywords');
+    const method = document.getElementById('coanimm-skill-edit-method');
+    const body = {
+        label: name ? name.value : null,
+        description: desc ? desc.value : null,
+        mots_cles: kw ? kw.value.split(',').map(x => x.trim()).filter(Boolean) : null,
+        corps: method ? method.value : null,
+    };
+    try {
+        const r = await fetch('/api/coanimm/skills/' + encodeURIComponent(_coanimmEditingSkillId) + '/update', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!r.ok) { if (status) status.textContent = 'Erreur lors de la modification.'; _coanimmAnnounce('Erreur lors de la modification du skill.'); return; }
+        document.getElementById('coanimm-skill-edit')?.classList.add('hidden');
+        _coanimmEditingSkillId = null;
+        await loadCoanimmSkills();
+        if (typeof _coanimmWfPopulateSkillPicker === 'function') _coanimmWfPopulateSkillPicker();
+        if (status) status.textContent = 'Skill modifié (nouvelle version enregistrée).';
+        _coanimmAnnounce('Skill modifié, nouvelle version enregistrée.');
+    } catch (e) { if (status) status.textContent = 'Erreur réseau.'; }
+}
+async function _coanimmDeleteSkill(id, label) {
+    if (!confirm('Supprimer définitivement le skill « ' + label + ' » ?')) return;
+    const status = document.getElementById('coanimm-skills-status');
+    try {
+        const r = await fetch('/api/coanimm/skills/' + encodeURIComponent(id), { method: 'DELETE' });
+        if (!r.ok) { if (status) status.textContent = 'Erreur lors de la suppression.'; return; }
+        await loadCoanimmSkills();
+        if (typeof _coanimmWfPopulateSkillPicker === 'function') _coanimmWfPopulateSkillPicker();
+        if (status) status.textContent = 'Skill supprimé.';
+        _coanimmAnnounce('Skill supprimé.');
+    } catch (e) { if (status) status.textContent = 'Erreur réseau.'; }
+}
+document.getElementById('coanimm-skill-edit-save')?.addEventListener('click', _coanimmSaveSkillEdit);
+document.getElementById('coanimm-skill-edit-cancel')?.addEventListener('click', () => {
+    document.getElementById('coanimm-skill-edit')?.classList.add('hidden');
+    _coanimmEditingSkillId = null;
+    _coanimmAnnounce('Modification annulée.');
+});
 
 // ── Capacités autorisées (réseau / programme / e-mail) ──
 let _coanimmIsOwner = true;

@@ -1726,6 +1726,28 @@ async def coanimm_preview(req: CoanimmPreviewReq):
         "needs_confirmation": [r.get("message", "") for r in risks.get("needs_confirmation", [])],
     }
 
+class CoanimmSkillUpdateReq(BaseModel):
+    label: Optional[str] = None
+    description: Optional[str] = None
+    mots_cles: Optional[list] = None
+    corps: Optional[str] = None
+
+@app.post("/api/coanimm/skills/{skill_id}/update")
+async def coanimm_skill_update(skill_id: str, req: CoanimmSkillUpdateReq):
+    """Met à jour un skill validé (incrémente la version ; script et capacités préservés)."""
+    from modules.coanimm import update_skill
+    res = update_skill(skill_id, req.label, req.description, req.mots_cles, req.corps)
+    if res.get("status") == "error":
+        raise HTTPException(404, res.get("message", "Skill introuvable."))
+    return res
+
+@app.delete("/api/coanimm/skills/{skill_id}")
+async def coanimm_skill_delete(skill_id: str):
+    """Supprime un skill validé."""
+    import core.database as _db
+    _db.delete_prompt(skill_id)
+    return {"status": "ok"}
+
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
 

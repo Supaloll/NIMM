@@ -1622,21 +1622,24 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             skills = _list_skills('skill')
             if not skills:
                 return '[Aucun skill enregistre pour le moment]'
-            mots = [m for m in re.findall(r'\w+', query.lower())
-                    if len(m) > 2 and m not in _MOTS_VIDES]
-            scored = []
-            for sid, sk in skills.items():
-                meta = sk.get('meta') or {}
-                hay = ' '.join([
-                    sk.get('label', ''),
-                    meta.get('description', ''),
-                    ' '.join(meta.get('mots_cles') or []),
-                ]).lower()
-                score = sum(1 for m in mots if m in hay)
-                if score > 0:
-                    scored.append((score, sk))
-            scored.sort(key=lambda t: t[0], reverse=True)
-            top = [sk for _, sk in scored[:3]]
+            try:
+                # Appariement sémantique (embeddings) avec repli mots-clés, mutualisé.
+                from modules.coanimm import rank_skills as _rank
+                top = [sk for _sid, sk, _sc in _rank(query, top_n=3)]
+            except Exception:
+                # Repli ultime : recouvrement de mots-clés local.
+                mots = [m for m in re.findall(r'\w+', query.lower())
+                        if len(m) > 2 and m not in _MOTS_VIDES]
+                scored = []
+                for sid, sk in skills.items():
+                    meta = sk.get('meta') or {}
+                    hay = ' '.join([sk.get('label', ''), meta.get('description', ''),
+                                    ' '.join(meta.get('mots_cles') or [])]).lower()
+                    score = sum(1 for m in mots if m in hay)
+                    if score > 0:
+                        scored.append((score, sk))
+                scored.sort(key=lambda t: t[0], reverse=True)
+                top = [sk for _, sk in scored[:3]]
             if not top:
                 return '[Aucun skill ne correspond a cette consigne]'
             blocs = []
@@ -1743,6 +1746,18 @@ def _create_bg_task(coro) -> asyncio.Task:
 # CARNET DE BORD — NOTES AUTOMATIQUES
 # ══════════════════════════════════════════
 
+def _is_ghost_thread(thread_id: str) -> bool:
+    """Le fil est-il en mode confidentiel (« fantôme ») ? Aucune trace dérivée
+    (mémoire, carnet de bord) n'est produite pour ces fils."""
+    if not thread_id:
+        return False
+    try:
+        import json as _gj
+        return thread_id in set(_gj.loads(get_setting('ghost_threads', '[]')))
+    except Exception:
+        return False
+
+
 async def maybe_generate_carnet_note(thread_id: str, settings: dict):
     """
     Carnet de bord — prose libre courte produite en arrière-plan.
@@ -1752,6 +1767,9 @@ async def maybe_generate_carnet_note(thread_id: str, settings: dict):
       - Note #n : tous les CARNET_INTERVAL échanges suivants (toutes les 14 messages)
     Injection dans le system prompt uniquement si n > CARNET_WINDOW.
     """
+    # Mode confidentiel : aucune note de carnet pour un fil fantôme.
+    if _is_ghost_thread(thread_id):
+        return
     n = count_messages(thread_id)
 
     # Pas encore de premier échange complet
