@@ -8115,8 +8115,63 @@ async function runCoanimmExplore(consigne, confirmScope) {
 
 // ── Ex\xe9cution du code (avec permission) ──
 
-async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allowRisky = false, onceCaps = null) {
+// ── Aperçu avant exécution (optionnel, opt-in) ──
+(function _coanimmWirePreviewToggle(){
+    const t = document.getElementById('coanimm-preview-toggle');
+    if (!t) return;
+    try { t.checked = localStorage.getItem('coanimm_preview') === '1'; } catch (e) {}
+    t.addEventListener('change', () => { try { localStorage.setItem('coanimm_preview', t.checked ? '1' : '0'); } catch (e) {} });
+})();
+
+function _coanimmShowPreview(code, confirmScope) {
+    const panel = document.getElementById('coanimm-preview-panel');
+    const body  = document.getElementById('coanimm-preview-body');
+    const title = document.getElementById('coanimm-preview-title');
+    if (!panel || !body) { runCoanimmExecuteCode(code, confirmScope, 0, false, null, true); return; }
+    body.innerHTML = '<p style="margin:0;">Analyse en cours…</p>';
+    panel.classList.remove('hidden');
+    fetch('/api/coanimm/preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, thread_id: currentThreadId || null }),
+    }).then(r => r.json()).then(data => {
+        const caps = data.capabilities || [];
+        let html = '', speak = '';
+        if (data.blocked && data.blocked.length) {
+            html += '<p style="color:#c0392b;margin:0 0 6px;">Cette tâche sera refusée pour raison de sécurité : ' + _escHtml(data.blocked.join(' ; ')) + '.</p>';
+            speak += 'Attention, cette tâche sera refusée pour raison de sécurité. ';
+        }
+        if (caps.length) {
+            const labels = caps.map(c => c.label).join(', ');
+            html += '<p style="margin:0 0 6px;">Cette tâche va : ' + _escHtml(labels) + '.</p>';
+            speak += 'Cette tâche va : ' + labels + '. ';
+        } else {
+            html += '<p style="margin:0 0 6px;">Aucune action sensible détectée.</p>';
+            speak += 'Aucune action sensible détectée. ';
+        }
+        if (data.allowed_paths && data.allowed_paths.length) {
+            html += '<p style="margin:0 0 6px;">Écriture limitée aux dossiers autorisés : ' + _escHtml(data.allowed_paths.join(', ')) + '.</p>';
+            speak += 'Écriture limitée aux dossiers autorisés : ' + data.allowed_paths.join(', ') + '. ';
+        }
+        if (data.needs_confirmation && data.needs_confirmation.length) {
+            html += '<p style="margin:0;">Action sensible : une confirmation supplémentaire pourra être demandée après « Exécuter ».</p>';
+            speak += 'Une confirmation supplémentaire pourra être demandée. ';
+        }
+        body.innerHTML = html;
+        _coanimmAnnounce('Aperçu. ' + speak);
+    }).catch(() => { body.innerHTML = '<p style="margin:0;">Aperçu indisponible. Vous pouvez exécuter ou annuler.</p>'; });
+    const yes = document.getElementById('coanimm-preview-yes');
+    const no  = document.getElementById('coanimm-preview-no');
+    if (yes) { const fy = yes.cloneNode(true); yes.replaceWith(fy); fy.addEventListener('click', () => { panel.classList.add('hidden'); runCoanimmExecuteCode(code, confirmScope || 'once', 0, false, null, true); }); }
+    if (no)  { const fn = no.cloneNode(true);  no.replaceWith(fn);  fn.addEventListener('click', () => { panel.classList.add('hidden'); _coanimmAnnounce('Exécution annulée.'); }); }
+    setTimeout(() => { if (title) title.focus(); }, 60);
+}
+
+async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allowRisky = false, onceCaps = null, skipPreview = false) {
     document.getElementById('coanimm-permission').classList.add('hidden');
+    if (!skipPreview && repairAttempt === 0) {
+        const pv = document.getElementById('coanimm-preview-toggle');
+        if (pv && pv.checked) { _coanimmShowPreview(code, confirmScope); return; }
+    }
 
     const resultBox = document.getElementById('coanimm-result');
     const statusEl  = document.getElementById('coanimm-result-status');
