@@ -7587,6 +7587,21 @@ async function _coanimmComposeWorkflowFromHistory() {
 }
 document.getElementById('coanimm-history-to-wf-btn')?.addEventListener('click', _coanimmComposeWorkflowFromHistory);
 
+document.getElementById('coanimm-workspace-purge-btn')?.addEventListener('click', async () => {
+    if (!confirm('Vider l\'espace de travail CoaNIMM ? Tous les fichiers produits seront supprimés définitivement.')) return;
+    const status = document.getElementById('coanimm-workspace-status');
+    try {
+        const r = await fetch('/api/coanimm/workspace', { method: 'DELETE' });
+        const d = await r.json();
+        if (d.status === 'ok') {
+            const n = d.removed || 0;
+            const msg = n ? ('Espace de travail vidé : ' + n + ' élément(s) supprimé(s).') : 'Espace de travail déjà vide.';
+            if (status) status.textContent = msg;
+            _coanimmAnnounce(msg);
+        } else if (status) { status.textContent = 'Erreur lors de la purge.'; }
+    } catch (e) { if (status) status.textContent = 'Erreur réseau.'; }
+});
+
 // ── Skills enregistrés : liste, édition, suppression ──
 let _coanimmEditingSkillId = null;
 async function loadCoanimmSkills() {

@@ -171,6 +171,30 @@ def _workspace_dir(thread_id: str = None) -> str:
     return base
 
 
+def purge_workspace() -> dict:
+    """Vide l'espace de travail global de CoaNIMM (fichiers produits + sous-dossiers),
+    en conservant le dossier lui-même. Action explicite, utile après une session
+    confidentielle. Retourne {'status':'ok', 'removed': n}."""
+    import shutil
+    base = _workspace_dir()
+    removed = 0
+    try:
+        for name in os.listdir(base):
+            path = os.path.join(base, name)
+            try:
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+                removed += 1
+            except Exception as _e:
+                print(f"[COANIMM] purge : impossible de supprimer {path} : {_e}")
+    except Exception as _e:
+        return {'status': 'error', 'message': str(_e)}
+    print(f"[COANIMM] Espace de travail purgé : {removed} élément(s).")
+    return {'status': 'ok', 'removed': removed}
+
+
 def _strip_code_fences(text: str) -> str:
     """Extrait le code Python d'une réponse LLM, même imparfaite.
 

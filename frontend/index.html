@@ -854,6 +854,15 @@
             </p>
             <ul id="coanimm-caps-list" style="list-style:none;padding:0;margin:0;font-size:0.82rem;"></ul>
         </details>
+        <details id="coanimm-workspace-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Espace de travail</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Les fichiers produits par CoaNIMM sont rassemblés dans un dossier de travail unique. Après une session confidentielle, vous pouvez le vider d'un clic.
+            </p>
+            <button type="button" id="coanimm-workspace-purge-btn"
+                style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Vider l'espace de travail</button>
+            <p id="coanimm-workspace-status" role="status" aria-live="polite" style="font-size:0.82rem;margin:6px 0 0;min-height:1em;"></p>
+        </details>
         <details id="coanimm-history-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
             <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Historique des tâches</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
@@ -1490,7 +1499,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260625-v3"></script>
+<script src="/static/app.js?v=20260625-v4"></script>
 <!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>

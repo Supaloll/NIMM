@@ -1748,6 +1748,12 @@ async def coanimm_skill_delete(skill_id: str):
     _db.delete_prompt(skill_id)
     return {"status": "ok"}
 
+@app.delete("/api/coanimm/workspace")
+async def coanimm_workspace_purge():
+    """Vide l'espace de travail CoaNIMM (fichiers produits). Action explicite."""
+    from modules.coanimm import purge_workspace
+    return purge_workspace()
+
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
 
