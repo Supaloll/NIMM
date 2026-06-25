@@ -1706,6 +1706,26 @@ async def coanimm_capabilities_remove(req: CoanimmCapabilityRequest):
         raise HTTPException(403, detail="Seul le propriétaire (profil administrateur) peut retirer une capacité accordée durablement.")
     return {"status": "ok", "granted": _db.remove_coanimm_capability(req.capability or "")}
 
+class CoanimmPreviewReq(BaseModel):
+    code: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/preview")
+async def coanimm_preview(req: CoanimmPreviewReq):
+    """Analyse STATIQUE d'un script avant exécution (n'exécute rien) : capacités,
+    dossiers d'écriture autorisés, actions bloquées/sensibles. Aperçu accessible."""
+    import core.database as _db
+    from modules.coanimm_safety import classify_for_execution, capabilities_of, CAPABILITY_LABELS
+    code = req.code or ""
+    risks = classify_for_execution(code)
+    caps = capabilities_of(code)
+    return {
+        "capabilities": [{"capability": c, "label": CAPABILITY_LABELS.get(c, c)} for c in caps],
+        "allowed_paths": (_db.list_coanimm_paths() if "ecriture" in caps else []),
+        "blocked": [r.get("message", "") for r in risks.get("blocked", [])],
+        "needs_confirmation": [r.get("message", "") for r in risks.get("needs_confirmation", [])],
+    }
+
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
 
