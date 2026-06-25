@@ -23,6 +23,26 @@ def get_current_user() -> str:
     de créer une DB 'laurent' involontairement."""
     return _user_ctx.get()
 
+def is_current_user_admin() -> bool:
+    """L'utilisateur courant est-il administrateur (propriétaire) ?
+    Tolérant pour ne pas casser une install mono-profil : sans gestion
+    multi-profil (aucun users.json), l'install est personnelle -> True.
+    Avec des profils, on lit le flag admin du profil courant ; sans identité
+    posée mais un seul profil, c'est forcément le propriétaire."""
+    try:
+        users = _load_users()
+    except Exception:
+        return True
+    if not users:
+        return True
+    uid = get_current_user()
+    if not uid:
+        return len(users) == 1
+    for u in users:
+        if u.get('id') == uid:
+            return bool(u.get('admin'))
+    return False
+
 def get_db_path(user_id: str = None) -> str:
     """Chemin vers la DB de l'utilisateur (courant si non précisé).
     Retourne None si aucun utilisateur n'est défini (évite de créer nimm_.db fantôme)."""

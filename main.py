@@ -1687,18 +1687,23 @@ async def coanimm_capabilities_list():
     from modules.coanimm_safety import CAPABILITY_LABELS
     grantable = [{"capability": c, "label": CAPABILITY_LABELS.get(c, c)}
                  for c in sorted(_db._COANIMM_GRANTABLE_CAPS)]
-    return {"granted": _db.list_coanimm_capabilities(), "grantable": grantable}
+    return {"granted": _db.list_coanimm_capabilities(), "grantable": grantable,
+            "is_owner": _db.is_current_user_admin()}
 
 @app.post("/api/coanimm/capabilities")
 async def coanimm_capabilities_add(req: CoanimmCapabilityRequest):
-    """Accorde durablement une capacité (réseau / programme / e-mail)."""
+    """Accorde durablement une capacité (réseau / programme / e-mail). Réservé au propriétaire (admin)."""
     import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire (profil administrateur) peut accorder durablement une capacité. Tu peux l'autoriser « pour cette fois » au moment de l'exécution.")
     return {"status": "ok", "granted": _db.add_coanimm_capability(req.capability or "")}
 
 @app.delete("/api/coanimm/capabilities")
 async def coanimm_capabilities_remove(req: CoanimmCapabilityRequest):
-    """Retire une capacité accordée."""
+    """Retire une capacité accordée. Réservé au propriétaire (admin)."""
     import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire (profil administrateur) peut retirer une capacité accordée durablement.")
     return {"status": "ok", "granted": _db.remove_coanimm_capability(req.capability or "")}
 
 
