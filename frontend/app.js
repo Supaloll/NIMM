@@ -7582,10 +7582,12 @@ async function _coanimmComposeWorkflowFromHistory() {
 document.getElementById('coanimm-history-to-wf-btn')?.addEventListener('click', _coanimmComposeWorkflowFromHistory);
 
 // ── Capacités autorisées (réseau / programme / e-mail) ──
+let _coanimmIsOwner = true;
 function _renderCoanimmCapabilities(data) {
     const ul = document.getElementById('coanimm-caps-list');
     if (!ul) return;
     ul.innerHTML = '';
+    _coanimmIsOwner = (data.is_owner !== false);
     const granted = new Set(data.granted || []);
     (data.grantable || []).forEach(item => {
         const li = document.createElement('li');
@@ -7594,6 +7596,7 @@ function _renderCoanimmCapabilities(data) {
         cb.type = 'checkbox';
         cb.id = 'coanimm-cap-' + item.capability;
         cb.checked = granted.has(item.capability);
+        cb.disabled = !_coanimmIsOwner;
         cb.style.cssText = 'width:auto;margin:2px 0 0;flex:none;';
         cb.addEventListener('change', () => _toggleCoanimmCapability(item.capability, cb.checked));
         const lab = document.createElement('label');
@@ -7603,6 +7606,12 @@ function _renderCoanimmCapabilities(data) {
         li.appendChild(cb); li.appendChild(lab);
         ul.appendChild(li);
     });
+    if (!_coanimmIsOwner) {
+        const note = document.createElement('li');
+        note.style.cssText = 'padding:4px 0;font-size:0.8rem;color:var(--text-muted);';
+        note.textContent = "Seul le propriétaire (profil administrateur) peut accorder durablement ces capacités. Tu peux les autoriser « pour cette fois » au moment de l'exécution.";
+        ul.appendChild(note);
+    }
 }
 async function loadCoanimmCapabilities() {
     try {
@@ -7612,11 +7621,17 @@ async function loadCoanimmCapabilities() {
 }
 async function _toggleCoanimmCapability(cap, grant) {
     try {
-        await fetch('/api/coanimm/capabilities', {
+        const r = await fetch('/api/coanimm/capabilities', {
             method: grant ? 'POST' : 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ capability: cap }),
         });
+        if (r.status === 403) {
+            _coanimmAnnounce("Réservé au propriétaire : seul le profil administrateur peut modifier les capacités durables.");
+            loadCoanimmCapabilities();
+            return;
+        }
+        if (!r.ok) { _coanimmAnnounce("Erreur lors de la mise à jour de la capacité."); return; }
         _coanimmAnnounce(grant ? "Capacité autorisée durablement pour les scripts." : "Capacité retirée.");
     } catch (e) { _coanimmAnnounce("Erreur lors de la mise à jour de la capacité."); }
 }
@@ -8135,6 +8150,8 @@ async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allo
                 const txt = document.getElementById('coanimm-confirm-text');
                 if (txt) txt.textContent = '⚠️ ' + (data.message || 'Ce script demande une action sensible.');
                 if (panel) panel.classList.remove('hidden');
+                const rememberRow = document.getElementById('coanimm-confirm-remember-row');
+                if (rememberRow) rememberRow.style.display = _coanimmIsOwner ? 'flex' : 'none';
                 _coanimmAnnounce(data.message || 'Confirmation requise avant exécution.');
                 const yes = document.getElementById('coanimm-confirm-yes');
                 const no = document.getElementById('coanimm-confirm-no');
@@ -8144,7 +8161,7 @@ async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allo
                     panel.classList.add('hidden');
                     const caps = Array.isArray(data.missing_capabilities) ? data.missing_capabilities : [];
                     const remember = document.getElementById('coanimm-confirm-remember');
-                    if (remember && remember.checked && caps.length) {
+                    if (remember && remember.checked && _coanimmIsOwner && caps.length) {
                         // Mémoriser durablement chaque capacité avant de relancer.
                         try {
                             await Promise.all(caps.map(c => fetch('/api/coanimm/capabilities', {
