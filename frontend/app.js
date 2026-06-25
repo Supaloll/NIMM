@@ -7485,20 +7485,27 @@ function _renderCoanimmHistory(list) {
     }
     list.forEach(item => {
         const li = document.createElement('li');
-        li.style.cssText = 'padding:4px 0;border-bottom:1px solid var(--border);';
-        const btn = document.createElement('button');
-        btn.type = 'button';
+        li.style.cssText = 'display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);';
         const date = (item.ts || '').replace('T', ' ').slice(0, 16);
         const statusTxt = item.status === 'ok' ? 'réussi' : 'échec';
         const cons = (item.consigne || '').slice(0, 140);
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'coanimm-hist-pick';
+        cb.style.marginTop = '3px';
+        cb._consigne = item.consigne || '';
+        cb.setAttribute('aria-label', 'Inclure dans un workflow : ' + cons);
+        const btn = document.createElement('button');
+        btn.type = 'button';
         btn.textContent = date + ' — ' + statusTxt + ' : ' + cons;
         btn.setAttribute('aria-label', 'Reprendre cette tâche du ' + date + ', ' + statusTxt + ' : ' + cons);
-        btn.style.cssText = 'background:none;border:none;color:var(--text);text-align:left;cursor:pointer;font-size:0.82rem;padding:2px 0;width:100%;';
+        btn.style.cssText = 'background:none;border:none;color:var(--text);text-align:left;cursor:pointer;font-size:0.82rem;padding:2px 0;flex:1;';
         btn.addEventListener('click', () => {
             const input = document.getElementById('coanimm-consigne');
             if (input) { input.value = item.consigne || ''; input.focus(); }
             _coanimmAnnounce("Consigne reprise dans le champ. Vous pouvez la relancer.");
         });
+        li.appendChild(cb);
         li.appendChild(btn);
         ul.appendChild(li);
     });
@@ -7529,6 +7536,50 @@ async function _clearCoanimmHistory() {
     } catch (e) { /* silencieux */ }
 }
 document.getElementById('coanimm-history-clear-btn')?.addEventListener('click', _clearCoanimmHistory);
+
+async function _coanimmComposeWorkflowFromHistory() {
+    const status = document.getElementById('coanimm-history-wf-status');
+    const picks = Array.from(document.querySelectorAll('.coanimm-hist-pick')).filter(c => c.checked);
+    if (!picks.length) {
+        if (status) status.textContent = 'Cochez au moins une tâche à inclure.';
+        _coanimmAnnounce('Cochez au moins une tâche à inclure.');
+        return;
+    }
+    const consignes = picks.map(c => c._consigne || '').filter(Boolean);
+    try {
+        const r = await fetch('/api/coanimm/workflow_from_history', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ consignes }),
+        });
+        const d = await r.json();
+        const matches = (d && d.matches) || [];
+        const matched = matches.filter(m => m.matched);
+        const unmatched = matches.filter(m => !m.matched);
+        if (!matched.length) {
+            const msg = "Aucune tâche cochée ne correspond à un skill validé. Crée d'abord les skills (case « mémoriser la méthode » après une tâche réussie).";
+            if (status) status.textContent = msg;
+            _coanimmAnnounce(msg);
+            return;
+        }
+        _coanimmWfSteps = matched.map(m => ({ skill_id: m.skill_id, label: m.label }));
+        if (typeof _renderCoanimmWfSteps === 'function') _renderCoanimmWfSteps();
+        const det = document.getElementById('coanimm-workflows-details');
+        if (det) det.open = true;
+        const cdet = document.getElementById('coanimm-wf-compose-details');
+        if (cdet) cdet.open = true;
+        let msg = matched.length + ' étape(s) ajoutée(s) au compositeur de workflow.';
+        if (unmatched.length) msg += ' ' + unmatched.length + ' tâche(s) sans skill correspondant, ignorée(s).';
+        msg += ' Donne un nom au workflow puis enregistre-le.';
+        if (status) status.textContent = msg;
+        _coanimmAnnounce(msg);
+        const nm = document.getElementById('coanimm-wf-name');
+        if (nm) setTimeout(() => nm.focus(), 80);
+    } catch (e) {
+        if (status) status.textContent = 'Erreur lors de la composition du workflow.';
+        console.error('[COANIMM-WF] from history:', e);
+    }
+}
+document.getElementById('coanimm-history-to-wf-btn')?.addEventListener('click', _coanimmComposeWorkflowFromHistory);
 
 // ── Capacités autorisées (réseau / programme / e-mail) ──
 function _renderCoanimmCapabilities(data) {
@@ -8049,7 +8100,7 @@ async function runCoanimmExplore(consigne, confirmScope) {
 
 // ── Ex\xe9cution du code (avec permission) ──
 
-async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allowRisky = false) {
+async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allowRisky = false, onceCaps = null) {
     document.getElementById('coanimm-permission').classList.add('hidden');
 
     const resultBox = document.getElementById('coanimm-result');
@@ -8070,7 +8121,7 @@ async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allo
         const r = await fetch('/api/coanimm/run_code_stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code, thread_id: currentThreadId || null, confirm_scope: confirmScope, allow_risky: allowRisky }),
+            body: JSON.stringify({ code, thread_id: currentThreadId || null, confirm_scope: confirmScope, allow_risky: allowRisky, once_caps: onceCaps }),
         });
 
         // Si permission requise : réponse JSON simple
@@ -8089,9 +8140,26 @@ async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allo
                 const no = document.getElementById('coanimm-confirm-no');
                 const freshYes = yes.cloneNode(true); yes.replaceWith(freshYes);
                 const freshNo = no.cloneNode(true); no.replaceWith(freshNo);
-                freshYes.addEventListener('click', () => {
+                freshYes.addEventListener('click', async () => {
                     panel.classList.add('hidden');
-                    runCoanimmExecuteCode(code, confirmScope || 'once', 0, true);
+                    const caps = Array.isArray(data.missing_capabilities) ? data.missing_capabilities : [];
+                    const remember = document.getElementById('coanimm-confirm-remember');
+                    if (remember && remember.checked && caps.length) {
+                        // Mémoriser durablement chaque capacité avant de relancer.
+                        try {
+                            await Promise.all(caps.map(c => fetch('/api/coanimm/capabilities', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ capability: c }),
+                            })));
+                            if (typeof loadCoanimmCapabilities === 'function') loadCoanimmCapabilities();
+                            _coanimmAnnounce('Autorisation mémorisée. Exécution en cours.');
+                        } catch (e) { /* on relance quand même */ }
+                        remember.checked = false;
+                        runCoanimmExecuteCode(code, confirmScope || 'once', 0, false, caps);
+                    } else {
+                        // « Pour cette fois » : on n'ouvre QUE les capacités requises, sans persister.
+                        runCoanimmExecuteCode(code, confirmScope || 'once', 0, false, caps.length ? caps : null);
+                    }
                 });
                 freshNo.addEventListener('click', () => {
                     panel.classList.add('hidden');

@@ -857,11 +857,16 @@
         <details id="coanimm-history-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
             <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Historique des tâches</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
-                Vos tâches CoaNIMM passées (toutes conversations confondues). Activez une tâche pour reprendre sa consigne.
+                Vos tâches CoaNIMM passées (toutes conversations confondues). Activez une tâche pour reprendre sa consigne, ou cochez plusieurs tâches pour composer un workflow.
             </p>
             <ul id="coanimm-history-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;"></ul>
-            <button type="button" id="coanimm-history-clear-btn"
-                style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Vider l'historique</button>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                <button type="button" id="coanimm-history-to-wf-btn"
+                    style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Composer un workflow depuis la sélection</button>
+                <button type="button" id="coanimm-history-clear-btn"
+                    style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Vider l'historique</button>
+            </div>
+            <p id="coanimm-history-wf-status" role="status" aria-live="polite" style="font-size:0.82rem;margin:6px 0 0;min-height:1em;"></p>
         </details>
 
         <details id="coanimm-workflows-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
@@ -979,7 +984,11 @@
 
         <div id="coanimm-confirm-panel" class="hidden" role="alertdialog" aria-labelledby="coanimm-confirm-text" style="margin-top:14px;padding:10px;border:1px solid #c88c00;border-radius:6px;background:rgba(200,140,0,0.10);">
             <p id="coanimm-confirm-text" tabindex="-1" style="margin:0 0 8px;font-size:0.85rem;"></p>
-            <button type="button" id="coanimm-confirm-yes" style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Exécuter quand même</button>
+            <label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;margin:0 0 8px;cursor:pointer;">
+                <input type="checkbox" id="coanimm-confirm-remember">
+                Mémoriser cette autorisation pour les prochaines fois
+            </label>
+            <button type="button" id="coanimm-confirm-yes" style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Exécuter (pour cette fois)</button>
             <button type="button" id="coanimm-confirm-no" style="font-size:0.82rem;padding:5px 12px;margin-left:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Annuler</button>
         </div>
 
@@ -1448,7 +1457,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260624-workflows"></script>
+<script src="/static/app.js?v=20260625-caps-wf"></script>
 <!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>

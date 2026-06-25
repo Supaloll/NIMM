@@ -627,6 +627,38 @@ def _find_relevant_skill(consigne: str):
         return None
 
 
+def match_skills_for_consignes(consignes):
+    """Pour chaque consigne, renvoie le skill VALIDÉ le plus proche (ou rien).
+    Même appariement que _find_relevant_skill, mais expose l'id du skill pour
+    composer un workflow. Renvoie une liste alignée sur l'entrée :
+    {'consigne', 'skill_id', 'label', 'matched'}."""
+    import re as _re
+    try:
+        from core.hub import _MOTS_VIDES as _stop
+    except Exception:
+        _stop = set()
+    skills = db.list_prompts('skill')
+    out = []
+    for consigne in (consignes or []):
+        entry = {'consigne': consigne, 'skill_id': '', 'label': '', 'matched': False}
+        mots = [m for m in _re.findall(r'\w+', (consigne or '').lower())
+                if len(m) > 2 and m not in _stop]
+        best_id, best_label, best_score = '', '', 0
+        if mots and skills:
+            for sid, sk in skills.items():
+                meta = sk.get('meta') or {}
+                if not meta.get('valide_par_laurent'):
+                    continue
+                hay = ' '.join([sk.get('label', ''), meta.get('description', ''),
+                                ' '.join(meta.get('mots_cles') or [])]).lower()
+                score = sum(1 for m in mots if m in hay)
+                if score > best_score:
+                    best_id, best_label, best_score = sid, sk.get('label', ''), score
+        if best_score > 0:
+            entry.update({'skill_id': best_id, 'label': best_label, 'matched': True})
+        out.append(entry)
+    return out
+
 async def audit_against_skill(code: str, fiche_text: str, consigne: str = '',
                               thread_id: str = None, provider_override: str = None) -> str:
     """Relit un script généré à la lumière d'une fiche skill validée et le corrige s'il
