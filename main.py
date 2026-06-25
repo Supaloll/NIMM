@@ -1195,6 +1195,7 @@ class CoanimmRunCodeDirectRequest(BaseModel):
     thread_id: Optional[str] = None
     confirm_scope: Optional[str] = None  # 'once' | 'project' | 'always'
     allow_risky: Optional[bool] = False  # l'utilisateur a confirmé une capacité à risque (subprocess/réseau)
+    once_caps: Optional[list] = None  # capacités accordées POUR CE LANCEMENT seulement (non persistées)
 
 @app.post("/api/coanimm/run_code_direct")
 async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
@@ -1262,7 +1263,9 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
     # si rien n'est accordé, _missing == _caps et le comportement reste identique).
     _caps_needing = set(capabilities_of(req.code)) & {"reseau", "programme", "email"}
     _granted_caps = set(_db.list_coanimm_capabilities())
-    _missing_caps = _caps_needing - _granted_caps
+    _once_caps = set(getattr(req, "once_caps", None) or []) & {"reseau", "programme", "email"}
+    _effective_caps = _granted_caps | _once_caps  # durables + « pour cette fois »
+    _missing_caps = _caps_needing - _effective_caps
     if _risks["needs_confirmation"] and not getattr(req, "allow_risky", False) and _missing_caps:
         return JSONResponse({"status": "confirmation_required",
             "reasons": _risks["needs_confirmation"],
@@ -1273,7 +1276,7 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
     os.makedirs(workdir, exist_ok=True)
     prologue = _build_prologue(req.thread_id, workdir)
     _allowed = _db.list_coanimm_paths()
-    guard = build_guard_prologue(_allowed, allow_network=(bool(getattr(req, "allow_risky", False)) or ("reseau" in _granted_caps)))
+    guard = build_guard_prologue(_allowed, allow_network=(bool(getattr(req, "allow_risky", False)) or ("reseau" in _effective_caps)))
     full_code = guard + "\n" + ((prologue + "\n" + req.code) if prologue else req.code)
     before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
 
@@ -1662,6 +1665,17 @@ async def coanimm_history_clear():
     import core.database as _db
     _db.clear_coanimm_history()
     return {"status": "ok", "history": []}
+
+class CoanimmWfFromHistoryReq(BaseModel):
+    consignes: list = []
+
+@app.post("/api/coanimm/workflow_from_history")
+async def coanimm_workflow_from_history(req: CoanimmWfFromHistoryReq):
+    """Fait correspondre des consignes (tâches de l'historique) aux skills validés
+    les plus proches, pour PRÉ-composer un workflow. N'enregistre rien : renvoie la
+    correspondance ; l'utilisateur valide ensuite dans le compositeur de workflow."""
+    from modules.coanimm import match_skills_for_consignes
+    return {"status": "ok", "matches": match_skills_for_consignes(req.consignes or [])}
 
 class CoanimmCapabilityRequest(BaseModel):
     capability: str
