@@ -88,29 +88,57 @@ def ingest_text(titre, texte, source="texte", expiration=None):
 
 
 def search_documents(query, k=5):
-    """Recherche par sens dans les passages des documents ingérés.
-    Retourne une liste de dicts {titre, source, passage, score}, [] si rien
-    (ou si les embeddings sont indisponibles)."""
+    """Recherche dans les passages des documents ingérés (base de connaissances locale).
+    Essaie d'abord la recherche par SENS (embeddings) ; si le modèle n'est pas disponible
+    (option « recherche par sens » désactivée), REPLI automatique sur le recouvrement de
+    mots-clés — la base reste donc utilisable hors-ligne. Retourne une liste de dicts
+    {titre, source, passage, score, mode}, [] si rien."""
+    from core.database import get_all_reference_chunks
+    chunks = get_all_reference_chunks()
+    if not chunks:
+        return []
+
+    # 1) Recherche sémantique (si les embeddings sont disponibles)
     try:
         from modules.memory import _embed, _parse_embedding, _cosine
+        qv = _embed(query)
     except Exception:
+        qv = None
+    if qv is not None:
+        scored = []
+        for ch in chunks:
+            rv, _m = _parse_embedding(ch.get("embedding"))
+            if rv is None:
+                continue
+            scored.append((_cosine(qv, rv), ch))
+        if scored:
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return [{
+                "titre":   ch.get("titre"),
+                "source":  ch.get("source"),
+                "passage": ch.get("content"),
+                "score":   round(float(s), 3),
+                "mode":    "semantic",
+            } for (s, ch) in scored[:k]]
+
+    # 2) Repli mots-clés (embeddings indisponibles ou chunks non vectorisés)
+    import re as _re
+    mots = set(m for m in _re.findall(r"\w+", (query or "").lower()) if len(m) > 2)
+    if not mots:
         return []
-    qv = _embed(query)
-    if qv is None:
-        return []
-    from core.database import get_all_reference_chunks
     scored = []
-    for ch in get_all_reference_chunks():
-        rv, _m = _parse_embedding(ch.get("embedding"))
-        if rv is None:
-            continue
-        scored.append((_cosine(qv, rv), ch))
+    for ch in chunks:
+        hay = (ch.get("content") or "").lower()
+        score = sum(1 for m in mots if m in hay)
+        if score > 0:
+            scored.append((score, ch))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [{
         "titre":   ch.get("titre"),
         "source":  ch.get("source"),
         "passage": ch.get("content"),
-        "score":   round(float(s), 3),
+        "score":   int(s),
+        "mode":    "keyword",
     } for (s, ch) in scored[:k]]
 
 

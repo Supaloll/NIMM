@@ -105,7 +105,7 @@ def classify_for_execution(code: str) -> dict:
 
 CAPABILITY_LABELS = {
     'ecriture':       "écrit, déplace ou supprime des fichiers",
-    'recherche':      "fait une recherche web ou GitHub (via NIMM, sans sortir du bac à sable)",
+    'recherche':      "consulte une ressource (recherche web/GitHub, lecture d'une page, base de connaissances, sous-tâche IA) via NIMM, sans sortir du bac à sable",
     'image':          "génère une image",
     'reseau':         "ouvre des connexions réseau brutes",
     'programme':      "lance d'autres programmes",
@@ -126,7 +126,10 @@ _CAP_IMPORTS = {
 # Appels aux helpers NIMM injectés (réseau confiné via localhost) -> capacités douces
 _CAP_HELPER_CALLS = {
     'nimm_web_search': 'recherche', 'nimm_github_search': 'recherche',
-    'nimm_generate_image': 'image',
+    'nimm_search_documents': 'recherche', 'nimm_read_url': 'recherche',
+    'nimm_ask_llm': 'recherche', 'nimm_translate': 'recherche', 'nimm_expurgate': 'recherche',
+    'nimm_describe_image': 'recherche',
+    'nimm_generate_image': 'image', 'nimm_coloring_page': 'image',
 }
 # Appels (obj, attr) qui écrivent/déplacent/suppriment
 _WRITE_ATTR_CALLS = {
