@@ -1258,21 +1258,20 @@ def _match_bibliotheque(user_message: str) -> str:
         return ''
 
 
-def _match_documents(user_message: str) -> str:
+def _match_documents(user_message: str):
     """Récupère proactivement les passages les plus pertinents des documents ingérés
-    (base de connaissances locale) pour les injecter dans le system prompt. Complète
-    l'outil search_documents (pull) par une injection (push), comme _match_bibliotheque.
-    Renvoie '' si aucun document, aucun passage assez pertinent, ou en cas d'erreur."""
+    (base de connaissances locale). Renvoie un tuple (doc_context, titres) :
+    - doc_context = texte à injecter dans le system prompt ('' si rien) ;
+    - titres = liste ordonnée et dédoublonnée des documents retenus (pour citation).
+    Complète l'outil search_documents (pull) par une injection (push)."""
     try:
         msg = (user_message or '').strip()
         if len(msg) < 4:
-            return ''
+            return '', []
         from modules.enrichissement import search_documents
         passages = search_documents(msg, k=3)
         if not passages:
-            return ''
-        # Garde-fou de pertinence : éviter d'injecter du bruit.
-        # Sémantique : cosinus >= 0.32 ; repli mots-clés : recouvrement >= 2.
+            return '', []
         retenus = []
         for pp in passages:
             sc = pp.get('score', 0) or 0
@@ -1282,18 +1281,20 @@ def _match_documents(user_message: str) -> str:
             elif sc >= 0.32:
                 retenus.append(pp)
         if not retenus:
-            return ''
-        blocs = []
+            return '', []
+        blocs, titres = [], []
         for pp in retenus:
             titre = pp.get('titre') or 'Document'
             src = pp.get('source') or ''
             entete = ('[' + titre + (' — ' + src + ']' if src else ']'))
             blocs.append(entete + '\n' + (pp.get('passage') or '').strip()[:1200])
+            if titre not in titres:
+                titres.append(titre)
         print(f"[HUB] 📄 Documents match -> {len(blocs)} passage(s)")
-        return '\n\n'.join(blocs)
+        return '\n\n'.join(blocs), titres
     except Exception as e:
         print(f"[HUB] Erreur match_documents : {e}")
-        return ''
+        return '', []
 
 
 def recall_bibliotheque(query: str, limit: int = 3) -> str:
@@ -2384,7 +2385,7 @@ async def process_message(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
-    doc_context = _match_documents(user_message)
+    doc_context, _doc_titles = _match_documents(user_message)
     system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context)
 
     # 7. Historique recent (60 derniers messages)
@@ -2529,6 +2530,8 @@ async def process_message(
                 print(f"[HUB] Erreur sauvegarde anecdote: {e}")
 
     # 14. Sauvegarder les messages
+    if _doc_titles:
+        reply = (reply or "") + "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
     add_message(thread_id, 'user',      user_message)
     add_message(thread_id, 'assistant', reply)
 
@@ -2652,7 +2655,7 @@ async def process_message_stream(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
-    doc_context = _match_documents(user_message)
+    doc_context, _doc_titles = _match_documents(user_message)
     system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context)
 
     # 4. Historique
@@ -2836,6 +2839,10 @@ async def process_message_stream(
             except Exception as e:
                 print(f"[HUB] Erreur sauvegarde anecdote (stream): {e}")
 
+    if _doc_titles:
+        _doc_footer = "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
+        reply = (reply or "") + _doc_footer
+        yield f"data: {_doc_footer}\n\n"
     add_message(thread_id, 'assistant', reply)
 
     # Mood — stocker le dominant pour le prochain tour
