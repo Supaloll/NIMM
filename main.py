@@ -1805,6 +1805,7 @@ _COANIMM_TOOLS = [
     {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
+    {"tool": "transcribe", "label": "Transcrire un audio", "category": "Documents"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
     {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
     {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
@@ -2078,6 +2079,30 @@ async def coanimm_make_document(req: CoanimmMakeDocReq):
         return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
     print(f"[COANIMM] Document généré → {filepath}")
     return {"status": "ok", "filepath": filepath, "filename": filename}
+
+class CoanimmTranscribeReq(BaseModel):
+    path: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/transcribe")
+async def coanimm_transcribe(req: CoanimmTranscribeReq):
+    """Transcrit un fichier audio (Whisper local) pour un script CoaNIMM. Lecture seule, local."""
+    import core.database as _db, os as _os, asyncio as _aio, functools as _ft
+    if "transcribe" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil transcription désactivé dans les réglages CoaNIMM]"}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"result": f"[Fichier introuvable : {path}]"}
+    try:
+        stt = get_stt()
+        res = await _aio.get_event_loop().run_in_executor(None, _ft.partial(stt.transcribe_file, path))
+    except Exception as e:
+        return {"result": f"[Erreur transcription : {e}]"}
+    if isinstance(res, dict):
+        if res.get("status") == "ok":
+            return {"result": (res.get("text", "") or "")[:16000]}
+        return {"result": "[Erreur transcription : " + str(res.get("message") or res.get("error") or "?") + "]"}
+    return {"result": str(res)[:16000]}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
