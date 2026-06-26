@@ -150,9 +150,11 @@ GENERATE_SYSTEM_PROMPT = (
     "  Crée un DOCUMENT ACCESSIBLE (titres, langue, images décrites) et retourne son chemin. "
     "fmt : docx, pdf, epub, pptx, html, txt. sections : liste de dicts {'titre':..., 'texte':..., "
     "'image': chemin, 'alt': description}. Utilise html pour un contenu à coller dans un e-mail.\n"
+    "  nimm_transcribe(audio_path: str) -> str\n"
+    "  Transcrit un fichier audio (voix → texte) via Whisper local et retourne le texte.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
-    "nimm_expurgate, nimm_coloring_page, nimm_make_document) : "
+    "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -408,6 +410,16 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    return _res[\"filepath\"]\n"
     ) % tid
     parts.append(md if "make_document" not in _disabled else _stub("nimm_make_document", "creer un document"))
+    tx = (
+        "def nimm_transcribe(audio_path, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": audio_path, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/transcribe\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=600) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(tx if "transcribe" not in _disabled else _stub("nimm_transcribe", "transcrire un audio"))
     return "".join(parts)
 
 
