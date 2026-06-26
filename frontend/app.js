@@ -7233,6 +7233,32 @@ function _coanimmShowPermission(label) {
     setTimeout(() => { document.getElementById('coanimm-allow-once')?.focus(); }, 50);
 }
 
+// Copie le contenu d'un fichier HTML produit dans le presse-papier, en conservant
+// la mise en forme (text/html) + un repli texte simple — pour coller dans une messagerie.
+async function _coanimmCopyHtmlFile(url) {
+    try {
+        const resp = await fetch(url);
+        const html = await resp.text();
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        const plain = (tmp.textContent || tmp.innerText || '').trim();
+        if (navigator.clipboard && window.ClipboardItem) {
+            await navigator.clipboard.write([new ClipboardItem({
+                'text/html': new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([plain], { type: 'text/plain' }),
+            })]);
+            _coanimmAnnounce('Contenu copié avec sa mise en forme. Collez-le dans votre messagerie.');
+        } else if (navigator.clipboard) {
+            await navigator.clipboard.writeText(plain);
+            _coanimmAnnounce('Contenu copié en texte simple (mise en forme non disponible dans ce navigateur).');
+        } else {
+            _coanimmAnnounce("La copie automatique n'est pas disponible dans ce navigateur.");
+        }
+    } catch (e) {
+        _coanimmAnnounce('Échec de la copie : ' + (e && e.message ? e.message : 'erreur'));
+    }
+}
+
 // Affiche les liens de fichiers produits par le script
 function _coanimmShowFiles(filesList) {
     const filesDiv = document.getElementById('coanimm-result-files');
@@ -7251,6 +7277,15 @@ function _coanimmShowFiles(filesList) {
         a.style.cssText = 'display:block;margin:2px 0;font-size:0.85rem;color:var(--accent,#6ea8fe);';
         a.setAttribute('download', f.filename);
         filesDiv.appendChild(a);
+        if (/\.html?$/i.test(f.filename)) {
+            const cp = document.createElement('button');
+            cp.type = 'button';
+            cp.textContent = 'Copier (mise en forme)';
+            cp.setAttribute('aria-label', 'Copier le contenu de ' + f.filename + ' avec sa mise en forme, pour le coller dans votre messagerie');
+            cp.style.cssText = 'display:block;margin:0 0 4px;font-size:0.8rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+            cp.addEventListener('click', () => _coanimmCopyHtmlFile(f.url));
+            filesDiv.appendChild(cp);
+        }
     });
     filesDiv.removeAttribute('hidden');
     _coanimmAnnounce(filesList.length + ' fichier(s) produit(s) disponible(s) en téléchargement.');
@@ -7327,6 +7362,15 @@ function _coanimmShowResult(data, label) {
                 a.style.cssText = 'display:block;margin:2px 0;font-size:0.85rem;color:var(--accent,#6ea8fe);';
                 a.setAttribute('download', f.filename);
                 filesDiv.appendChild(a);
+                if (/\.html?$/i.test(f.filename)) {
+                    const cp = document.createElement('button');
+                    cp.type = 'button';
+                    cp.textContent = 'Copier (mise en forme)';
+                    cp.setAttribute('aria-label', 'Copier le contenu de ' + f.filename + ' avec sa mise en forme, pour le coller dans votre messagerie');
+                    cp.style.cssText = 'display:block;margin:0 0 4px;font-size:0.8rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+                    cp.addEventListener('click', () => _coanimmCopyHtmlFile(f.url));
+                    filesDiv.appendChild(cp);
+                }
             });
             filesDiv.removeAttribute('hidden');
         } else {
