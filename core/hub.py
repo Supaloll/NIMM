@@ -645,7 +645,7 @@ _(Pour chaque reponse, je corrigerai automatiquement ma memoire.)_"""
 # CONSTRUCTION DU PROMPT SYSTÈME
 # ══════════════════════════════════════════
 
-def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = None, presence_note: str = '', last_dominant: str = '', user_name: str = '', biblio_context: str = '', force_mem: bool = False, recent_messages: list = None, location: str = '', session_bilans: list = None) -> str:
+def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = None, presence_note: str = '', last_dominant: str = '', user_name: str = '', biblio_context: str = '', force_mem: bool = False, recent_messages: list = None, location: str = '', session_bilans: list = None, doc_context: str = '') -> str:
     parts = []
 
     # Prompt du masque
@@ -965,6 +965,11 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
     if biblio_context:
         parts.append(f"\n--- Conversations passées sur ce sujet ---\n{biblio_context}")
 
+    # Base de connaissances — extraits pertinents des documents ingérés
+    if doc_context:
+        parts.append(f"\n--- Extraits de tes documents (base de connaissances) ---\n{doc_context}\n"
+                     "(Utilise ces extraits s'ils sont pertinents pour la demande ; cite le titre du document.)")
+
     # SONDE couvert par le lexique — rappel des outils disponibles uniquement
     parts.append(
         '\n--- Outils disponibles ---\n'
@@ -1250,6 +1255,44 @@ def _match_bibliotheque(user_message: str) -> str:
 
     except Exception as e:
         print(f"[HUB] Erreur match_bibliotheque : {e}")
+        return ''
+
+
+def _match_documents(user_message: str) -> str:
+    """Récupère proactivement les passages les plus pertinents des documents ingérés
+    (base de connaissances locale) pour les injecter dans le system prompt. Complète
+    l'outil search_documents (pull) par une injection (push), comme _match_bibliotheque.
+    Renvoie '' si aucun document, aucun passage assez pertinent, ou en cas d'erreur."""
+    try:
+        msg = (user_message or '').strip()
+        if len(msg) < 4:
+            return ''
+        from modules.enrichissement import search_documents
+        passages = search_documents(msg, k=3)
+        if not passages:
+            return ''
+        # Garde-fou de pertinence : éviter d'injecter du bruit.
+        # Sémantique : cosinus >= 0.32 ; repli mots-clés : recouvrement >= 2.
+        retenus = []
+        for pp in passages:
+            sc = pp.get('score', 0) or 0
+            if pp.get('mode') == 'keyword':
+                if sc >= 2:
+                    retenus.append(pp)
+            elif sc >= 0.32:
+                retenus.append(pp)
+        if not retenus:
+            return ''
+        blocs = []
+        for pp in retenus:
+            titre = pp.get('titre') or 'Document'
+            src = pp.get('source') or ''
+            entete = ('[' + titre + (' — ' + src + ']' if src else ']'))
+            blocs.append(entete + '\n' + (pp.get('passage') or '').strip()[:1200])
+        print(f"[HUB] 📄 Documents match -> {len(blocs)} passage(s)")
+        return '\n\n'.join(blocs)
+    except Exception as e:
+        print(f"[HUB] Erreur match_documents : {e}")
         return ''
 
 
@@ -2341,7 +2384,8 @@ async def process_message(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
-    system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans)
+    doc_context = _match_documents(user_message)
+    system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context)
 
     # 7. Historique recent (60 derniers messages)
     history = get_messages(thread_id, limit=60)
@@ -2608,7 +2652,8 @@ async def process_message_stream(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
-    system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans)
+    doc_context = _match_documents(user_message)
+    system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context)
 
     # 4. Historique
     history  = get_messages(thread_id, limit=60)
