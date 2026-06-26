@@ -1804,6 +1804,7 @@ _COANIMM_TOOLS = [
     {"tool": "read_url", "label": "Lire une page web", "category": "Recherche & web"},
     {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
+    {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub)", "category": "Documents"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
     {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
     {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
@@ -2042,6 +2043,40 @@ async def coanimm_coloring_page(req: CoanimmColoringReq):
     except Exception as e:
         return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
     print(f"[COANIMM] Coloriage généré → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename}
+
+class CoanimmMakeDocReq(BaseModel):
+    title: str = ""
+    sections: list = []
+    fmt: str = "docx"
+    lang: str = "fr"
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/make_document")
+async def coanimm_make_document(req: CoanimmMakeDocReq):
+    """Crée un document ACCESSIBLE (docx/pdf/epub/html/txt) dans le workspace CoaNIMM."""
+    import core.database as _db, os as _os, time as _time, re as _re
+    if "make_document" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil création de document désactivé dans les réglages CoaNIMM."}
+    try:
+        from modules.accessible_doc import build_document
+        from modules.coanimm import _workspace_dir
+        data, ext = build_document(req.title or "Document", req.sections or [], fmt=req.fmt or "docx", lang=req.lang or "fr")
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur création document : {e}"}
+    workdir = _workspace_dir(req.thread_id)
+    _os.makedirs(workdir, exist_ok=True)
+    base = _re.sub(r"[^\w\-]+", "_", (req.title or "document").strip())[:50] or "document"
+    filename = f"{base}_{int(_time.time())}.{ext}"
+    filepath = _os.path.join(workdir, filename)
+    try:
+        with open(filepath, "wb") as _f:
+            _f.write(data)
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
+    print(f"[COANIMM] Document généré → {filepath}")
     return {"status": "ok", "filepath": filepath, "filename": filename}
 
 
