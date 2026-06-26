@@ -4821,10 +4821,10 @@ async function _loadGhostMode(threadId) {
 (function setupGhostToggle() {
     const btn = document.createElement('button');
     btn.id        = 'ghost-toggle';
-    btn.title     = 'Mode confidentiel — mémoire et carnet de bord désactivés pour ce fil (aucune trace)';
+    btn.title     = 'Mode fantôme — mémoire et carnet de bord désactivés pour ce fil (aucune trace)';
     btn.className = 'topbar-icon-btn';
     btn.textContent = '👻';
-    btn.setAttribute('aria-label', 'Mode confidentiel (mémoire et carnet désactivés pour ce fil)');
+    btn.setAttribute('aria-label', 'Mode fantôme (mémoire et carnet désactivés pour ce fil)');
     btn.setAttribute('aria-pressed', 'false');
     btn.addEventListener('click', async () => {
         if (!currentThreadId) return;
@@ -4835,8 +4835,8 @@ async function _loadGhostMode(threadId) {
             btn.classList.toggle('active', _ghostMode);
             btn.setAttribute('aria-pressed', _ghostMode ? 'true' : 'false');
             if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_ghostMode
-                ? 'Mode confidentiel activé : ce fil ne laissera aucune trace, ni mémoire, ni carnet.'
-                : 'Mode confidentiel désactivé.');
+                ? 'Mode fantôme activé : ce fil ne laissera aucune trace, ni mémoire, ni carnet.'
+                : 'Mode fantôme désactivé.');
         } catch(e) {}
     });
     const topRight = document.getElementById('top-right');

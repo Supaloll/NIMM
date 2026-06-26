@@ -1802,6 +1802,10 @@ _COANIMM_TOOLS = [
     {"tool": "web", "label": "Recherche web"},
     {"tool": "github", "label": "Recherche GitHub"},
     {"tool": "image", "label": "Génération d'image"},
+    {"tool": "doc_search", "label": "Consulter la base de connaissances"},
+    {"tool": "extract_text", "label": "Extraire le texte d'un document"},
+    {"tool": "ask_llm", "label": "Sous-tâche IA"},
+    {"tool": "read_url", "label": "Lire une page web"},
 ]
 
 class CoanimmToolToggleReq(BaseModel):
@@ -1824,6 +1828,107 @@ async def coanimm_tools_toggle(req: CoanimmToolToggleReq):
     if req.tool not in {t["tool"] for t in _COANIMM_TOOLS}:
         raise HTTPException(400, "Outil inconnu.")
     return {"status": "ok", "disabled": _db.set_coanimm_tool_enabled(req.tool, req.enabled)}
+
+# ── Outils CoaNIMM additionnels (lecture seule / local) ──
+class CoanimmDocSearchReq(BaseModel):
+    query: str = ""
+    thread_id: Optional[str] = None
+class CoanimmExtractTextReq(BaseModel):
+    path: str = ""
+    thread_id: Optional[str] = None
+class CoanimmAskLlmReq(BaseModel):
+    prompt: str = ""
+    system: str = ""
+    thread_id: Optional[str] = None
+class CoanimmReadUrlReq(BaseModel):
+    url: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/doc_search")
+async def coanimm_doc_search(req: CoanimmDocSearchReq):
+    """Interroge la base de connaissances (RAG) pour un script CoaNIMM. Local."""
+    import core.database as _db
+    if "doc_search" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil base de connaissances désactivé dans les réglages CoaNIMM]"}
+    from modules.enrichissement import search_documents
+    q = (req.query or "").strip()
+    if not q:
+        return {"result": "(requête vide)"}
+    passages = search_documents(q, k=5)
+    if not passages:
+        return {"result": "[Aucun document ne correspond à cette requête.]"}
+    blocs = []
+    for pp in passages:
+        titre = pp.get("titre") or "Document"
+        src = pp.get("source") or ""
+        blocs.append(f"[{titre} — {src}]\n{pp.get('passage', '')}")
+    return {"result": "\n\n".join(blocs)[:6000]}
+
+@app.post("/api/coanimm/extract_text")
+async def coanimm_extract_text(req: CoanimmExtractTextReq):
+    """Extrait le texte d'un document (PDF/Word/ODT/RTF/EPUB/HTML/image+OCR). Lecture seule."""
+    import core.database as _db, os as _os, asyncio as _aio, functools as _ft
+    if "extract_text" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil extraction de texte désactivé dans les réglages CoaNIMM]"}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"result": f"[Fichier introuvable : {path}]"}
+    try:
+        from modules.enrichissement import extract_any, mistral_key_from_settings
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        mkey = mistral_key_from_settings(settings)
+        text = await _aio.get_event_loop().run_in_executor(
+            None, _ft.partial(extract_any, path, _os.path.basename(path), mistral_key=mkey))
+    except Exception as e:
+        return {"result": f"[Erreur extraction : {e}]"}
+    return {"result": (text or "")[:200000]}
+
+@app.post("/api/coanimm/ask_llm")
+async def coanimm_ask_llm(req: CoanimmAskLlmReq):
+    """Sous-tâche IA pour un script CoaNIMM : résumer/classer/traduire. Provider configuré."""
+    import core.database as _db
+    if "ask_llm" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil sous-tâche IA désactivé dans les réglages CoaNIMM]"}
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        return {"result": "(prompt vide)"}
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        out = await call_llm(
+            messages=[{"role": "user", "content": prompt[:12000]}],
+            provider=settings.get("provider", "deepseek"),
+            model=settings.get("model"),
+            system_prompt=(req.system or "Tu es un assistant concis et factuel.")[:2000],
+            max_tokens=1500,
+            temperature=0.3,
+            api_keys=settings.get("api_keys", {}),
+        )
+    except Exception as e:
+        return {"result": f"[Erreur sous-tâche IA : {e}]"}
+    return {"result": (out or "")[:8000]}
+
+@app.post("/api/coanimm/read_url")
+async def coanimm_read_url(req: CoanimmReadUrlReq):
+    """Extrait le texte principal d'une URL précise (anti-SSRF via net_guard)."""
+    import core.database as _db, asyncio as _aio, functools as _ft
+    if "read_url" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil lecture de page web désactivé dans les réglages CoaNIMM]"}
+    url = (req.url or "").strip()
+    if not url:
+        return {"result": "(URL vide)"}
+    try:
+        from modules.enrichissement import extract_url
+        titre, texte = await _aio.get_event_loop().run_in_executor(
+            None, _ft.partial(extract_url, url))
+    except Exception as e:
+        return {"result": f"[Erreur lecture URL : {e}]"}
+    if not texte:
+        return {"result": "[Aucun contenu exploitable à cette adresse.]"}
+    head = (f"# {titre}\n" if titre else "")
+    return {"result": (head + texte)[:8000]}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
