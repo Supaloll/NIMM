@@ -43,7 +43,7 @@ _PROVIDER_DEFAULT_MODEL = {
     'openai':     'gpt-4o-mini',
     'openrouter': 'openai/gpt-4o-mini',
     'mistral':    'mistral-small-latest',
-    'gemini':     'gemini-1.5-flash',
+    'gemini':     'gemini-3.5-flash',
     'ollama':     'llama3.1:8b',
 }
 
@@ -385,7 +385,7 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
     if not api_key:
         raise ValueError("Clé API Gemini manquante.")
 
-    model = model or 'gemini-2.0-flash'
+    model = model or 'gemini-3.5-flash'
 
     payload = {
         'contents': _oai_msgs_to_gemini(messages),
@@ -418,7 +418,7 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
         raise ValueError("Clé API Gemini manquante.")
-    model = model or 'gemini-2.0-flash'
+    model = model or 'gemini-3.5-flash'
 
     payload = {
         'contents': _oai_msgs_to_gemini(messages),
@@ -610,7 +610,7 @@ async def call_gemini_vision(image_b64: str, media_type: str, prompt: str, api_k
     }
     async with httpx.AsyncClient(timeout=300) as client:
         r = await client.post(
-            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}',
+            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}',
             json=payload
         )
         r.raise_for_status()
@@ -1156,14 +1156,14 @@ async def _generate_stability(prompt: str, api_keys: dict) -> dict:
 
 
 async def _generate_gemini_image(prompt: str, api_keys: dict) -> dict:
-    """Generation d'image via Gemini 2.5 Flash Image (Nano Banana)."""
+    """Generation d'image via Gemini 3.1 Flash Image (Nano Banana 2)."""
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
         raise ValueError("Cle API Gemini manquante (necessaire pour la generation d'image).")
 
     async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(
-            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}',
+            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent?key={api_key}',
             headers={'Content-Type': 'application/json'},
             json={
                 'contents': [{'parts': [{'text': prompt}]}],
@@ -1179,14 +1179,14 @@ async def _generate_gemini_image(prompt: str, api_keys: dict) -> dict:
 
 
 async def edit_gemini_image(prompt: str, image_b64: str, api_keys: dict) -> dict:
-    """Retouche d'une image existante via Gemini 2.5 Flash Image."""
+    """Retouche d'une image existante via Gemini 3.1 Flash Image."""
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
         raise ValueError("Clé API Gemini manquante pour la retouche d'image.")
 
     async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(
-            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}',
+            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent?key={api_key}',
             headers={'Content-Type': 'application/json'},
             json={
                 'contents': [{

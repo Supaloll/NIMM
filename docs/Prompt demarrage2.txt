@@ -1,0 +1,62 @@
+Bonjour Claude.
+
+Je suis Laurent, créateur du projet NIMM.
+
+CONTEXTE :
+Tu as accès aux fichiers du projet dans "Project files" :
+- ARCHITECTURE.md (état réel du code — à lire en priorité)
+- DESIGN.md (conception et décisions d'architecture)
+- Fichiers sources principaux
+
+CONVENTIONS DE CODE :
+- Standards des langages (PEP8 Python, camelCase JS, kebab-case CSS)
+- Indentation : celle du fichier existant
+- En cas de doute, suis le code autour
+
+RÈGLES D'ARCHITECTURE (critiques) :
+1. TOUT passe par core/hub.py — aucun module ne parle à un autre directement
+2. La mémoire n'est écrite QUE par le worker (memory_worker()) — jamais par le LLM de chat
+3. Les outils sont déclarés dans NIMM_TOOLS et exécutés via _execute_tool()
+4. Les embeddings sont calculés avec _embed() — jamais directement dans un module
+5. Le system prompt est assemblé par build_system_prompt() — ordre strict
+6. Les imports : d'abord les librairies tierces, puis les modules internes
+
+WORKFLOW :
+
+⚠️ DEUX PHASES DE COMMUNICATION :
+
+PHASE 1 — DISCUSSION (avec Laurent) :
+- Langage naturel, questions, validation
+- Tu me parles à MOI (2e personne)
+- Pas de code, pas de FIND/REPLACE
+- On explore, on valide l'approche ensemble
+
+PHASE 2 — PRODUCTION (pour Cline) :
+- Quand je dis "On passe au code" ou que tu estimes avoir assez d'infos pour, tu PASSES EN MODE CLINE
+- Tu t'adresses DIRECTEMENT à Cline (2e personne)
+- Pas de "dis à Cline" — parle-lui directement
+- Tu marques le début par : --- DÉBUT POUR CLINE ---
+- Tu marques la fin par : --- FIN POUR CLINE ---
+- Entre ces deux marqueurs, TOUT est destiné à Cline
+- Je copie-colle intégralement, je ne nettoie rien
+
+FORMAT STRICT DES BLOCS (Phase 2) :
+
+⚠️ ## Bloc #XX
+➡️ fichier cible : [filename]
+**FIND**
+[texte exact]
+**REPLACE**
+[remplacement]
+
+RÈGLES COMPLÉMENTAIRES :
+- UN bloc à la fois, confirmation entre chaque
+- Après chaque bloc, je t'envoie le [Task Completed] de Cline.
+- Les blocs doivent être livrés dans l'ordre des dépendances
+- Cache-busting : en fin de session, mettre à jour ?v=YYYYMMDD dans index.html (2 occurrences : styles.css et app.js). Utiliser la date du jour. Si plusieurs sessions le même jour : 20250531-1, 20250531-2, etc. Incrémenter même sans changement de fichier.
+
+AUJOURD'HUI : 
+
+---
+
+Commence par me confirmer que tu as bien lu ARCHITECTURE.md, DESIGN.md et les fichiers utiles pour la session, puis on discute de ce que je veux implémenter/modifier.
