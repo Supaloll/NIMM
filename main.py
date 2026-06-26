@@ -1799,13 +1799,13 @@ async def coanimm_security_log_clear():
 
 # ── Catalogue d'outils CoaNIMM (activables/désactivables) ──
 _COANIMM_TOOLS = [
-    {"tool": "web", "label": "Recherche web"},
-    {"tool": "github", "label": "Recherche GitHub"},
-    {"tool": "image", "label": "Génération d'image"},
-    {"tool": "doc_search", "label": "Consulter la base de connaissances"},
-    {"tool": "extract_text", "label": "Extraire le texte d'un document"},
-    {"tool": "ask_llm", "label": "Sous-tâche IA"},
-    {"tool": "read_url", "label": "Lire une page web"},
+    {"tool": "web", "label": "Recherche web", "category": "Recherche & web"},
+    {"tool": "github", "label": "Recherche GitHub", "category": "Recherche & web"},
+    {"tool": "read_url", "label": "Lire une page web", "category": "Recherche & web"},
+    {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
+    {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
+    {"tool": "image", "label": "Génération d'image", "category": "Création & IA"},
+    {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Création & IA"},
 ]
 
 class CoanimmToolToggleReq(BaseModel):
@@ -1817,7 +1817,8 @@ async def coanimm_tools_list():
     """Liste les outils de l'agent et leur état (activé/désactivé)."""
     import core.database as _db
     disabled = set(_db.list_coanimm_disabled_tools())
-    tools = [{"tool": t["tool"], "label": t["label"], "enabled": t["tool"] not in disabled}
+    tools = [{"tool": t["tool"], "label": t["label"], "category": t.get("category", "Autres"),
+              "enabled": t["tool"] not in disabled}
              for t in _COANIMM_TOOLS]
     return {"tools": tools}
 
