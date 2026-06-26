@@ -146,9 +146,13 @@ GENERATE_SYSTEM_PROMPT = (
     "  nimm_coloring_page(subject: str) -> str\n"
     "  Génère un COLORIAGE (dessin au trait noir et blanc, pour enfants) sur le sujet donné "
     "et retourne le chemin du PNG.\n"
+    "  nimm_make_document(title: str, sections: list, fmt: str = 'docx', lang: str = 'fr') -> str\n"
+    "  Crée un DOCUMENT ACCESSIBLE (titres, langue, images décrites) et retourne son chemin. "
+    "fmt : docx, pdf, epub, html, txt. sections : liste de dicts {'titre':..., 'texte':..., "
+    "'image': chemin, 'alt': description}. Utilise html pour un contenu à coller dans un e-mail.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
-    "nimm_expurgate, nimm_coloring_page) : "
+    "nimm_expurgate, nimm_coloring_page, nimm_make_document) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -391,6 +395,19 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     parts.append(tr if "translate" not in _disabled else _stub("nimm_translate", "traduire"))
     parts.append(exp if "expurgate" not in _disabled else _stub("nimm_expurgate", "expurger un texte"))
     parts.append(col if "coloring" not in _disabled else _stub("nimm_coloring_page", "coloriage"))
+    md = (
+        "def nimm_make_document(title, sections, fmt='docx', lang='fr', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"title\": title, \"sections\": sections, \"fmt\": fmt, \"lang\": lang, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/make_document\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_make_document : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    parts.append(md if "make_document" not in _disabled else _stub("nimm_make_document", "creer un document"))
     return "".join(parts)
 
 
