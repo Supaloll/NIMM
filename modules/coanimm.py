@@ -152,9 +152,14 @@ GENERATE_SYSTEM_PROMPT = (
     "'image': chemin, 'alt': description}. Utilise html pour un contenu à coller dans un e-mail.\n"
     "  nimm_transcribe(audio_path: str) -> str\n"
     "  Transcrit un fichier audio (voix → texte) via Whisper local et retourne le texte.\n"
+    "  nimm_speak(text: str, voice: str = '') -> str\n"
+    "  Synthétise un texte en AUDIO (TTS) et retourne le chemin du fichier son. Pour un livre audio.\n"
+    "  nimm_describe_image(path: str, prompt: str = '') -> str\n"
+    "  Décrit une image (texte alternatif accessible) via le modèle de vision et retourne le texte.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
-    "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe) : "
+    "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
+    "nimm_describe_image) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -420,6 +425,29 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
     parts.append(tx if "transcribe" not in _disabled else _stub("nimm_transcribe", "transcrire un audio"))
+    sp = (
+        "def nimm_speak(text, voice='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"text\": text, \"voice\": voice, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/speak\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_speak : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    di = (
+        "def nimm_describe_image(path, prompt='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": path, \"prompt\": prompt, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/describe_image\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(sp if "speak" not in _disabled else _stub("nimm_speak", "donner la voix"))
+    parts.append(di if "describe_image" not in _disabled else _stub("nimm_describe_image", "decrire une image"))
     return "".join(parts)
 
 

@@ -1805,12 +1805,14 @@ _COANIMM_TOOLS = [
     {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
-    {"tool": "transcribe", "label": "Transcrire un audio", "category": "Documents"},
+    {"tool": "transcribe", "label": "Transcrire un audio", "category": "Audio & voix"},
+    {"tool": "speak", "label": "Donner la voix (texte → audio)", "category": "Audio & voix"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
     {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
     {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
     {"tool": "image", "label": "Génération d'image", "category": "Images"},
     {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
+    {"tool": "describe_image", "label": "Décrire une image", "category": "Images"},
 ]
 
 class CoanimmToolToggleReq(BaseModel):
@@ -2103,6 +2105,74 @@ async def coanimm_transcribe(req: CoanimmTranscribeReq):
             return {"result": (res.get("text", "") or "")[:16000]}
         return {"result": "[Erreur transcription : " + str(res.get("message") or res.get("error") or "?") + "]"}
     return {"result": str(res)[:16000]}
+
+class CoanimmSpeakReq(BaseModel):
+    text: str = ""
+    voice: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/speak")
+async def coanimm_speak(req: CoanimmSpeakReq):
+    """Synthétise un texte en audio (TTS) et l'enregistre dans le workspace CoaNIMM."""
+    import core.database as _db, os as _os, time as _time, asyncio as _aio, functools as _ft
+    if "speak" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil synthèse vocale désactivé dans les réglages CoaNIMM."}
+    text = (req.text or "").strip()
+    if not text:
+        return {"status": "error", "message": "Le texte est vide."}
+    try:
+        from modules.tts import synthesize, DEFAULT_VOICE
+        from modules.coanimm import _workspace_dir
+        voice = (req.voice or "").strip() or DEFAULT_VOICE
+        data, media = await _aio.get_event_loop().run_in_executor(
+            None, _ft.partial(synthesize, text[:8000], voice))
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur synthèse vocale : {e}"}
+    if not data:
+        return {"status": "error", "message": "La synthèse n'a produit aucun son (voix indisponible ?)."}
+    ext = "mp3" if media == "audio/mpeg" else "wav"
+    workdir = _workspace_dir(req.thread_id)
+    _os.makedirs(workdir, exist_ok=True)
+    filename = f"audio_{int(_time.time())}.{ext}"
+    filepath = _os.path.join(workdir, filename)
+    try:
+        with open(filepath, "wb") as _f:
+            _f.write(data)
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
+    print(f"[COANIMM] Audio généré → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename}
+
+class CoanimmDescribeImageReq(BaseModel):
+    path: str = ""
+    prompt: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/describe_image")
+async def coanimm_describe_image(req: CoanimmDescribeImageReq):
+    """Décrit une image (texte alternatif accessible) via le modèle de vision. Lecture seule."""
+    import core.database as _db, os as _os, base64 as _b64
+    if "describe_image" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil description d'image désactivé dans les réglages CoaNIMM]"}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"result": f"[Fichier introuvable : {path}]"}
+    try:
+        with open(path, "rb") as _f:
+            raw = _f.read()
+        ext = _os.path.splitext(path)[1].lower().lstrip(".")
+        media = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                 "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
+        b64 = _b64.b64encode(raw).decode("ascii")
+        from core.engine import call_vision
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        vprov = settings.get("provider_routing", {}).get("vision", "gemini")
+        prompt = (req.prompt or "").strip() or "Décris cette image de façon précise et concise, comme un texte alternatif accessible, en français."
+        out = await call_vision(b64, media, prompt, vprov, settings.get("api_keys", {}))
+    except Exception as e:
+        return {"result": f"[Erreur description image : {e}]"}
+    return {"result": (out or "")[:6000]}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
