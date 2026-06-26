@@ -125,7 +125,20 @@ GENERATE_SYSTEM_PROMPT = (
     "  nimm_github_search(query: str) -> str\n"
     "  Recherche GitHub (dépôts ou code) à partir d'une requête, retourne un texte de "
     "résultats avec liens, pour s'inspirer d'exemples de code.\n"
-    "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search) : "
+    "  nimm_search_documents(query: str) -> str\n"
+    "  Interroge la BASE DE CONNAISSANCES de l'utilisateur (documents déjà ingérés) et "
+    "retourne les passages pertinents. Pour répondre à partir de ses documents.\n"
+    "  nimm_extract_text(path: str) -> str\n"
+    "  Extrait le texte d'un fichier (PDF, Word, ODT, RTF, EPUB, HTML, image avec OCR). "
+    "Lecture seule. Pour résumer ou traiter le contenu d'un document.\n"
+    "  nimm_ask_llm(prompt: str, system: str = '') -> str\n"
+    "  Demande au LLM une sous-tâche (résumer, classer, traduire, reformuler) et retourne "
+    "sa réponse texte. Utile pour traiter du contenu au fil de l'exécution.\n"
+    "  nimm_read_url(url: str) -> str\n"
+    "  Extrait le texte principal d'une page web précise (protégé anti-SSRF). À distinguer "
+    "de nimm_web_search qui, lui, prend une requête.\n"
+    "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
+    "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -295,6 +308,46 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     parts.append(img if "image" not in _disabled else _stub("nimm_generate_image", "génération d'image"))
     parts.append(web if "web" not in _disabled else _stub("nimm_web_search", "recherche web"))
     parts.append(gh if "github" not in _disabled else _stub("nimm_github_search", "recherche GitHub"))
+    ds = (
+        "def nimm_search_documents(query, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/doc_search\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    ex = (
+        "def nimm_extract_text(path, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": path, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/extract_text\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    al = (
+        "def nimm_ask_llm(prompt, system='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"prompt\": prompt, \"system\": system, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/ask_llm\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    ru = (
+        "def nimm_read_url(url, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"url\": url, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/read_url\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(ds if "doc_search" not in _disabled else _stub("nimm_search_documents", "consulter la base de connaissances"))
+    parts.append(ex if "extract_text" not in _disabled else _stub("nimm_extract_text", "extraire le texte d'un document"))
+    parts.append(al if "ask_llm" not in _disabled else _stub("nimm_ask_llm", "sous-tache IA"))
+    parts.append(ru if "read_url" not in _disabled else _stub("nimm_read_url", "lire une page web"))
     return "".join(parts)
 
 
