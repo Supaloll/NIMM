@@ -854,6 +854,13 @@
             </p>
             <ul id="coanimm-caps-list" style="list-style:none;padding:0;margin:0;font-size:0.82rem;"></ul>
         </details>
+        <details id="coanimm-tools-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Outils de CoaNIMM</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Activez ou désactivez les outils que CoaNIMM peut utiliser dans ses scripts. Un outil désactivé n'est plus disponible pour l'agent.
+            </p>
+            <ul id="coanimm-tools-list" style="list-style:none;padding:0;margin:0;font-size:0.82rem;" aria-label="Outils de CoaNIMM"></ul>
+        </details>
         <details id="coanimm-workspace-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
             <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Espace de travail</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
@@ -878,6 +885,16 @@
             <p id="coanimm-history-wf-status" role="status" aria-live="polite" style="font-size:0.82rem;margin:6px 0 0;min-height:1em;"></p>
         </details>
 
+        <details id="coanimm-seclog-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Journal de sécurité</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Trace des exécutions de CoaNIMM : capacités utilisées, dossiers touchés, fichiers produits, résultat. Les 200 dernières.
+            </p>
+            <ul id="coanimm-seclog-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.8rem;" aria-label="Journal de sécurité CoaNIMM"></ul>
+            <button type="button" id="coanimm-seclog-clear-btn"
+                style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Effacer le journal</button>
+            <p id="coanimm-seclog-status" role="status" aria-live="polite" style="font-size:0.82rem;margin:6px 0 0;min-height:1em;"></p>
+        </details>
         <details id="coanimm-skills-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
             <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Skills enregistrés</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
@@ -1499,7 +1516,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260625-v4"></script>
+<script src="/static/app.js?v=20260625-v5"></script>
 <!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>

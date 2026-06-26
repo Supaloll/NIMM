@@ -2145,6 +2145,58 @@ def clear_coanimm_history() -> None:
     set_setting('coanimm_history', '[]')
 
 
+# ── Journal de sécurité CoaNIMM (audit des exécutions) ──
+_COANIMM_SECLOG_MAX = 200
+
+def list_coanimm_security_log() -> list:
+    """Journal d'audit des exécutions CoaNIMM (plus récent d'abord)."""
+    raw = get_setting('coanimm_security_log', '[]')
+    try:
+        d = json.loads(raw)
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+def add_coanimm_security_log(entry: dict) -> list:
+    """Ajoute une entrée d'audit (date + id auto). Retourne la liste plafonnée."""
+    log = list_coanimm_security_log()
+    entry = dict(entry or {})
+    entry.setdefault('ts', datetime.now().isoformat(timespec='seconds'))
+    entry['id'] = uuid.uuid4().hex
+    log.insert(0, entry)
+    log = log[:_COANIMM_SECLOG_MAX]
+    set_setting('coanimm_security_log', json.dumps(log, ensure_ascii=False))
+    return log
+
+def clear_coanimm_security_log() -> None:
+    """Vide le journal de sécurité CoaNIMM."""
+    set_setting('coanimm_security_log', '[]')
+
+
+# ── Catalogue d'outils CoaNIMM (activables/désactivables) ──
+def list_coanimm_disabled_tools() -> list:
+    """Outils de l'agent désactivés par l'utilisateur (par défaut : aucun)."""
+    raw = get_setting('coanimm_disabled_tools', '[]')
+    try:
+        d = json.loads(raw)
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+def set_coanimm_tool_enabled(tool: str, enabled: bool) -> list:
+    """Active ou désactive un outil de l'agent. Retourne la liste des désactivés."""
+    tool = (tool or '').strip()
+    disabled = set(list_coanimm_disabled_tools())
+    if not tool:
+        return sorted(disabled)
+    if enabled:
+        disabled.discard(tool)
+    else:
+        disabled.add(tool)
+    set_setting('coanimm_disabled_tools', json.dumps(sorted(disabled), ensure_ascii=False))
+    return sorted(disabled)
+
+
 # ══════════════════════════════════════════
 # CAPACITÉS CoaNIMM ACCORDÉES (durables, par capacité)
 # ══════════════════════════════════════════
