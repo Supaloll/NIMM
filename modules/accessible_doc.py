@@ -11,7 +11,7 @@ Entrée : `title` (str) + `sections` (liste de dicts). Chaque section peut porte
   - 'image' (str)  : chemin d'un fichier image à insérer ;
   - 'alt'   (str)  : description de l'image (obligatoire pour l'accessibilité).
 
-Formats : 'html', 'docx', 'pdf', 'epub', 'txt'. Retour : (bytes, extension).
+Formats : 'html', 'docx', 'pdf', 'epub', 'pptx', 'txt'. Retour : (bytes, extension).
 """
 
 import io
@@ -243,11 +243,67 @@ def build_epub(title, sections, lang='fr'):
     return buf.getvalue(), 'epub'
 
 
+# -- PPTX ----------------------------------------------------------------------
+
+def build_pptx(title, sections, lang='fr'):
+    """Construit une présentation PowerPoint accessible : une diapositive de titre,
+    puis une diapositive par section avec un TITRE (repère pour le lecteur d'écran),
+    le corps en paragraphes, et les images dotées de leur texte alternatif (descr)."""
+    from pptx import Presentation
+    from pptx.util import Inches
+    sections = _norm_sections(sections)
+    prs = Presentation()
+    # Diapositive de titre
+    slide = prs.slides.add_slide(prs.slide_layouts[0])
+    try:
+        slide.shapes.title.text = title or 'Document'
+    except Exception:
+        pass
+    for s in sections:
+        sl = prs.slides.add_slide(prs.slide_layouts[1])  # Titre + contenu
+        head = s.get('titre') or (title or 'Document')
+        try:
+            sl.shapes.title.text = str(head)
+        except Exception:
+            pass
+        paras = _paras(s.get('texte'))
+        if paras:
+            try:
+                tf = sl.placeholders[1].text_frame
+                tf.text = paras[0]
+                for p in paras[1:]:
+                    tf.add_paragraph().text = p
+            except Exception:
+                pass
+        if s.get('image'):
+            try:
+                pic = sl.shapes.add_picture(s['image'], Inches(1), Inches(2.2), width=Inches(5))
+                alt = str(s.get('alt') or 'Image')
+                try:
+                    from pptx.oxml.ns import qn
+                    cNvPr = pic._element.find('.//' + qn('p:cNvPr'))
+                    if cNvPr is not None:
+                        cNvPr.set('descr', alt)
+                        cNvPr.set('title', alt)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+    try:
+        prs.core_properties.title = title or 'Document'
+        prs.core_properties.language = lang
+    except Exception:
+        pass
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue(), 'pptx'
+
+
 # -- Dispatcher ----------------------------------------------------------------
 
 _BUILDERS = {
     'html': build_html, 'txt': build_txt, 'docx': build_docx,
-    'pdf': build_pdf, 'epub': build_epub,
+    'pdf': build_pdf, 'epub': build_epub, 'pptx': build_pptx,
 }
 
 
@@ -258,5 +314,5 @@ def build_document(title, sections, fmt='docx', lang='fr'):
     if fmt in ('htm',):
         fmt = 'html'
     if fmt not in _BUILDERS:
-        raise ValueError("Format inconnu : %s (html, txt, docx, pdf, epub)" % fmt)
+        raise ValueError("Format inconnu : %s (html, txt, docx, pdf, epub, pptx)" % fmt)
     return _BUILDERS[fmt](title or 'Document', sections, lang=lang)
