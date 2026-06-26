@@ -1253,9 +1253,16 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
     if syntax_err:
         return JSONResponse({"status": "error", "message": syntax_err})
 
-    from modules.coanimm_safety import classify_for_execution, build_guard_prologue, capabilities_of
+    from modules.coanimm_safety import classify_for_execution, build_guard_prologue, capabilities_of, CAPABILITY_LABELS
     _risks = classify_for_execution(req.code)
+    _all_caps = sorted(capabilities_of(req.code))
+    _caps_labels = [CAPABILITY_LABELS.get(c, c) for c in _all_caps]
     if _risks["blocked"]:
+        try:
+            _db.add_coanimm_security_log({"status": "bloqué", "capabilities": _caps_labels,
+                "reasons": [r["message"] for r in _risks["blocked"]]})
+        except Exception:
+            pass
         return JSONResponse({"status": "error",
             "message": "Exécution refusée pour sécurité : ce script " + " ; ".join(r["message"] for r in _risks["blocked"]) + ".",
             "blocked": _risks["blocked"]})
@@ -1343,6 +1350,17 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
                 _summary = f"Terminé avec une erreur (code {proc.returncode})."
                 if _last:
                     _summary += " Dernier message : " + _last[:200]
+            try:
+                _db.add_coanimm_security_log({
+                    'status': 'ok' if proc.returncode == 0 else 'erreur',
+                    'returncode': proc.returncode,
+                    'capabilities': _caps_labels,
+                    'network': ('reseau' in _effective_caps),
+                    'folders': (_allowed if 'ecriture' in _all_caps else []),
+                    'files': [f.get('filename', '') for f in files_list],
+                })
+            except Exception:
+                pass
             done_payload = {'type': 'done', 'returncode': proc.returncode, 'files_list': files_list, 'summary': _summary}
             if interaction_question:
                 done_payload['interaction_needed'] = {
@@ -1452,6 +1470,9 @@ async def coanimm_generate_image_endpoint(req: CoanimmGenerateImageRequest):
     from core.hub import load_settings, get_task_provider_model
     from modules.coanimm import _workspace_dir
     import base64, time, mimetypes
+    import core.database as _dbtool
+    if "image" in _dbtool.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil désactivé dans les réglages CoaNIMM : génération d'image."}
     if not req.prompt or not req.prompt.strip():
         raise HTTPException(400, "Le prompt est vide.")
     settings   = load_settings(req.thread_id)
@@ -1540,6 +1561,9 @@ async def coanimm_web_search(req: CoanimmWebSearchRequest):
     """Recherche web pour un script CoaNIMM confiné (Étape D). Réutilise l'infra Brave/
     Tavily existante (endpoint FIXE). Le script passe une REQUÊTE, jamais une URL ; le
     sous-processus ne sort jamais (il appelle ce localhost). Résultat borné en taille."""
+    import core.database as _dbtool
+    if "web" in _dbtool.list_coanimm_disabled_tools():
+        return {"status": "ok", "result": "[Outil recherche web désactivé dans les réglages CoaNIMM]"}
     from modules.websearch import search
     q = (req.query or "").strip()
     if not q:
@@ -1556,6 +1580,9 @@ async def coanimm_github_search(req: CoanimmWebSearchRequest):
     api.github.com ; le script passe une REQUÊTE, jamais une URL. Recherche de code si
     GITHUB_TOKEN présent (en-tête d'env), sinon recherche de dépôts (API publique).
     Résultat borné en taille."""
+    import core.database as _dbtool
+    if "github" in _dbtool.list_coanimm_disabled_tools():
+        return {"status": "ok", "result": "[Outil recherche GitHub désactivé dans les réglages CoaNIMM]"}
     import os as _os, asyncio as _aio
     import requests as _rq
     q = (req.query or "").strip()
@@ -1753,6 +1780,50 @@ async def coanimm_workspace_purge():
     """Vide l'espace de travail CoaNIMM (fichiers produits). Action explicite."""
     from modules.coanimm import purge_workspace
     return purge_workspace()
+
+# ── Journal de sécurité CoaNIMM (audit des exécutions) ──
+@app.get("/api/coanimm/security_log")
+async def coanimm_security_log_list():
+    """Journal d'audit des exécutions CoaNIMM (date, capacités, dossiers, fichiers…)."""
+    import core.database as _db
+    return {"log": _db.list_coanimm_security_log(), "is_owner": _db.is_current_user_admin()}
+
+@app.delete("/api/coanimm/security_log")
+async def coanimm_security_log_clear():
+    """Efface le journal de sécurité. Réservé au propriétaire (administrateur)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire (administrateur) peut effacer le journal de sécurité.")
+    _db.clear_coanimm_security_log()
+    return {"status": "ok", "log": []}
+
+# ── Catalogue d'outils CoaNIMM (activables/désactivables) ──
+_COANIMM_TOOLS = [
+    {"tool": "web", "label": "Recherche web"},
+    {"tool": "github", "label": "Recherche GitHub"},
+    {"tool": "image", "label": "Génération d'image"},
+]
+
+class CoanimmToolToggleReq(BaseModel):
+    tool: str
+    enabled: bool = True
+
+@app.get("/api/coanimm/tools")
+async def coanimm_tools_list():
+    """Liste les outils de l'agent et leur état (activé/désactivé)."""
+    import core.database as _db
+    disabled = set(_db.list_coanimm_disabled_tools())
+    tools = [{"tool": t["tool"], "label": t["label"], "enabled": t["tool"] not in disabled}
+             for t in _COANIMM_TOOLS]
+    return {"tools": tools}
+
+@app.post("/api/coanimm/tools")
+async def coanimm_tools_toggle(req: CoanimmToolToggleReq):
+    """Active ou désactive un outil de l'agent."""
+    import core.database as _db
+    if req.tool not in {t["tool"] for t in _COANIMM_TOOLS}:
+        raise HTTPException(400, "Outil inconnu.")
+    return {"status": "ok", "disabled": _db.set_coanimm_tool_enabled(req.tool, req.enabled)}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────

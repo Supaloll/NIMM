@@ -246,15 +246,19 @@ def _analyze_code_risks(code: str) -> list:
 
 
 def _build_prologue(thread_id: str, workdir: str) -> str:
-    """Construit le code Python injecté en tête de chaque script CoaNIMM.
+    """Construit le code Python injecte en tete de chaque script CoaNIMM.
 
-    Définit nimm_generate_image(prompt) qui appelle l'endpoint local
-    /api/coanimm/generate_image et retourne le chemin du PNG produit.
-    """
-    tid = (thread_id or '').replace("'", "")
-    return (
-        "import urllib.request as _nimm_ur, json as _nimm_json\n"
-        "def nimm_generate_image(prompt, _tid='" + tid + "'):\n"
+    Definit les helpers d'outils (image, recherche web, GitHub) appelant les endpoints
+    locaux. Un outil DESACTIVE dans les reglages est remplace par un stub qui leve une
+    erreur claire (au lieu d'etre silencieusement absent)."""
+    tid = (thread_id or "").replace("'", "")
+    try:
+        _disabled = set(db.list_coanimm_disabled_tools())
+    except Exception:
+        _disabled = set()
+    header = "import urllib.request as _nimm_ur, json as _nimm_json\n"
+    img = (
+        "def nimm_generate_image(prompt, _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"prompt\": prompt, \"thread_id\": _tid}).encode()\n"
         "    _req = _nimm_ur.Request(\n"
         "        \"http://localhost:8080/api/coanimm/generate_image\",\n"
@@ -263,23 +267,35 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        _res = _nimm_json.loads(_r.read())\n"
         "    if _res.get(\"status\") != \"ok\":\n"
         "        raise RuntimeError(\"nimm_generate_image : \" + _res.get(\"message\", \"?\"))\n"
-        "    print(\"Image g\xc3\xa9n\xc3\xa9r\xc3\xa9e :\" + _res[\"filepath\"])\n"
+        "    print(\"Image générée : \" + _res[\"filepath\"])\n"
         "    return _res[\"filepath\"]\n"
-        "def nimm_web_search(query, _tid='" + tid + "'):\n"
+    ) % tid
+    web = (
+        "def nimm_web_search(query, _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
         "    _req = _nimm_ur.Request(\n"
         "        \"http://localhost:8080/api/coanimm/web_search\",\n"
         "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
         "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
-        "def nimm_github_search(query, _tid='" + tid + "'):\n"
+    ) % tid
+    gh = (
+        "def nimm_github_search(query, _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
         "    _req = _nimm_ur.Request(\n"
         "        \"http://localhost:8080/api/coanimm/github_search\",\n"
         "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
         "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
-    )
+    ) % tid
+    def _stub(fn, label):
+        return ("def %s(*_a, **_k):\n"
+                "    raise RuntimeError(\"Outil désactivé dans les réglages CoaNIMM : %s.\")\n") % (fn, label)
+    parts = [header]
+    parts.append(img if "image" not in _disabled else _stub("nimm_generate_image", "génération d'image"))
+    parts.append(web if "web" not in _disabled else _stub("nimm_web_search", "recherche web"))
+    parts.append(gh if "github" not in _disabled else _stub("nimm_github_search", "recherche GitHub"))
+    return "".join(parts)
 
 
 def _execute(code: str, args: list, workdir: str, thread_id: str = None, granted_caps=None) -> dict:

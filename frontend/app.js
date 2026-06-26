@@ -7404,6 +7404,8 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     loadCoanimmCapabilities();
     loadCoanimmWorkflows();
     loadCoanimmSkills();
+    loadCoanimmTools();
+    loadCoanimmSecurityLog();
 });
 
 async function loadCoanimmPaths() {
@@ -7600,6 +7602,93 @@ document.getElementById('coanimm-workspace-purge-btn')?.addEventListener('click'
             _coanimmAnnounce(msg);
         } else if (status) { status.textContent = 'Erreur lors de la purge.'; }
     } catch (e) { if (status) status.textContent = 'Erreur réseau.'; }
+});
+
+// ── Outils de CoaNIMM (activables / désactivables) ──
+async function loadCoanimmTools() {
+    try {
+        const r = await fetch('/api/coanimm/tools');
+        const d = await r.json();
+        _renderCoanimmTools(d.tools || []);
+    } catch (e) { /* silencieux */ }
+}
+function _renderCoanimmTools(tools) {
+    const ul = document.getElementById('coanimm-tools-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    tools.forEach(t => {
+        const li = document.createElement('li');
+        li.style.cssText = 'padding:4px 0;display:flex;align-items:flex-start;gap:6px;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.id = 'coanimm-tool-' + t.tool;
+        cb.checked = !!t.enabled;
+        cb.style.cssText = 'width:auto;margin:2px 0 0;flex:none;';
+        cb.addEventListener('change', () => _toggleCoanimmTool(t.tool, cb.checked));
+        const lab = document.createElement('label');
+        lab.setAttribute('for', cb.id);
+        lab.style.cssText = 'font-size:0.82rem;margin:0;cursor:pointer;';
+        lab.textContent = t.label;
+        li.appendChild(cb); li.appendChild(lab);
+        ul.appendChild(li);
+    });
+}
+async function _toggleCoanimmTool(tool, enabled) {
+    try {
+        await fetch('/api/coanimm/tools', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tool, enabled }),
+        });
+        _coanimmAnnounce(enabled ? 'Outil activé.' : 'Outil désactivé.');
+    } catch (e) { _coanimmAnnounce('Erreur lors de la mise à jour de l\'outil.'); }
+}
+
+// ── Journal de sécurité CoaNIMM ──
+async function loadCoanimmSecurityLog() {
+    try {
+        const r = await fetch('/api/coanimm/security_log');
+        const d = await r.json();
+        _renderCoanimmSecurityLog(d.log || [], d.is_owner !== false);
+    } catch (e) { /* silencieux */ }
+}
+function _renderCoanimmSecurityLog(log, isOwner) {
+    const ul = document.getElementById('coanimm-seclog-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!log.length) {
+        const li = document.createElement('li');
+        li.textContent = 'Aucune exécution enregistrée.';
+        li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+        ul.appendChild(li);
+    } else {
+        log.forEach(e => {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:5px 0;border-bottom:1px solid var(--border);';
+            const date = (e.ts || '').replace('T', ' ').slice(0, 16);
+            const caps = (e.capabilities && e.capabilities.length) ? e.capabilities.join(', ') : 'aucune capacité sensible';
+            let txt = date + ' — ' + (e.status || '') + ' — capacités : ' + caps;
+            if (e.network) txt += ' — réseau';
+            if (e.folders && e.folders.length) txt += ' — dossiers : ' + e.folders.join(', ');
+            if (e.files && e.files.length) txt += ' — fichiers : ' + e.files.join(', ');
+            if (e.reasons && e.reasons.length) txt += ' — ' + e.reasons.join(' ; ');
+            li.textContent = txt;
+            ul.appendChild(li);
+        });
+    }
+    const clearBtn = document.getElementById('coanimm-seclog-clear-btn');
+    if (clearBtn) clearBtn.style.display = isOwner ? '' : 'none';
+}
+document.getElementById('coanimm-seclog-details')?.addEventListener('toggle', (ev) => { if (ev.target.open) loadCoanimmSecurityLog(); });
+document.getElementById('coanimm-seclog-clear-btn')?.addEventListener('click', async () => {
+    if (!confirm('Effacer le journal de sécurité CoaNIMM ?')) return;
+    const status = document.getElementById('coanimm-seclog-status');
+    try {
+        const r = await fetch('/api/coanimm/security_log', { method: 'DELETE' });
+        if (r.status === 403) { if (status) status.textContent = 'Réservé au propriétaire (administrateur).'; _coanimmAnnounce('Réservé au propriétaire.'); return; }
+        await loadCoanimmSecurityLog();
+        if (status) status.textContent = 'Journal effacé.';
+        _coanimmAnnounce('Journal de sécurité effacé.');
+    } catch (e) { if (status) status.textContent = 'Erreur.'; }
 });
 
 // ── Skills enregistrés : liste, édition, suppression ──
