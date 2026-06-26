@@ -127,8 +127,8 @@ _CAP_IMPORTS = {
 _CAP_HELPER_CALLS = {
     'nimm_web_search': 'recherche', 'nimm_github_search': 'recherche',
     'nimm_search_documents': 'recherche', 'nimm_read_url': 'recherche',
-    'nimm_ask_llm': 'recherche',
-    'nimm_generate_image': 'image',
+    'nimm_ask_llm': 'recherche', 'nimm_translate': 'recherche', 'nimm_expurgate': 'recherche',
+    'nimm_generate_image': 'image', 'nimm_coloring_page': 'image',
 }
 # Appels (obj, attr) qui écrivent/déplacent/suppriment
 _WRITE_ATTR_CALLS = {

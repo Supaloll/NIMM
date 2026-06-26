@@ -1804,8 +1804,11 @@ _COANIMM_TOOLS = [
     {"tool": "read_url", "label": "Lire une page web", "category": "Recherche & web"},
     {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
-    {"tool": "image", "label": "Génération d'image", "category": "Création & IA"},
-    {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Création & IA"},
+    {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
+    {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
+    {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
+    {"tool": "image", "label": "Génération d'image", "category": "Images"},
+    {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
 ]
 
 class CoanimmToolToggleReq(BaseModel):
@@ -1930,6 +1933,116 @@ async def coanimm_read_url(req: CoanimmReadUrlReq):
         return {"result": "[Aucun contenu exploitable à cette adresse.]"}
     head = (f"# {titre}\n" if titre else "")
     return {"result": (head + texte)[:8000]}
+
+class CoanimmTranslateReq(BaseModel):
+    text: str = ""
+    target_lang: str = "anglais"
+    thread_id: Optional[str] = None
+class CoanimmExpurgateReq(BaseModel):
+    text: str = ""
+    consigne: str = ""
+    thread_id: Optional[str] = None
+class CoanimmColoringReq(BaseModel):
+    subject: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/translate")
+async def coanimm_translate(req: CoanimmTranslateReq):
+    """Traduit un texte (provider configuré). Local au serveur NIMM."""
+    import core.database as _db
+    if "translate" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil traduction désactivé dans les réglages CoaNIMM]"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"result": "(texte vide)"}
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        out = await call_llm(
+            messages=[{"role": "user", "content": text[:12000]}],
+            provider=settings.get("provider", "deepseek"),
+            model=settings.get("model"),
+            system_prompt=f"Traduis fidèlement le texte de l'utilisateur en {req.target_lang or 'anglais'}. Conserve le sens, le registre et la mise en forme. Réponds UNIQUEMENT par la traduction, sans commentaire.",
+            max_tokens=2000, temperature=0.2,
+            api_keys=settings.get("api_keys", {}),
+        )
+    except Exception as e:
+        return {"result": f"[Erreur traduction : {e}]"}
+    return {"result": (out or "")[:12000]}
+
+@app.post("/api/coanimm/expurgate")
+async def coanimm_expurgate(req: CoanimmExpurgateReq):
+    """Produit une version adaptée aux enfants d'un texte (expurgée, éventuellement abrégée)."""
+    import core.database as _db
+    if "expurgate" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil expurgation désactivé dans les réglages CoaNIMM]"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"result": "(texte vide)"}
+    consigne = (req.consigne or "").strip()
+    _sys = ("Tu adaptes un texte pour le rendre adapté aux enfants. Produis une version "
+            "expurgée et, si demandé, abrégée : retire ou adoucis les scènes de violence "
+            "explicite, de sexualité, d'horreur graphique, de cruauté, ainsi que le langage "
+            "grossier, tout en PRÉSERVANT l'histoire, son fil, ses personnages et sa valeur "
+            "littéraire. N'ajoute aucun contenu inventé. Conserve la langue d'origine. "
+            "Réponds UNIQUEMENT par le texte adapté, sans préambule ni commentaire.")
+    if consigne:
+        _sys += " Consigne supplémentaire de l'utilisateur : " + consigne[:500]
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        out = await call_llm(
+            messages=[{"role": "user", "content": text[:14000]}],
+            provider=settings.get("provider", "deepseek"),
+            model=settings.get("model"),
+            system_prompt=_sys,
+            max_tokens=3000, temperature=0.3,
+            api_keys=settings.get("api_keys", {}),
+        )
+    except Exception as e:
+        return {"result": f"[Erreur expurgation : {e}]"}
+    return {"result": (out or "")[:16000]}
+
+@app.post("/api/coanimm/coloring_page")
+async def coanimm_coloring_page(req: CoanimmColoringReq):
+    """Génère un coloriage (dessin au trait N&B) sur un sujet, sauvegardé dans le workspace."""
+    import core.database as _db, os as _os, time as _time
+    if "coloring" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil coloriage désactivé dans les réglages CoaNIMM."}
+    subject = (req.subject or "").strip()
+    if not subject:
+        return {"status": "error", "message": "Le sujet est vide."}
+    from core.engine import generate_image
+    from core.hub import load_settings
+    from modules.coanimm import _workspace_dir
+    settings = load_settings(req.thread_id)
+    api_keys = settings.get("api_keys", {})
+    img_provider = settings.get("provider_routing", {}).get("image", "gemini")
+    prompt = ("Coloring book page, black and white line art, bold clean outlines, no shading, "
+              "no grayscale, pure white background, simple and friendly, suitable for young children: " + subject)
+    try:
+        result = await generate_image(prompt, img_provider, api_keys)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    workdir = _workspace_dir(req.thread_id)
+    filename = f"coloriage_{int(_time.time())}.png"
+    filepath = _os.path.join(workdir, filename)
+    try:
+        if result.get("b64"):
+            import base64 as _b64
+            with open(filepath, "wb") as _f:
+                _f.write(_b64.b64decode(result["b64"]))
+        elif result.get("url"):
+            import urllib.request as _ur
+            _ur.urlretrieve(result["url"], filepath)
+        else:
+            return {"status": "error", "message": "Aucune donnée image reçue du provider."}
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
+    print(f"[COANIMM] Coloriage généré → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
