@@ -1804,7 +1804,7 @@ _COANIMM_TOOLS = [
     {"tool": "read_url", "label": "Lire une page web", "category": "Recherche & web"},
     {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
-    {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub)", "category": "Documents"},
+    {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
     {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
     {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},

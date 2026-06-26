@@ -148,7 +148,7 @@ GENERATE_SYSTEM_PROMPT = (
     "et retourne le chemin du PNG.\n"
     "  nimm_make_document(title: str, sections: list, fmt: str = 'docx', lang: str = 'fr') -> str\n"
     "  Crée un DOCUMENT ACCESSIBLE (titres, langue, images décrites) et retourne son chemin. "
-    "fmt : docx, pdf, epub, html, txt. sections : liste de dicts {'titre':..., 'texte':..., "
+    "fmt : docx, pdf, epub, pptx, html, txt. sections : liste de dicts {'titre':..., 'texte':..., "
     "'image': chemin, 'alt': description}. Utilise html pour un contenu à coller dans un e-mail.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
