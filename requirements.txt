@@ -21,6 +21,7 @@ edge-tts>=6.1.9
 # ── Fichiers ──
 pypdf>=4.0.0
 python-docx>=1.1.0
+python-pptx>=0.6.21      # PowerPoint accessibles (CoaNIMM nimm_make_document fmt=pptx)
 fpdf2>=2.7.0
 reportlab>=4.0.0          # PDF accessibles (titre, langue, structure, signets)
 

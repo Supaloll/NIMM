@@ -39,6 +39,7 @@ Tourne entièrement sur ta machine — tes conversations ne quittent jamais ton 
 - 📚 **Bibliothèque** — archive et retrouve tes conversations importantes
 - 🔍 **Recherche web** — intégrée silencieusement quand c'est utile
 - 📄 **Lecture de fichiers** — PDF et images analysés directement dans le chat
+- 🗂️ **Base de connaissances** — ingère tes documents (PDF, pages web, textes collés) dans une mémoire locale interrogeable par le sens ; NIMM y puise automatiquement pour te répondre, sans rien envoyer au cloud
 - 📅 **Agenda** — rappels et échéances, signalés automatiquement dans la conversation
 - 🔎 **Recherche par sens** — retrouve un souvenir même sans les mots exacts (optionnel)
 - ✏️ **Modifier / Régénérer** — réédite ton dernier message ou demande une nouvelle réponse

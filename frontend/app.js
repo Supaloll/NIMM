@@ -4820,10 +4820,10 @@ async function _loadGhostMode(threadId) {
 (function setupGhostToggle() {
     const btn = document.createElement('button');
     btn.id        = 'ghost-toggle';
-    btn.title     = 'Mode confidentiel — mémoire et carnet de bord désactivés pour ce fil (aucune trace)';
+    btn.title     = 'Mode fantôme — mémoire et carnet de bord désactivés pour ce fil (aucune trace)';
     btn.className = 'topbar-icon-btn';
     btn.textContent = '👻';
-    btn.setAttribute('aria-label', 'Mode confidentiel (mémoire et carnet désactivés pour ce fil)');
+    btn.setAttribute('aria-label', 'Mode fantôme (mémoire et carnet désactivés pour ce fil)');
     btn.setAttribute('aria-pressed', 'false');
     btn.addEventListener('click', async () => {
         if (!currentThreadId) return;
@@ -4834,8 +4834,8 @@ async function _loadGhostMode(threadId) {
             btn.classList.toggle('active', _ghostMode);
             btn.setAttribute('aria-pressed', _ghostMode ? 'true' : 'false');
             if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_ghostMode
-                ? 'Mode confidentiel activé : ce fil ne laissera aucune trace, ni mémoire, ni carnet.'
-                : 'Mode confidentiel désactivé.');
+                ? 'Mode fantôme activé : ce fil ne laissera aucune trace, ni mémoire, ni carnet.'
+                : 'Mode fantôme désactivé.');
         } catch(e) {}
     });
     const topRight = document.getElementById('top-right');
@@ -7232,6 +7232,32 @@ function _coanimmShowPermission(label) {
     setTimeout(() => { document.getElementById('coanimm-allow-once')?.focus(); }, 50);
 }
 
+// Copie le contenu d'un fichier HTML produit dans le presse-papier, en conservant
+// la mise en forme (text/html) + un repli texte simple — pour coller dans une messagerie.
+async function _coanimmCopyHtmlFile(url) {
+    try {
+        const resp = await fetch(url);
+        const html = await resp.text();
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        const plain = (tmp.textContent || tmp.innerText || '').trim();
+        if (navigator.clipboard && window.ClipboardItem) {
+            await navigator.clipboard.write([new ClipboardItem({
+                'text/html': new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([plain], { type: 'text/plain' }),
+            })]);
+            _coanimmAnnounce('Contenu copié avec sa mise en forme. Collez-le dans votre messagerie.');
+        } else if (navigator.clipboard) {
+            await navigator.clipboard.writeText(plain);
+            _coanimmAnnounce('Contenu copié en texte simple (mise en forme non disponible dans ce navigateur).');
+        } else {
+            _coanimmAnnounce("La copie automatique n'est pas disponible dans ce navigateur.");
+        }
+    } catch (e) {
+        _coanimmAnnounce('Échec de la copie : ' + (e && e.message ? e.message : 'erreur'));
+    }
+}
+
 // Affiche les liens de fichiers produits par le script
 function _coanimmShowFiles(filesList) {
     const filesDiv = document.getElementById('coanimm-result-files');
@@ -7250,6 +7276,15 @@ function _coanimmShowFiles(filesList) {
         a.style.cssText = 'display:block;margin:2px 0;font-size:0.85rem;color:var(--accent,#6ea8fe);';
         a.setAttribute('download', f.filename);
         filesDiv.appendChild(a);
+        if (/\.html?$/i.test(f.filename)) {
+            const cp = document.createElement('button');
+            cp.type = 'button';
+            cp.textContent = 'Copier (mise en forme)';
+            cp.setAttribute('aria-label', 'Copier le contenu de ' + f.filename + ' avec sa mise en forme, pour le coller dans votre messagerie');
+            cp.style.cssText = 'display:block;margin:0 0 4px;font-size:0.8rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+            cp.addEventListener('click', () => _coanimmCopyHtmlFile(f.url));
+            filesDiv.appendChild(cp);
+        }
     });
     filesDiv.removeAttribute('hidden');
     _coanimmAnnounce(filesList.length + ' fichier(s) produit(s) disponible(s) en téléchargement.');
@@ -7326,6 +7361,15 @@ function _coanimmShowResult(data, label) {
                 a.style.cssText = 'display:block;margin:2px 0;font-size:0.85rem;color:var(--accent,#6ea8fe);';
                 a.setAttribute('download', f.filename);
                 filesDiv.appendChild(a);
+                if (/\.html?$/i.test(f.filename)) {
+                    const cp = document.createElement('button');
+                    cp.type = 'button';
+                    cp.textContent = 'Copier (mise en forme)';
+                    cp.setAttribute('aria-label', 'Copier le contenu de ' + f.filename + ' avec sa mise en forme, pour le coller dans votre messagerie');
+                    cp.style.cssText = 'display:block;margin:0 0 4px;font-size:0.8rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+                    cp.addEventListener('click', () => _coanimmCopyHtmlFile(f.url));
+                    filesDiv.appendChild(cp);
+                }
             });
             filesDiv.removeAttribute('hidden');
         } else {
@@ -7403,6 +7447,8 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     loadCoanimmCapabilities();
     loadCoanimmWorkflows();
     loadCoanimmSkills();
+    loadCoanimmTools();
+    loadCoanimmSecurityLog();
 });
 
 async function loadCoanimmPaths() {
@@ -7599,6 +7645,139 @@ document.getElementById('coanimm-workspace-purge-btn')?.addEventListener('click'
             _coanimmAnnounce(msg);
         } else if (status) { status.textContent = 'Erreur lors de la purge.'; }
     } catch (e) { if (status) status.textContent = 'Erreur réseau.'; }
+});
+
+// ── Outils de CoaNIMM (activables / désactivables) ──
+async function loadCoanimmTools() {
+    try {
+        const r = await fetch('/api/coanimm/tools');
+        const d = await r.json();
+        _renderCoanimmTools(d.tools || []);
+    } catch (e) { /* silencieux */ }
+}
+function _renderCoanimmTools(tools) {
+    const ul = document.getElementById('coanimm-tools-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    // Résumé global
+    const total = tools.length;
+    const actifs = tools.filter(t => t.enabled).length;
+    const sum = document.createElement('li');
+    sum.id = 'coanimm-tools-summary';
+    sum.style.cssText = 'list-style:none;color:var(--text-muted);font-size:0.8rem;margin-bottom:6px;';
+    sum.textContent = actifs + ' outil' + (actifs > 1 ? 's' : '') + ' actif' + (actifs > 1 ? 's' : '') + ' sur ' + total + '.';
+    ul.appendChild(sum);
+    // Regrouper par catégorie (ordre de première apparition)
+    const cats = [];
+    const byCat = {};
+    tools.forEach(t => {
+        const c = t.category || 'Autres';
+        if (!byCat[c]) { byCat[c] = []; cats.push(c); }
+        byCat[c].push(t);
+    });
+    cats.forEach(c => {
+        const items = byCat[c];
+        const nOn = items.filter(t => t.enabled).length;
+        const det = document.createElement('details');
+        det.dataset.cat = c;
+        det.style.cssText = 'margin:4px 0;border:1px solid var(--border);border-radius:6px;padding:4px 8px;';
+        const sm = document.createElement('summary');
+        sm.style.cssText = 'cursor:pointer;font-size:0.83rem;';
+        sm.textContent = c + ' (' + nOn + '/' + items.length + ' actifs)';
+        det.appendChild(sm);
+        const inner = document.createElement('ul');
+        inner.style.cssText = 'list-style:none;padding:0;margin:6px 0 2px;';
+        items.forEach(t => {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:3px 0;display:flex;align-items:flex-start;gap:6px;';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.id = 'coanimm-tool-' + t.tool;
+            cb.checked = !!t.enabled;
+            cb.style.cssText = 'width:auto;margin:2px 0 0;flex:none;';
+            cb.addEventListener('change', () => _toggleCoanimmTool(t.tool, cb.checked));
+            const lab = document.createElement('label');
+            lab.setAttribute('for', cb.id);
+            lab.style.cssText = 'font-size:0.82rem;margin:0;cursor:pointer;';
+            lab.textContent = t.label;
+            li.appendChild(cb); li.appendChild(lab);
+            inner.appendChild(li);
+        });
+        det.appendChild(inner);
+        ul.appendChild(det);
+    });
+}
+function _coanimmUpdateToolCounts() {
+    const ul = document.getElementById('coanimm-tools-list');
+    if (!ul) return;
+    let total = 0, on = 0;
+    ul.querySelectorAll('details').forEach(det => {
+        const cbs = det.querySelectorAll('input[type=checkbox]');
+        let n = 0;
+        cbs.forEach(cb => { total++; if (cb.checked) { on++; n++; } });
+        const sm = det.querySelector('summary');
+        if (sm) sm.textContent = (det.dataset.cat || 'Outils') + ' (' + n + '/' + cbs.length + ' actifs)';
+    });
+    const sumEl = document.getElementById('coanimm-tools-summary');
+    if (sumEl) sumEl.textContent = on + ' outil' + (on > 1 ? 's' : '') + ' actif' + (on > 1 ? 's' : '') + ' sur ' + total + '.';
+}
+async function _toggleCoanimmTool(tool, enabled) {
+    try {
+        await fetch('/api/coanimm/tools', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tool, enabled }),
+        });
+        _coanimmUpdateToolCounts();
+        _coanimmAnnounce(enabled ? 'Outil activé.' : 'Outil désactivé.');
+    } catch (e) { _coanimmAnnounce('Erreur lors de la mise à jour de l\'outil.'); }
+}
+
+// ── Journal de sécurité CoaNIMM ──
+async function loadCoanimmSecurityLog() {
+    try {
+        const r = await fetch('/api/coanimm/security_log');
+        const d = await r.json();
+        _renderCoanimmSecurityLog(d.log || [], d.is_owner !== false);
+    } catch (e) { /* silencieux */ }
+}
+function _renderCoanimmSecurityLog(log, isOwner) {
+    const ul = document.getElementById('coanimm-seclog-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!log.length) {
+        const li = document.createElement('li');
+        li.textContent = 'Aucune exécution enregistrée.';
+        li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+        ul.appendChild(li);
+    } else {
+        log.forEach(e => {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:5px 0;border-bottom:1px solid var(--border);';
+            const date = (e.ts || '').replace('T', ' ').slice(0, 16);
+            const caps = (e.capabilities && e.capabilities.length) ? e.capabilities.join(', ') : 'aucune capacité sensible';
+            let txt = date + ' — ' + (e.status || '') + ' — capacités : ' + caps;
+            if (e.network) txt += ' — réseau';
+            if (e.folders && e.folders.length) txt += ' — dossiers : ' + e.folders.join(', ');
+            if (e.files && e.files.length) txt += ' — fichiers : ' + e.files.join(', ');
+            if (e.reasons && e.reasons.length) txt += ' — ' + e.reasons.join(' ; ');
+            li.textContent = txt;
+            ul.appendChild(li);
+        });
+    }
+    const clearBtn = document.getElementById('coanimm-seclog-clear-btn');
+    if (clearBtn) clearBtn.style.display = isOwner ? '' : 'none';
+}
+document.getElementById('coanimm-seclog-details')?.addEventListener('toggle', (ev) => { if (ev.target.open) loadCoanimmSecurityLog(); });
+document.getElementById('coanimm-seclog-clear-btn')?.addEventListener('click', async () => {
+    if (!confirm('Effacer le journal de sécurité CoaNIMM ?')) return;
+    const status = document.getElementById('coanimm-seclog-status');
+    try {
+        const r = await fetch('/api/coanimm/security_log', { method: 'DELETE' });
+        if (r.status === 403) { if (status) status.textContent = 'Réservé au propriétaire (administrateur).'; _coanimmAnnounce('Réservé au propriétaire.'); return; }
+        await loadCoanimmSecurityLog();
+        if (status) status.textContent = 'Journal effacé.';
+        _coanimmAnnounce('Journal de sécurité effacé.');
+    } catch (e) { if (status) status.textContent = 'Erreur.'; }
 });
 
 // ── Skills enregistrés : liste, édition, suppression ──

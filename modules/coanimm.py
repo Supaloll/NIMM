@@ -125,7 +125,41 @@ GENERATE_SYSTEM_PROMPT = (
     "  nimm_github_search(query: str) -> str\n"
     "  Recherche GitHub (dépôts ou code) à partir d'une requête, retourne un texte de "
     "résultats avec liens, pour s'inspirer d'exemples de code.\n"
-    "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search) : "
+    "  nimm_search_documents(query: str) -> str\n"
+    "  Interroge la BASE DE CONNAISSANCES de l'utilisateur (documents déjà ingérés) et "
+    "retourne les passages pertinents. Pour répondre à partir de ses documents.\n"
+    "  nimm_extract_text(path: str) -> str\n"
+    "  Extrait le texte d'un fichier (PDF, Word, ODT, RTF, EPUB, HTML, image avec OCR). "
+    "Lecture seule. Pour résumer ou traiter le contenu d'un document.\n"
+    "  nimm_ask_llm(prompt: str, system: str = '') -> str\n"
+    "  Demande au LLM une sous-tâche (résumer, classer, traduire, reformuler) et retourne "
+    "sa réponse texte. Utile pour traiter du contenu au fil de l'exécution.\n"
+    "  nimm_read_url(url: str) -> str\n"
+    "  Extrait le texte principal d'une page web précise (protégé anti-SSRF). À distinguer "
+    "de nimm_web_search qui, lui, prend une requête.\n"
+    "  nimm_translate(text: str, target_lang: str = 'anglais') -> str\n"
+    "  Traduit un texte dans la langue cible et retourne la traduction.\n"
+    "  nimm_expurgate(text: str, consigne: str = '') -> str\n"
+    "  Produit une version ADAPTÉE AUX ENFANTS d'un texte : retire/adoucit les scènes "
+    "violentes, sexuelles, d'horreur ou le langage grossier, en préservant l'histoire ; "
+    "peut abréger. Retourne le texte adapté.\n"
+    "  nimm_coloring_page(subject: str) -> str\n"
+    "  Génère un COLORIAGE (dessin au trait noir et blanc, pour enfants) sur le sujet donné "
+    "et retourne le chemin du PNG.\n"
+    "  nimm_make_document(title: str, sections: list, fmt: str = 'docx', lang: str = 'fr') -> str\n"
+    "  Crée un DOCUMENT ACCESSIBLE (titres, langue, images décrites) et retourne son chemin. "
+    "fmt : docx, pdf, epub, pptx, html, txt. sections : liste de dicts {'titre':..., 'texte':..., "
+    "'image': chemin, 'alt': description}. Utilise html pour un contenu à coller dans un e-mail.\n"
+    "  nimm_transcribe(audio_path: str) -> str\n"
+    "  Transcrit un fichier audio (voix → texte) via Whisper local et retourne le texte.\n"
+    "  nimm_speak(text: str, voice: str = '') -> str\n"
+    "  Synthétise un texte en AUDIO (TTS) et retourne le chemin du fichier son. Pour un livre audio.\n"
+    "  nimm_describe_image(path: str, prompt: str = '') -> str\n"
+    "  Décrit une image (texte alternatif accessible) via le modèle de vision et retourne le texte.\n"
+    "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
+    "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
+    "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
+    "nimm_describe_image) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -246,15 +280,19 @@ def _analyze_code_risks(code: str) -> list:
 
 
 def _build_prologue(thread_id: str, workdir: str) -> str:
-    """Construit le code Python injecté en tête de chaque script CoaNIMM.
+    """Construit le code Python injecte en tete de chaque script CoaNIMM.
 
-    Définit nimm_generate_image(prompt) qui appelle l'endpoint local
-    /api/coanimm/generate_image et retourne le chemin du PNG produit.
-    """
-    tid = (thread_id or '').replace("'", "")
-    return (
-        "import urllib.request as _nimm_ur, json as _nimm_json\n"
-        "def nimm_generate_image(prompt, _tid='" + tid + "'):\n"
+    Definit les helpers d'outils (image, recherche web, GitHub) appelant les endpoints
+    locaux. Un outil DESACTIVE dans les reglages est remplace par un stub qui leve une
+    erreur claire (au lieu d'etre silencieusement absent)."""
+    tid = (thread_id or "").replace("'", "")
+    try:
+        _disabled = set(db.list_coanimm_disabled_tools())
+    except Exception:
+        _disabled = set()
+    header = "import urllib.request as _nimm_ur, json as _nimm_json\n"
+    img = (
+        "def nimm_generate_image(prompt, _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"prompt\": prompt, \"thread_id\": _tid}).encode()\n"
         "    _req = _nimm_ur.Request(\n"
         "        \"http://localhost:8080/api/coanimm/generate_image\",\n"
@@ -263,23 +301,154 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        _res = _nimm_json.loads(_r.read())\n"
         "    if _res.get(\"status\") != \"ok\":\n"
         "        raise RuntimeError(\"nimm_generate_image : \" + _res.get(\"message\", \"?\"))\n"
-        "    print(\"Image g\xc3\xa9n\xc3\xa9r\xc3\xa9e :\" + _res[\"filepath\"])\n"
+        "    print(\"Image générée : \" + _res[\"filepath\"])\n"
         "    return _res[\"filepath\"]\n"
-        "def nimm_web_search(query, _tid='" + tid + "'):\n"
+    ) % tid
+    web = (
+        "def nimm_web_search(query, _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
         "    _req = _nimm_ur.Request(\n"
         "        \"http://localhost:8080/api/coanimm/web_search\",\n"
         "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
         "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
-        "def nimm_github_search(query, _tid='" + tid + "'):\n"
+    ) % tid
+    gh = (
+        "def nimm_github_search(query, _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
         "    _req = _nimm_ur.Request(\n"
         "        \"http://localhost:8080/api/coanimm/github_search\",\n"
         "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
         "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
-    )
+    ) % tid
+    def _stub(fn, label):
+        return ("def %s(*_a, **_k):\n"
+                "    raise RuntimeError(\"Outil désactivé dans les réglages CoaNIMM : %s.\")\n") % (fn, label)
+    parts = [header]
+    parts.append(img if "image" not in _disabled else _stub("nimm_generate_image", "génération d'image"))
+    parts.append(web if "web" not in _disabled else _stub("nimm_web_search", "recherche web"))
+    parts.append(gh if "github" not in _disabled else _stub("nimm_github_search", "recherche GitHub"))
+    ds = (
+        "def nimm_search_documents(query, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/doc_search\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    ex = (
+        "def nimm_extract_text(path, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": path, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/extract_text\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    al = (
+        "def nimm_ask_llm(prompt, system='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"prompt\": prompt, \"system\": system, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/ask_llm\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    ru = (
+        "def nimm_read_url(url, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"url\": url, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/read_url\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(ds if "doc_search" not in _disabled else _stub("nimm_search_documents", "consulter la base de connaissances"))
+    parts.append(ex if "extract_text" not in _disabled else _stub("nimm_extract_text", "extraire le texte d'un document"))
+    parts.append(al if "ask_llm" not in _disabled else _stub("nimm_ask_llm", "sous-tache IA"))
+    parts.append(ru if "read_url" not in _disabled else _stub("nimm_read_url", "lire une page web"))
+    tr = (
+        "def nimm_translate(text, target_lang='anglais', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"text\": text, \"target_lang\": target_lang, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/translate\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    exp = (
+        "def nimm_expurgate(text, consigne='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"text\": text, \"consigne\": consigne, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/expurgate\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    col = (
+        "def nimm_coloring_page(subject, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"subject\": subject, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/coloring_page\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_coloring_page : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    parts.append(tr if "translate" not in _disabled else _stub("nimm_translate", "traduire"))
+    parts.append(exp if "expurgate" not in _disabled else _stub("nimm_expurgate", "expurger un texte"))
+    parts.append(col if "coloring" not in _disabled else _stub("nimm_coloring_page", "coloriage"))
+    md = (
+        "def nimm_make_document(title, sections, fmt='docx', lang='fr', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"title\": title, \"sections\": sections, \"fmt\": fmt, \"lang\": lang, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/make_document\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_make_document : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    parts.append(md if "make_document" not in _disabled else _stub("nimm_make_document", "creer un document"))
+    tx = (
+        "def nimm_transcribe(audio_path, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": audio_path, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/transcribe\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=600) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(tx if "transcribe" not in _disabled else _stub("nimm_transcribe", "transcrire un audio"))
+    sp = (
+        "def nimm_speak(text, voice='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"text\": text, \"voice\": voice, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/speak\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_speak : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    di = (
+        "def nimm_describe_image(path, prompt='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": path, \"prompt\": prompt, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/describe_image\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(sp if "speak" not in _disabled else _stub("nimm_speak", "donner la voix"))
+    parts.append(di if "describe_image" not in _disabled else _stub("nimm_describe_image", "decrire une image"))
+    return "".join(parts)
 
 
 def _execute(code: str, args: list, workdir: str, thread_id: str = None, granted_caps=None) -> dict:

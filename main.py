@@ -1253,9 +1253,16 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
     if syntax_err:
         return JSONResponse({"status": "error", "message": syntax_err})
 
-    from modules.coanimm_safety import classify_for_execution, build_guard_prologue, capabilities_of
+    from modules.coanimm_safety import classify_for_execution, build_guard_prologue, capabilities_of, CAPABILITY_LABELS
     _risks = classify_for_execution(req.code)
+    _all_caps = sorted(capabilities_of(req.code))
+    _caps_labels = [CAPABILITY_LABELS.get(c, c) for c in _all_caps]
     if _risks["blocked"]:
+        try:
+            _db.add_coanimm_security_log({"status": "bloqué", "capabilities": _caps_labels,
+                "reasons": [r["message"] for r in _risks["blocked"]]})
+        except Exception:
+            pass
         return JSONResponse({"status": "error",
             "message": "Exécution refusée pour sécurité : ce script " + " ; ".join(r["message"] for r in _risks["blocked"]) + ".",
             "blocked": _risks["blocked"]})
@@ -1343,6 +1350,17 @@ async def coanimm_run_code_stream(req: CoanimmRunCodeDirectRequest):
                 _summary = f"Terminé avec une erreur (code {proc.returncode})."
                 if _last:
                     _summary += " Dernier message : " + _last[:200]
+            try:
+                _db.add_coanimm_security_log({
+                    'status': 'ok' if proc.returncode == 0 else 'erreur',
+                    'returncode': proc.returncode,
+                    'capabilities': _caps_labels,
+                    'network': ('reseau' in _effective_caps),
+                    'folders': (_allowed if 'ecriture' in _all_caps else []),
+                    'files': [f.get('filename', '') for f in files_list],
+                })
+            except Exception:
+                pass
             done_payload = {'type': 'done', 'returncode': proc.returncode, 'files_list': files_list, 'summary': _summary}
             if interaction_question:
                 done_payload['interaction_needed'] = {
@@ -1452,6 +1470,9 @@ async def coanimm_generate_image_endpoint(req: CoanimmGenerateImageRequest):
     from core.hub import load_settings, get_task_provider_model
     from modules.coanimm import _workspace_dir
     import base64, time, mimetypes
+    import core.database as _dbtool
+    if "image" in _dbtool.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil désactivé dans les réglages CoaNIMM : génération d'image."}
     if not req.prompt or not req.prompt.strip():
         raise HTTPException(400, "Le prompt est vide.")
     settings   = load_settings(req.thread_id)
@@ -1540,6 +1561,9 @@ async def coanimm_web_search(req: CoanimmWebSearchRequest):
     """Recherche web pour un script CoaNIMM confiné (Étape D). Réutilise l'infra Brave/
     Tavily existante (endpoint FIXE). Le script passe une REQUÊTE, jamais une URL ; le
     sous-processus ne sort jamais (il appelle ce localhost). Résultat borné en taille."""
+    import core.database as _dbtool
+    if "web" in _dbtool.list_coanimm_disabled_tools():
+        return {"status": "ok", "result": "[Outil recherche web désactivé dans les réglages CoaNIMM]"}
     from modules.websearch import search
     q = (req.query or "").strip()
     if not q:
@@ -1556,6 +1580,9 @@ async def coanimm_github_search(req: CoanimmWebSearchRequest):
     api.github.com ; le script passe une REQUÊTE, jamais une URL. Recherche de code si
     GITHUB_TOKEN présent (en-tête d'env), sinon recherche de dépôts (API publique).
     Résultat borné en taille."""
+    import core.database as _dbtool
+    if "github" in _dbtool.list_coanimm_disabled_tools():
+        return {"status": "ok", "result": "[Outil recherche GitHub désactivé dans les réglages CoaNIMM]"}
     import os as _os, asyncio as _aio
     import requests as _rq
     q = (req.query or "").strip()
@@ -1753,6 +1780,399 @@ async def coanimm_workspace_purge():
     """Vide l'espace de travail CoaNIMM (fichiers produits). Action explicite."""
     from modules.coanimm import purge_workspace
     return purge_workspace()
+
+# ── Journal de sécurité CoaNIMM (audit des exécutions) ──
+@app.get("/api/coanimm/security_log")
+async def coanimm_security_log_list():
+    """Journal d'audit des exécutions CoaNIMM (date, capacités, dossiers, fichiers…)."""
+    import core.database as _db
+    return {"log": _db.list_coanimm_security_log(), "is_owner": _db.is_current_user_admin()}
+
+@app.delete("/api/coanimm/security_log")
+async def coanimm_security_log_clear():
+    """Efface le journal de sécurité. Réservé au propriétaire (administrateur)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire (administrateur) peut effacer le journal de sécurité.")
+    _db.clear_coanimm_security_log()
+    return {"status": "ok", "log": []}
+
+# ── Catalogue d'outils CoaNIMM (activables/désactivables) ──
+_COANIMM_TOOLS = [
+    {"tool": "web", "label": "Recherche web", "category": "Recherche & web"},
+    {"tool": "github", "label": "Recherche GitHub", "category": "Recherche & web"},
+    {"tool": "read_url", "label": "Lire une page web", "category": "Recherche & web"},
+    {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
+    {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
+    {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
+    {"tool": "transcribe", "label": "Transcrire un audio", "category": "Audio & voix"},
+    {"tool": "speak", "label": "Donner la voix (texte → audio)", "category": "Audio & voix"},
+    {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
+    {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
+    {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
+    {"tool": "image", "label": "Génération d'image", "category": "Images"},
+    {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
+    {"tool": "describe_image", "label": "Décrire une image", "category": "Images"},
+]
+
+class CoanimmToolToggleReq(BaseModel):
+    tool: str
+    enabled: bool = True
+
+@app.get("/api/coanimm/tools")
+async def coanimm_tools_list():
+    """Liste les outils de l'agent et leur état (activé/désactivé)."""
+    import core.database as _db
+    disabled = set(_db.list_coanimm_disabled_tools())
+    tools = [{"tool": t["tool"], "label": t["label"], "category": t.get("category", "Autres"),
+              "enabled": t["tool"] not in disabled}
+             for t in _COANIMM_TOOLS]
+    return {"tools": tools}
+
+@app.post("/api/coanimm/tools")
+async def coanimm_tools_toggle(req: CoanimmToolToggleReq):
+    """Active ou désactive un outil de l'agent."""
+    import core.database as _db
+    if req.tool not in {t["tool"] for t in _COANIMM_TOOLS}:
+        raise HTTPException(400, "Outil inconnu.")
+    return {"status": "ok", "disabled": _db.set_coanimm_tool_enabled(req.tool, req.enabled)}
+
+# ── Outils CoaNIMM additionnels (lecture seule / local) ──
+class CoanimmDocSearchReq(BaseModel):
+    query: str = ""
+    thread_id: Optional[str] = None
+class CoanimmExtractTextReq(BaseModel):
+    path: str = ""
+    thread_id: Optional[str] = None
+class CoanimmAskLlmReq(BaseModel):
+    prompt: str = ""
+    system: str = ""
+    thread_id: Optional[str] = None
+class CoanimmReadUrlReq(BaseModel):
+    url: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/doc_search")
+async def coanimm_doc_search(req: CoanimmDocSearchReq):
+    """Interroge la base de connaissances (RAG) pour un script CoaNIMM. Local."""
+    import core.database as _db
+    if "doc_search" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil base de connaissances désactivé dans les réglages CoaNIMM]"}
+    from modules.enrichissement import search_documents
+    q = (req.query or "").strip()
+    if not q:
+        return {"result": "(requête vide)"}
+    passages = search_documents(q, k=5)
+    if not passages:
+        return {"result": "[Aucun document ne correspond à cette requête.]"}
+    blocs = []
+    for pp in passages:
+        titre = pp.get("titre") or "Document"
+        src = pp.get("source") or ""
+        blocs.append(f"[{titre} — {src}]\n{pp.get('passage', '')}")
+    return {"result": "\n\n".join(blocs)[:6000]}
+
+@app.post("/api/coanimm/extract_text")
+async def coanimm_extract_text(req: CoanimmExtractTextReq):
+    """Extrait le texte d'un document (PDF/Word/ODT/RTF/EPUB/HTML/image+OCR). Lecture seule."""
+    import core.database as _db, os as _os, asyncio as _aio, functools as _ft
+    if "extract_text" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil extraction de texte désactivé dans les réglages CoaNIMM]"}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"result": f"[Fichier introuvable : {path}]"}
+    try:
+        from modules.enrichissement import extract_any, mistral_key_from_settings
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        mkey = mistral_key_from_settings(settings)
+        text = await _aio.get_event_loop().run_in_executor(
+            None, _ft.partial(extract_any, path, _os.path.basename(path), mistral_key=mkey))
+    except Exception as e:
+        return {"result": f"[Erreur extraction : {e}]"}
+    return {"result": (text or "")[:200000]}
+
+@app.post("/api/coanimm/ask_llm")
+async def coanimm_ask_llm(req: CoanimmAskLlmReq):
+    """Sous-tâche IA pour un script CoaNIMM : résumer/classer/traduire. Provider configuré."""
+    import core.database as _db
+    if "ask_llm" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil sous-tâche IA désactivé dans les réglages CoaNIMM]"}
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        return {"result": "(prompt vide)"}
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        out = await call_llm(
+            messages=[{"role": "user", "content": prompt[:12000]}],
+            provider=settings.get("provider", "deepseek"),
+            model=settings.get("model"),
+            system_prompt=(req.system or "Tu es un assistant concis et factuel.")[:2000],
+            max_tokens=1500,
+            temperature=0.3,
+            api_keys=settings.get("api_keys", {}),
+        )
+    except Exception as e:
+        return {"result": f"[Erreur sous-tâche IA : {e}]"}
+    return {"result": (out or "")[:8000]}
+
+@app.post("/api/coanimm/read_url")
+async def coanimm_read_url(req: CoanimmReadUrlReq):
+    """Extrait le texte principal d'une URL précise (anti-SSRF via net_guard)."""
+    import core.database as _db, asyncio as _aio, functools as _ft
+    if "read_url" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil lecture de page web désactivé dans les réglages CoaNIMM]"}
+    url = (req.url or "").strip()
+    if not url:
+        return {"result": "(URL vide)"}
+    try:
+        from modules.enrichissement import extract_url
+        titre, texte = await _aio.get_event_loop().run_in_executor(
+            None, _ft.partial(extract_url, url))
+    except Exception as e:
+        return {"result": f"[Erreur lecture URL : {e}]"}
+    if not texte:
+        return {"result": "[Aucun contenu exploitable à cette adresse.]"}
+    head = (f"# {titre}\n" if titre else "")
+    return {"result": (head + texte)[:8000]}
+
+class CoanimmTranslateReq(BaseModel):
+    text: str = ""
+    target_lang: str = "anglais"
+    thread_id: Optional[str] = None
+class CoanimmExpurgateReq(BaseModel):
+    text: str = ""
+    consigne: str = ""
+    thread_id: Optional[str] = None
+class CoanimmColoringReq(BaseModel):
+    subject: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/translate")
+async def coanimm_translate(req: CoanimmTranslateReq):
+    """Traduit un texte (provider configuré). Local au serveur NIMM."""
+    import core.database as _db
+    if "translate" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil traduction désactivé dans les réglages CoaNIMM]"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"result": "(texte vide)"}
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        out = await call_llm(
+            messages=[{"role": "user", "content": text[:12000]}],
+            provider=settings.get("provider", "deepseek"),
+            model=settings.get("model"),
+            system_prompt=f"Traduis fidèlement le texte de l'utilisateur en {req.target_lang or 'anglais'}. Conserve le sens, le registre et la mise en forme. Réponds UNIQUEMENT par la traduction, sans commentaire.",
+            max_tokens=2000, temperature=0.2,
+            api_keys=settings.get("api_keys", {}),
+        )
+    except Exception as e:
+        return {"result": f"[Erreur traduction : {e}]"}
+    return {"result": (out or "")[:12000]}
+
+@app.post("/api/coanimm/expurgate")
+async def coanimm_expurgate(req: CoanimmExpurgateReq):
+    """Produit une version adaptée aux enfants d'un texte (expurgée, éventuellement abrégée)."""
+    import core.database as _db
+    if "expurgate" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil expurgation désactivé dans les réglages CoaNIMM]"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"result": "(texte vide)"}
+    consigne = (req.consigne or "").strip()
+    _sys = ("Tu adaptes un texte pour le rendre adapté aux enfants. Produis une version "
+            "expurgée et, si demandé, abrégée : retire ou adoucis les scènes de violence "
+            "explicite, de sexualité, d'horreur graphique, de cruauté, ainsi que le langage "
+            "grossier, tout en PRÉSERVANT l'histoire, son fil, ses personnages et sa valeur "
+            "littéraire. N'ajoute aucun contenu inventé. Conserve la langue d'origine. "
+            "Réponds UNIQUEMENT par le texte adapté, sans préambule ni commentaire.")
+    if consigne:
+        _sys += " Consigne supplémentaire de l'utilisateur : " + consigne[:500]
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        out = await call_llm(
+            messages=[{"role": "user", "content": text[:14000]}],
+            provider=settings.get("provider", "deepseek"),
+            model=settings.get("model"),
+            system_prompt=_sys,
+            max_tokens=3000, temperature=0.3,
+            api_keys=settings.get("api_keys", {}),
+        )
+    except Exception as e:
+        return {"result": f"[Erreur expurgation : {e}]"}
+    return {"result": (out or "")[:16000]}
+
+@app.post("/api/coanimm/coloring_page")
+async def coanimm_coloring_page(req: CoanimmColoringReq):
+    """Génère un coloriage (dessin au trait N&B) sur un sujet, sauvegardé dans le workspace."""
+    import core.database as _db, os as _os, time as _time
+    if "coloring" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil coloriage désactivé dans les réglages CoaNIMM."}
+    subject = (req.subject or "").strip()
+    if not subject:
+        return {"status": "error", "message": "Le sujet est vide."}
+    from core.engine import generate_image
+    from core.hub import load_settings
+    from modules.coanimm import _workspace_dir
+    settings = load_settings(req.thread_id)
+    api_keys = settings.get("api_keys", {})
+    img_provider = settings.get("provider_routing", {}).get("image", "gemini")
+    prompt = ("Coloring book page, black and white line art, bold clean outlines, no shading, "
+              "no grayscale, pure white background, simple and friendly, suitable for young children: " + subject)
+    try:
+        result = await generate_image(prompt, img_provider, api_keys)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    workdir = _workspace_dir(req.thread_id)
+    filename = f"coloriage_{int(_time.time())}.png"
+    filepath = _os.path.join(workdir, filename)
+    try:
+        if result.get("b64"):
+            import base64 as _b64
+            with open(filepath, "wb") as _f:
+                _f.write(_b64.b64decode(result["b64"]))
+        elif result.get("url"):
+            import urllib.request as _ur
+            _ur.urlretrieve(result["url"], filepath)
+        else:
+            return {"status": "error", "message": "Aucune donnée image reçue du provider."}
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
+    print(f"[COANIMM] Coloriage généré → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename}
+
+class CoanimmMakeDocReq(BaseModel):
+    title: str = ""
+    sections: list = []
+    fmt: str = "docx"
+    lang: str = "fr"
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/make_document")
+async def coanimm_make_document(req: CoanimmMakeDocReq):
+    """Crée un document ACCESSIBLE (docx/pdf/epub/html/txt) dans le workspace CoaNIMM."""
+    import core.database as _db, os as _os, time as _time, re as _re
+    if "make_document" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil création de document désactivé dans les réglages CoaNIMM."}
+    try:
+        from modules.accessible_doc import build_document
+        from modules.coanimm import _workspace_dir
+        data, ext = build_document(req.title or "Document", req.sections or [], fmt=req.fmt or "docx", lang=req.lang or "fr")
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur création document : {e}"}
+    workdir = _workspace_dir(req.thread_id)
+    _os.makedirs(workdir, exist_ok=True)
+    base = _re.sub(r"[^\w\-]+", "_", (req.title or "document").strip())[:50] or "document"
+    filename = f"{base}_{int(_time.time())}.{ext}"
+    filepath = _os.path.join(workdir, filename)
+    try:
+        with open(filepath, "wb") as _f:
+            _f.write(data)
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
+    print(f"[COANIMM] Document généré → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename}
+
+class CoanimmTranscribeReq(BaseModel):
+    path: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/transcribe")
+async def coanimm_transcribe(req: CoanimmTranscribeReq):
+    """Transcrit un fichier audio (Whisper local) pour un script CoaNIMM. Lecture seule, local."""
+    import core.database as _db, os as _os, asyncio as _aio, functools as _ft
+    if "transcribe" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil transcription désactivé dans les réglages CoaNIMM]"}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"result": f"[Fichier introuvable : {path}]"}
+    try:
+        stt = get_stt()
+        res = await _aio.get_event_loop().run_in_executor(None, _ft.partial(stt.transcribe_file, path))
+    except Exception as e:
+        return {"result": f"[Erreur transcription : {e}]"}
+    if isinstance(res, dict):
+        if res.get("status") == "ok":
+            return {"result": (res.get("text", "") or "")[:16000]}
+        return {"result": "[Erreur transcription : " + str(res.get("message") or res.get("error") or "?") + "]"}
+    return {"result": str(res)[:16000]}
+
+class CoanimmSpeakReq(BaseModel):
+    text: str = ""
+    voice: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/speak")
+async def coanimm_speak(req: CoanimmSpeakReq):
+    """Synthétise un texte en audio (TTS) et l'enregistre dans le workspace CoaNIMM."""
+    import core.database as _db, os as _os, time as _time, asyncio as _aio, functools as _ft
+    if "speak" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil synthèse vocale désactivé dans les réglages CoaNIMM."}
+    text = (req.text or "").strip()
+    if not text:
+        return {"status": "error", "message": "Le texte est vide."}
+    try:
+        from modules.tts import synthesize, DEFAULT_VOICE
+        from modules.coanimm import _workspace_dir
+        voice = (req.voice or "").strip() or DEFAULT_VOICE
+        data, media = await _aio.get_event_loop().run_in_executor(
+            None, _ft.partial(synthesize, text[:8000], voice))
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur synthèse vocale : {e}"}
+    if not data:
+        return {"status": "error", "message": "La synthèse n'a produit aucun son (voix indisponible ?)."}
+    ext = "mp3" if media == "audio/mpeg" else "wav"
+    workdir = _workspace_dir(req.thread_id)
+    _os.makedirs(workdir, exist_ok=True)
+    filename = f"audio_{int(_time.time())}.{ext}"
+    filepath = _os.path.join(workdir, filename)
+    try:
+        with open(filepath, "wb") as _f:
+            _f.write(data)
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
+    print(f"[COANIMM] Audio généré → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename}
+
+class CoanimmDescribeImageReq(BaseModel):
+    path: str = ""
+    prompt: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/describe_image")
+async def coanimm_describe_image(req: CoanimmDescribeImageReq):
+    """Décrit une image (texte alternatif accessible) via le modèle de vision. Lecture seule."""
+    import core.database as _db, os as _os, base64 as _b64
+    if "describe_image" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil description d'image désactivé dans les réglages CoaNIMM]"}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"result": f"[Fichier introuvable : {path}]"}
+    try:
+        with open(path, "rb") as _f:
+            raw = _f.read()
+        ext = _os.path.splitext(path)[1].lower().lstrip(".")
+        media = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                 "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
+        b64 = _b64.b64encode(raw).decode("ascii")
+        from core.engine import call_vision
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        vprov = settings.get("provider_routing", {}).get("vision", "gemini")
+        prompt = (req.prompt or "").strip() or "Décris cette image de façon précise et concise, comme un texte alternatif accessible, en français."
+        out = await call_vision(b64, media, prompt, vprov, settings.get("api_keys", {}))
+    except Exception as e:
+        return {"result": f"[Erreur description image : {e}]"}
+    return {"result": (out or "")[:6000]}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────

@@ -55,7 +55,7 @@
                     <line x1="5.5" y1="10" x2="7" y2="11.5"/><line x1="7" y1="11.5" x2="10.5" y2="9"/>
                 </svg>
             </button>
-            <button id="toggle-enrich" title="Enrichissement web" aria-label="Enrichissement web"><span aria-hidden="true">🌐</span></button>
+            <button id="toggle-enrich" title="Enrichir la base de connaissances" aria-label="Enrichir la base de connaissances"><span aria-hidden="true">🌐</span></button>
             <button id="toggle-settings" title="Paramètres" aria-label="Paramètres"><span aria-hidden="true">⚙️</span></button>
             <button id="toggle-coanimm" title="Agent CoaNIMM" aria-label="Agent CoaNIMM"><span aria-hidden="true">🐸</span></button>
         </div>
@@ -854,6 +854,13 @@
             </p>
             <ul id="coanimm-caps-list" style="list-style:none;padding:0;margin:0;font-size:0.82rem;"></ul>
         </details>
+        <details id="coanimm-tools-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Outils de CoaNIMM</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Activez ou désactivez les outils que CoaNIMM peut utiliser dans ses scripts. Un outil désactivé n'est plus disponible pour l'agent.
+            </p>
+            <ul id="coanimm-tools-list" style="list-style:none;padding:0;margin:0;font-size:0.82rem;" aria-label="Outils de CoaNIMM"></ul>
+        </details>
         <details id="coanimm-workspace-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
             <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Espace de travail</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
@@ -878,6 +885,16 @@
             <p id="coanimm-history-wf-status" role="status" aria-live="polite" style="font-size:0.82rem;margin:6px 0 0;min-height:1em;"></p>
         </details>
 
+        <details id="coanimm-seclog-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Journal de sécurité</summary>
+            <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                Trace des exécutions de CoaNIMM : capacités utilisées, dossiers touchés, fichiers produits, résultat. Les 200 dernières.
+            </p>
+            <ul id="coanimm-seclog-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.8rem;" aria-label="Journal de sécurité CoaNIMM"></ul>
+            <button type="button" id="coanimm-seclog-clear-btn"
+                style="font-size:0.82rem;padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Effacer le journal</button>
+            <p id="coanimm-seclog-status" role="status" aria-live="polite" style="font-size:0.82rem;margin:6px 0 0;min-height:1em;"></p>
+        </details>
         <details id="coanimm-skills-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
             <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Skills enregistrés</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
@@ -1424,12 +1441,12 @@
 <div id="enrich-modal" class="modal-overlay hidden">
     <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="enrich-modal-title" style="max-width:620px;">
         <div class="modal-header">
-            <h3 id="enrich-modal-title"><span aria-hidden="true">🌐 </span>Enrichissement web</h3>
+            <h3 id="enrich-modal-title"><span aria-hidden="true">🌐 </span>Enrichir la base de connaissances</h3>
             <button class="close-modal" id="enrich-close" aria-label="Fermer">✕</button>
         </div>
         <p style="color:var(--text-muted);font-size:0.88rem;margin:4px 0 12px;">
-            Ajoute du contenu à la zone de référence : indique des URL (une par ligne) ou colle un texte.
-            Ce contenu reste séparé de la mémoire personnelle.
+            Ajoute des documents à ta base de connaissances : indique des URL (une par ligne), colle un texte, ou ajoute un fichier.
+            Ces documents restent séparés de la mémoire personnelle ; NIMM s'en sert pour répondre quand c'est pertinent.
         </p>
         <div style="display:flex;gap:8px;margin-bottom:10px;" role="radiogroup" aria-label="Type de source">
             <button id="enrich-mode-url" class="btn-secondary" role="radio" aria-checked="true">URL (une par ligne)</button>
@@ -1499,8 +1516,7 @@
     </div>
 </div>
 
-<script src="/static/app.js?v=20260626-1"></script>
-<!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260626-v9"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
