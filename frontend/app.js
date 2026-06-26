@@ -7616,22 +7616,67 @@ function _renderCoanimmTools(tools) {
     const ul = document.getElementById('coanimm-tools-list');
     if (!ul) return;
     ul.innerHTML = '';
+    // Résumé global
+    const total = tools.length;
+    const actifs = tools.filter(t => t.enabled).length;
+    const sum = document.createElement('li');
+    sum.id = 'coanimm-tools-summary';
+    sum.style.cssText = 'list-style:none;color:var(--text-muted);font-size:0.8rem;margin-bottom:6px;';
+    sum.textContent = actifs + ' outil' + (actifs > 1 ? 's' : '') + ' actif' + (actifs > 1 ? 's' : '') + ' sur ' + total + '.';
+    ul.appendChild(sum);
+    // Regrouper par catégorie (ordre de première apparition)
+    const cats = [];
+    const byCat = {};
     tools.forEach(t => {
-        const li = document.createElement('li');
-        li.style.cssText = 'padding:4px 0;display:flex;align-items:flex-start;gap:6px;';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.id = 'coanimm-tool-' + t.tool;
-        cb.checked = !!t.enabled;
-        cb.style.cssText = 'width:auto;margin:2px 0 0;flex:none;';
-        cb.addEventListener('change', () => _toggleCoanimmTool(t.tool, cb.checked));
-        const lab = document.createElement('label');
-        lab.setAttribute('for', cb.id);
-        lab.style.cssText = 'font-size:0.82rem;margin:0;cursor:pointer;';
-        lab.textContent = t.label;
-        li.appendChild(cb); li.appendChild(lab);
-        ul.appendChild(li);
+        const c = t.category || 'Autres';
+        if (!byCat[c]) { byCat[c] = []; cats.push(c); }
+        byCat[c].push(t);
     });
+    cats.forEach(c => {
+        const items = byCat[c];
+        const nOn = items.filter(t => t.enabled).length;
+        const det = document.createElement('details');
+        det.dataset.cat = c;
+        det.style.cssText = 'margin:4px 0;border:1px solid var(--border);border-radius:6px;padding:4px 8px;';
+        const sm = document.createElement('summary');
+        sm.style.cssText = 'cursor:pointer;font-size:0.83rem;';
+        sm.textContent = c + ' (' + nOn + '/' + items.length + ' actifs)';
+        det.appendChild(sm);
+        const inner = document.createElement('ul');
+        inner.style.cssText = 'list-style:none;padding:0;margin:6px 0 2px;';
+        items.forEach(t => {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:3px 0;display:flex;align-items:flex-start;gap:6px;';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.id = 'coanimm-tool-' + t.tool;
+            cb.checked = !!t.enabled;
+            cb.style.cssText = 'width:auto;margin:2px 0 0;flex:none;';
+            cb.addEventListener('change', () => _toggleCoanimmTool(t.tool, cb.checked));
+            const lab = document.createElement('label');
+            lab.setAttribute('for', cb.id);
+            lab.style.cssText = 'font-size:0.82rem;margin:0;cursor:pointer;';
+            lab.textContent = t.label;
+            li.appendChild(cb); li.appendChild(lab);
+            inner.appendChild(li);
+        });
+        det.appendChild(inner);
+        ul.appendChild(det);
+    });
+}
+function _coanimmUpdateToolCounts() {
+    const ul = document.getElementById('coanimm-tools-list');
+    if (!ul) return;
+    let total = 0, on = 0;
+    ul.querySelectorAll('details').forEach(det => {
+        const cbs = det.querySelectorAll('input[type=checkbox]');
+        let n = 0;
+        cbs.forEach(cb => { total++; if (cb.checked) { on++; n++; } });
+        const sm = det.querySelector('summary');
+        if (sm) sm.textContent = (det.dataset.cat || 'Outils') + ' (' + n + '/' + cbs.length + ' actifs)';
+    });
+    const sumEl = document.getElementById('coanimm-tools-summary');
+    if (sumEl) sumEl.textContent = on + ' outil' + (on > 1 ? 's' : '') + ' actif' + (on > 1 ? 's' : '') + ' sur ' + total + '.';
 }
 async function _toggleCoanimmTool(tool, enabled) {
     try {
@@ -7639,6 +7684,7 @@ async function _toggleCoanimmTool(tool, enabled) {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ tool, enabled }),
         });
+        _coanimmUpdateToolCounts();
         _coanimmAnnounce(enabled ? 'Outil activé.' : 'Outil désactivé.');
     } catch (e) { _coanimmAnnounce('Erreur lors de la mise à jour de l\'outil.'); }
 }
