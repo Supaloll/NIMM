@@ -3213,6 +3213,171 @@ async def tts_voices():
 
 
 # ══════════════════════════════════════════
+# VOICE BANKING — Voxtral TTS (Mistral)
+# ══════════════════════════════════════════
+
+class VoiceCreateReq(BaseModel):
+    name: str
+    language: str = "fr"
+    gender: str = ""
+
+@app.post("/api/voice/create")
+async def voice_create(name: str = Form(...), language: str = Form("fr"),
+                       gender: str = Form(""), file: UploadFile = File(...)):
+    """Upload un audio + crée un profil de voix chez Mistral Voxtral."""
+    import base64, json
+    from core.database import get_api_keys, create_voice_profile
+    keys = get_api_keys()
+    api_key = (keys.get("mistral") or "").strip()
+    if not api_key:
+        raise HTTPException(400, "Clé API Mistral non configurée.")
+    audio_bytes = await file.read()
+    if len(audio_bytes) < 1000:
+        raise HTTPException(400, "Fichier audio trop court ou vide.")
+    # Sauvegarder le sample localement
+    import os, time
+    voice_dir = os.path.join("data", "voice_samples")
+    os.makedirs(voice_dir, exist_ok=True)
+    ext = (file.filename or "sample.mp3").rsplit(".", 1)[-1].lower()
+    sample_path = os.path.join(voice_dir, f"sample_{int(time.time())}.{ext}")
+    with open(sample_path, "wb") as fp:
+        fp.write(audio_bytes)
+    # Créer la voix chez Mistral
+    audio_b64 = base64.b64encode(audio_bytes).decode()
+    body = json.dumps({
+        "name": name,
+        "sample_audio": audio_b64,
+        "sample_filename": file.filename or f"sample.{ext}",
+        "languages": [language],
+        "gender": gender or None,
+    }).encode("utf-8")
+    import urllib.request, urllib.error
+    req = urllib.request.Request(
+        "https://api.mistral.ai/v1/audio/voices",
+        data=body,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        raise HTTPException(502, f"Erreur Mistral API : {e.code} — {detail}")
+    mistral_voice_id = data.get("id", "")
+    if not mistral_voice_id:
+        raise HTTPException(502, f"Mistral n'a pas retourné d'id : {data}")
+    # Enregistrer en base
+    pid = create_voice_profile(name=name, mistral_voice_id=mistral_voice_id,
+                               sample_path=sample_path, language=language, gender=gender)
+    return {"status": "ok", "profile_id": pid, "mistral_voice_id": mistral_voice_id, "name": name}
+
+
+@app.get("/api/voice/profiles")
+async def voice_profiles_list():
+    """Liste les profils de voix personnalisées."""
+    from core.database import list_voice_profiles
+    profiles = list_voice_profiles()
+    # Ne pas exposer sample_path
+    for p in profiles:
+        p.pop("sample_path", None)
+    return {"profiles": profiles}
+
+
+@app.post("/api/voice/default/{pid}")
+async def voice_set_default(pid: str):
+    """Définit un profil comme voix TTS par défaut."""
+    from core.database import set_default_voice_profile, get_voice_profile
+    if not get_voice_profile(pid):
+        raise HTTPException(404, "Profil introuvable.")
+    set_default_voice_profile(pid)
+    return {"status": "ok", "default_profile_id": pid}
+
+
+@app.delete("/api/voice/profile/{pid}")
+async def voice_delete_profile(pid: str):
+    """Supprime un profil de voix (local + Mistral)."""
+    import json, urllib.request
+    from core.database import get_api_keys, get_voice_profile, delete_voice_profile
+    profile = get_voice_profile(pid)
+    if not profile:
+        raise HTTPException(404, "Profil introuvable.")
+    # Tenter de supprimer chez Mistral
+    keys = get_api_keys()
+    api_key = (keys.get("mistral") or "").strip()
+    if api_key and profile.get("mistral_voice_id"):
+        try:
+            req = urllib.request.Request(
+                f'https://api.mistral.ai/v1/audio/voices/{profile["mistral_voice_id"]}',
+                method="DELETE",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            urllib.request.urlopen(req, timeout=10)
+        except Exception as e:
+            print(f"[VOICE] Suppression Mistral échouée : {e}")
+    delete_voice_profile(pid)
+    return {"status": "ok"}
+
+
+@app.get("/api/voice/export/{pid}")
+async def voice_export(pid: str):
+    """Exporte un profil de voix en .nimmvoice (zip : sample audio + metadata JSON)."""
+    import json, os, zipfile, io
+    from core.database import get_voice_profile
+    profile = get_voice_profile(pid)
+    if not profile:
+        raise HTTPException(404, "Profil introuvable.")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        meta = {
+            "name": profile["name"],
+            "mistral_voice_id": profile["mistral_voice_id"],
+            "language": profile.get("language", "fr"),
+            "gender": profile.get("gender", ""),
+            "created_at": profile.get("created_at", ""),
+            "nimm_version": "1.0",
+        }
+        zf.writestr("metadata.json", json.dumps(meta, ensure_ascii=False, indent=2))
+        sp = profile.get("sample_path", "")
+        if sp and os.path.isfile(sp):
+            zf.write(sp, "sample" + os.path.splitext(sp)[1])
+    buf.seek(0)
+    safe_name = profile["name"].replace(" ", "_").lower()
+    return StreamingResponse(buf, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.nimmvoice"'})
+
+
+@app.post("/api/voice/import")
+async def voice_import(file: UploadFile = File(...)):
+    """Importe un profil .nimmvoice et crée le profil en base (sans re-créer chez Mistral)."""
+    import json, os, zipfile, io, time
+    from core.database import create_voice_profile
+    data = await file.read()
+    buf = io.BytesIO(data)
+    try:
+        with zipfile.ZipFile(buf) as zf:
+            meta = json.loads(zf.read("metadata.json"))
+            # Extraire le sample si présent
+            sample_files = [n for n in zf.namelist() if n.startswith("sample")]
+            sample_path = ""
+            if sample_files:
+                voice_dir = os.path.join("data", "voice_samples")
+                os.makedirs(voice_dir, exist_ok=True)
+                ext = os.path.splitext(sample_files[0])[1]
+                sample_path = os.path.join(voice_dir, f"import_{int(time.time())}{ext}")
+                with open(sample_path, "wb") as fp:
+                    fp.write(zf.read(sample_files[0]))
+    except Exception as e:
+        raise HTTPException(400, f"Fichier .nimmvoice invalide : {e}")
+    pid = create_voice_profile(
+        name=meta.get("name", "Voix importée"),
+        mistral_voice_id=meta.get("mistral_voice_id", ""),
+        sample_path=sample_path,
+        language=meta.get("language", "fr"),
+        gender=meta.get("gender", ""),
+    )
+    return {"status": "ok", "profile_id": pid, "name": meta.get("name", "?")}
+
+# ══════════════════════════════════════════
 # UPLOAD — Image / PDF
 # ══════════════════════════════════════════
 @app.post("/api/upload")
