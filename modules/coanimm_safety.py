@@ -129,6 +129,7 @@ _CAP_HELPER_CALLS = {
     'nimm_search_documents': 'recherche', 'nimm_read_url': 'recherche',
     'nimm_ask_llm': 'recherche', 'nimm_translate': 'recherche', 'nimm_expurgate': 'recherche',
     'nimm_describe_image': 'recherche', 'nimm_simplify': 'recherche', 'nimm_anonymize': 'recherche',
+    'nimm_audio_overview': 'recherche',
     'nimm_generate_image': 'image', 'nimm_coloring_page': 'image',
 }
 # Appels (obj, attr) qui écrivent/déplacent/suppriment

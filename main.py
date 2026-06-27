@@ -1811,6 +1811,7 @@ _COANIMM_TOOLS = [
     {"tool": "read_table", "label": "Lire un tableau (CSV/TSV)", "category": "Documents"},
     {"tool": "transcribe", "label": "Transcrire un audio", "category": "Audio & voix"},
     {"tool": "speak", "label": "Donner la voix (texte → audio)", "category": "Audio & voix"},
+    {"tool": "audio_overview", "label": "Résumé audio (2 voix)", "category": "Audio & voix"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
     {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
     {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
@@ -2445,6 +2446,74 @@ async def coanimm_read_table(req: CoanimmReadTableReq):
         _r = (list(_r) + [""] * ncol)[:ncol]
         out.append("| " + " | ".join(_esc(c) for c in _r) + " |")
     return {"result": ("\n".join(out))[:8000]}
+
+class CoanimmAudioOverviewReq(BaseModel):
+    content: str = ""
+    voice1: str = ""
+    voice2: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/audio_overview")
+async def coanimm_audio_overview(req: CoanimmAudioOverviewReq):
+    """Résumé audio façon NotebookLM : génère un dialogue à 2 voix puis le synthétise (Gemini TTS multi-locuteurs)."""
+    import core.database as _db, os as _os, time as _time, asyncio as _aio, functools as _ft
+    if "audio_overview" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil résumé audio désactivé dans les réglages CoaNIMM."}
+    content = (req.content or "").strip()
+    if not content:
+        return {"status": "error", "message": "Le contenu est vide."}
+    h1, h2 = "Hôte", "Invité"
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        _sys = ("Tu écris le script d'un court podcast en français : un dialogue naturel et vivant entre "
+                f"deux personnes nommées {h1} et {h2}, qui présentent et discutent le contenu fourni par "
+                f"l'utilisateur. Format STRICT : chaque réplique sur sa ligne, préfixée par \"{h1}:\" ou \"{h2}:\". "
+                "12 à 18 répliques, ton clair et accessible, pas de didascalies ni de texte hors dialogue. "
+                f"Commence par \"{h1}:\".")
+        transcript = await call_llm(
+            messages=[{"role": "user", "content": content[:12000]}],
+            provider=settings.get("provider", "deepseek"), model=settings.get("model"),
+            system_prompt=_sys, max_tokens=2000, temperature=0.7,
+            api_keys=settings.get("api_keys", {}))
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur génération du script : {e}"}
+    transcript = (transcript or "").strip()
+    if not transcript:
+        return {"status": "error", "message": "Le script généré est vide."}
+    try:
+        from modules.tts import synthesize_gemini_multi
+        from modules.coanimm import _workspace_dir
+        _prompt = f"Lis ce dialogue de podcast entre {h1} et {h2} :\n\n" + transcript
+        wav = await _aio.get_event_loop().run_in_executor(
+            None, _ft.partial(synthesize_gemini_multi, _prompt,
+                              [(h1, (req.voice1 or "Charon")), (h2, (req.voice2 or "Aoede"))]))
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur synthèse audio : {e}"}
+    if not wav:
+        return {"status": "error", "message": "Synthèse audio échouée (clé Gemini manquante, modèle TTS indisponible ou quota ?)."}
+    workdir = _workspace_dir(req.thread_id)
+    _os.makedirs(workdir, exist_ok=True)
+    filename = f"resume_audio_{int(_time.time())}.wav"
+    filepath = _os.path.join(workdir, filename)
+    try:
+        with open(filepath, "wb") as _f:
+            _f.write(wav)
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
+    print(f"[COANIMM] Résumé audio généré → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename, "transcript": transcript[:4000]}
+
+@app.get("/api/settings/gemini-tts-model")
+async def get_gemini_tts_model():
+    return {"model": get_setting("gemini_tts_model", "gemini-2.5-flash-preview-tts")}
+
+@app.post("/api/settings/gemini-tts-model")
+async def set_gemini_tts_model(req: dict):
+    m = (req.get("model") or "").strip() or "gemini-2.5-flash-preview-tts"
+    set_setting("gemini_tts_model", m)
+    return {"status": "ok", "model": m}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────

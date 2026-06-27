@@ -54,7 +54,7 @@ CoaNIMM dispose d'une boîte à outils que ses scripts peuvent appeler. Chaque o
 - **Documents** — interroger ta base de connaissances, extraire le texte d'un fichier (PDF, Word, ODT, EPUB, HTML, image avec OCR), **créer un document accessible** (Word, PDF, EPUB, PowerPoint, HTML — avec titres, langue et descriptions d'images), fusionner des PDF, découper / extraire des pages, créer un PDF à partir d'images.
 - **Texte & langue** — sous-tâche IA (résumer, classer…), traduire, **adapter pour enfants** (retire les passages sensibles), **simplifier en FALC** (Facile À Lire et à Comprendre), **anonymiser** (masque les données personnelles).
 - **Images** — générer une image, créer un coloriage, **décrire une image** (texte alternatif accessible), redimensionner / convertir.
-- **Audio & voix** — transcrire un audio (Whisper, local), **donner la voix** à un texte (synthèse vocale, pour un livre audio).
+- **Audio & voix** — transcrire un audio (Whisper, local), **donner la voix** à un texte (synthèse vocale, voix Google Gemini très naturelles incluses), **résumé audio** façon podcast à 2 voix (style NotebookLM, via l'API Gemini).
 
 Tout reste **confiné** aux dossiers autorisés et sous ton contrôle ; les traitements locaux (extraction, OCR de secours, transcription, simplification…) ne quittent pas la machine.
 
