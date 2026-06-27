@@ -1829,6 +1829,8 @@ _COANIMM_TOOLS = [
     {"tool": "sirene", "label": "Annuaire entreprises (INSEE Sirene)", "category": "Recherche & web"},
     {"tool": "datagouv", "label": "Recherche data.gouv.fr", "category": "Recherche & web"},
     {"tool": "meteo", "label": "Météo (Open-Meteo, sans clé)", "category": "Recherche & web"},
+    {"tool": "mistral_agent", "label": "Invoquer un agent Mistral (Vibe)", "category": "Agents"},
+    {"tool": "mistral_list_agents", "label": "Lister les agents Mistral disponibles", "category": "Agents"},
 ]
 
 class CoanimmToolToggleReq(BaseModel):
@@ -3376,6 +3378,283 @@ async def voice_import(file: UploadFile = File(...)):
         gender=meta.get("gender", ""),
     )
     return {"status": "ok", "profile_id": pid, "name": meta.get("name", "?")}
+
+# ══════════════════════════════════════════
+# AGENTS MISTRAL — gestion + conversations
+# ══════════════════════════════════════════
+
+import urllib.request as _ur, urllib.error as _uerr, json as _json_mod
+
+def _mistral_api_key() -> str:
+    """Retourne la clé API Mistral ou lève HTTPException."""
+    from core.database import get_api_keys
+    key = (get_api_keys().get('mistral') or '').strip()
+    if not key:
+        raise HTTPException(400, "Clé API Mistral non configurée.")
+    return key
+
+
+def _mistral_request(method: str, path: str, body: dict = None, api_key: str = None, timeout: int = 30):
+    """Appel HTTP vers api.mistral.ai/v1/{path}. Retourne le dict JSON."""
+    key = api_key or _mistral_api_key()
+    data = _json_mod.dumps(body).encode() if body else None
+    req = _ur.Request(
+        f'https://api.mistral.ai/v1/{path}',
+        data=data, method=method,
+        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+    )
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            return _json_mod.loads(resp.read())
+    except _uerr.HTTPError as e:
+        detail = e.read().decode(errors='replace')
+        raise HTTPException(e.code, f'Erreur Mistral API : {detail}')
+
+
+class MistralAgentReq(BaseModel):
+    name: str
+    description: str = ''
+    instructions: str = ''
+    tools: list = []
+    model: str = 'mistral-medium-latest'
+
+
+@app.post('/api/mistral-agents/create')
+async def mistral_agent_create(req: MistralAgentReq):
+    """Crée un agent dans Mistral Studio et le stocke localement."""
+    from core.database import upsert_mistral_agent
+    body = {
+        'name': req.name,
+        'description': req.description,
+        'instructions': req.instructions,
+        'model': req.model,
+        'tools': req.tools,
+    }
+    data = _mistral_request('POST', 'beta/agents', body)
+    agent_id = data.get('id', '')
+    if not agent_id:
+        raise HTTPException(502, f'Mistral n\'a pas retourné d\'id : {data}')
+    upsert_mistral_agent(agent_id=agent_id, name=req.name, description=req.description,
+                          instructions=req.instructions, tools=req.tools, model=req.model)
+    return {'status': 'ok', 'agent_id': agent_id, 'name': req.name}
+
+
+@app.get('/api/mistral-agents/list')
+async def mistral_agents_list():
+    """Liste les agents enregistrés localement + rafraîchit depuis Mistral si possible."""
+    from core.database import list_mistral_agents, upsert_mistral_agent, get_api_keys
+    # Tenter de récupérer la liste depuis Mistral
+    try:
+        key = (get_api_keys().get('mistral') or '').strip()
+        if key:
+            data = _mistral_request('GET', 'beta/agents', api_key=key, timeout=8)
+            for ag in (data.get('data') or []):
+                tools = [t.get('type', t) if isinstance(t, dict) else t for t in (ag.get('tools') or [])]
+                upsert_mistral_agent(
+                    agent_id=ag.get('id',''), name=ag.get('name',''),
+                    description=ag.get('description',''), instructions=ag.get('instructions',''),
+                    tools=tools, model=ag.get('model','mistral-medium-latest')
+                )
+    except Exception:
+        pass
+    return {'agents': list_mistral_agents()}
+
+
+@app.get('/api/mistral-agents/{agent_id}')
+async def mistral_agent_get(agent_id: str):
+    """Retourne les détails d'un agent (local + Mistral si possible)."""
+    from core.database import get_mistral_agent, upsert_mistral_agent
+    try:
+        data = _mistral_request('GET', f'beta/agents/{agent_id}', timeout=8)
+        tools = [t.get('type', t) if isinstance(t, dict) else t for t in (data.get('tools') or [])]
+        upsert_mistral_agent(agent_id=agent_id, name=data.get('name',''),
+                              description=data.get('description',''),
+                              instructions=data.get('instructions',''),
+                              tools=tools, model=data.get('model','mistral-medium-latest'))
+    except Exception:
+        pass
+    agent = get_mistral_agent(agent_id)
+    if not agent:
+        raise HTTPException(404, 'Agent introuvable.')
+    return agent
+
+
+class MistralAgentUpdateReq(BaseModel):
+    name: str = ''
+    description: str = ''
+    instructions: str = ''
+    tools: list = []
+    model: str = ''
+
+
+@app.patch('/api/mistral-agents/{agent_id}')
+async def mistral_agent_update(agent_id: str, req: MistralAgentUpdateReq):
+    """Met à jour un agent dans Mistral Studio et localement."""
+    from core.database import upsert_mistral_agent, get_mistral_agent
+    existing = get_mistral_agent(agent_id)
+    body = {k: v for k, v in {
+        'name': req.name or existing.get('name',''),
+        'description': req.description if req.description else existing.get('description',''),
+        'instructions': req.instructions if req.instructions else existing.get('instructions',''),
+        'model': req.model or existing.get('model','mistral-medium-latest'),
+        'tools': req.tools if req.tools else existing.get('tools',[]),
+    }.items() if v}
+    _mistral_request('PATCH', f'beta/agents/{agent_id}', body)
+    upsert_mistral_agent(agent_id=agent_id, **{k: body[k] for k in
+        ['name','description','instructions','model'] if k in body},
+        tools=body.get('tools',[]))
+    return {'status': 'ok', 'agent_id': agent_id}
+
+
+@app.delete('/api/mistral-agents/{agent_id}')
+async def mistral_agent_delete(agent_id: str):
+    """Supprime un agent de Mistral Studio et de la base locale."""
+    from core.database import delete_mistral_agent_local
+    try:
+        _mistral_request('DELETE', f'beta/agents/{agent_id}', timeout=10)
+    except HTTPException:
+        pass
+    delete_mistral_agent_local(agent_id)
+    return {'status': 'ok'}
+
+
+# ── Conversations ──
+
+class MistralConvStartReq(BaseModel):
+    agent_id: str
+    message: str
+    thread_id: str = ''
+    store: bool = True
+
+
+@app.post('/api/mistral-conversations/start')
+async def mistral_conv_start(req: MistralConvStartReq):
+    """Démarre ou continue une conversation Mistral avec un agent."""
+    from core.database import get_mistral_conversation, save_mistral_conversation
+    existing = get_mistral_conversation(req.agent_id, req.thread_id) if req.thread_id else {}
+    if existing:
+        # Continuer la conversation existante
+        body = {'inputs': req.message, 'store': req.store}
+        data = _mistral_request('POST', f'beta/conversations/{existing["id"]}/append', body)
+        conv_id = existing['id']
+    else:
+        # Nouvelle conversation
+        body = {'agent_id': req.agent_id, 'inputs': req.message, 'store': req.store}
+        data = _mistral_request('POST', 'beta/conversations', body)
+        conv_id = data.get('id', data.get('conversation_id', ''))
+        if conv_id and req.thread_id:
+            save_mistral_conversation(conv_id, req.agent_id, req.thread_id)
+    # Extraire le texte de réponse
+    outputs = data.get('outputs') or data.get('entries') or []
+    reply = ''
+    for entry in outputs:
+        if isinstance(entry, dict):
+            content = entry.get('content') or entry.get('message', {}).get('content', '')
+            if isinstance(content, list):
+                for c in content:
+                    if isinstance(c, dict) and c.get('type') == 'text':
+                        reply += c.get('text', '')
+            elif isinstance(content, str):
+                reply += content
+    tool_calls = [e for e in outputs
+                  if isinstance(e, dict) and e.get('type') in ('tool_call','function_call')]
+    return {
+        'reply': reply.strip(),
+        'conversation_id': conv_id,
+        'tool_calls': tool_calls,
+        'raw': data,
+    }
+
+
+# ── Upload fichier pour un agent (document library) ──
+
+@app.post('/api/mistral-agents/{agent_id}/upload-file')
+async def mistral_agent_upload_file(agent_id: str, file: UploadFile = File(...)):
+    """Upload un fichier dans la bibliothèque de documents d'un agent Mistral."""
+    import base64
+    key = _mistral_api_key()
+    content = await file.read()
+    # Mistral Files API : multipart/form-data
+    boundary = b'----NimmBoundary7x9k'
+    fname = (file.filename or 'document.pdf').encode('utf-8')
+    body = (
+        b'--' + boundary + b'\r\n'
+        b'Content-Disposition: form-data; name="purpose"\r\n\r\n'
+        b'agents\r\n'
+        b'--' + boundary + b'\r\n'
+        b'Content-Disposition: form-data; name="file"; filename="' + fname + b'"\r\n'
+        b'Content-Type: application/octet-stream\r\n\r\n'
+        + content +
+        b'\r\n--' + boundary + b'--\r\n'
+    )
+    req = _ur.Request(
+        'https://api.mistral.ai/v1/files',
+        data=body, method='POST',
+        headers={
+            'Authorization': f'Bearer {key}',
+            'Content-Type': f'multipart/form-data; boundary={boundary.decode()}',
+        }
+    )
+    try:
+        with _ur.urlopen(req, timeout=60) as resp:
+            file_data = _json_mod.loads(resp.read())
+    except _uerr.HTTPError as e:
+        raise HTTPException(e.code, e.read().decode(errors='replace'))
+    # Associer le fichier à l'agent
+    file_id = file_data.get('id', '')
+    if file_id:
+        try:
+            _mistral_request('POST', f'beta/agents/{agent_id}/files', {'file_id': file_id}, api_key=key)
+        except Exception:
+            pass
+    return {'status': 'ok', 'file_id': file_id, 'filename': file.filename}
+
+
+# ── CoaNIMM : route pour invoquer un agent Mistral ──
+
+class CoanimmMistralAgentReq(BaseModel):
+    agent_id: str
+    message: str
+    thread_id: Optional[str] = None
+    new_conversation: bool = False
+
+
+@app.post('/api/coanimm/mistral_agent')
+async def coanimm_mistral_agent(req: CoanimmMistralAgentReq):
+    """CoaNIMM invoque un agent Mistral et retourne sa réponse."""
+    import core.database as _db
+    if 'mistral_agent' in _db.list_coanimm_disabled_tools():
+        return {'result': '[Outil Agents Mistral désactivé]'}
+    conv_start = MistralConvStartReq(
+        agent_id=req.agent_id,
+        message=req.message,
+        thread_id=req.thread_id or '',
+        store=True,
+    )
+    result = await mistral_conv_start(conv_start)
+    reply = result.get('reply') or '[Pas de réponse de l\'agent]'
+    tool_calls = result.get('tool_calls', [])
+    if tool_calls:
+        tools_summary = ', '.join(
+            (t.get('function', {}).get('name') or t.get('name', '?'))
+            for t in tool_calls
+        )
+        reply += f'\n\n*Outils utilisés par l\'agent : {tools_summary}*'
+    return {'result': reply, 'conversation_id': result.get('conversation_id')}
+
+
+@app.post('/api/coanimm/mistral_list_agents')
+async def coanimm_mistral_list_agents():
+    """CoaNIMM liste les agents Mistral disponibles."""
+    data = await mistral_agents_list()
+    agents = data.get('agents', [])
+    if not agents:
+        return {'result': 'Aucun agent Mistral configuré. Créez-en un dans Paramètres > Agents Mistral.'}
+    lines = ['Agents Mistral disponibles :']
+    for ag in agents:
+        tools = ', '.join(str(t) for t in (ag.get('tools') or [])[:5]) or 'aucun outil'
+        lines.append(f"• **{ag['name']}** (ID : `{ag['agent_id']}`) — {ag.get('description','') or 'sans description'} — outils : {tools}")
+    return {'result': '\n'.join(lines)}
 
 # ══════════════════════════════════════════
 # UPLOAD — Image / PDF
