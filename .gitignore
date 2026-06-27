@@ -285,3 +285,11 @@ modules/masks/exemple_expert.json
 modules/masks/exemple_mentor.json
 modules/masks/exemple_pote.json
 modules/masks/exemp
+
+# ── Fichiers de session locale (NIMM-main → clone, ne pas publier) ──
+CoaNIMM_schema_*.md
+NOTE_SESSION_*.md
+commit_*.bat
+logs.txt
+_edit_archi.py
+data/.fuse_hidden*
