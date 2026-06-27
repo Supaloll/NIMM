@@ -723,6 +723,16 @@ def init_db(user_id: str = None):
     except Exception:
         pass
 
+    # ── Clés API externes (services tiers : Sirene, Légifrance…) ──
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS external_api_keys (
+            service_id  TEXT PRIMARY KEY,
+            key_enc     TEXT NOT NULL,
+            label       TEXT DEFAULT '',
+            updated_at  TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+
     # ── Index FTS5 — recherche mémoire rapide ──
     c.execute('''
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
@@ -2480,3 +2490,65 @@ def clear_all_memory():
     conn.commit()
     conn.close()
     print("[DB] Memoire videe + FTS5 rebuilt.")
+
+# ══════════════════════════
+# CLÉS API EXTERNES (services tiers)
+# ══════════════════════════
+
+def get_external_key(service_id: str) -> str:
+    """Retourne la clé déchiffrée pour un service, ou '' si absente."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('SELECT key_enc FROM external_api_keys WHERE service_id = ?', (service_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row or not row['key_enc']:
+        return ''
+    try:
+        fern = _api_keys_fernet()
+        return fern.decrypt(row['key_enc'].encode('utf-8')).decode('utf-8')
+    except Exception:
+        return row['key_enc']
+
+
+def set_external_key(service_id: str, key: str, label: str = '') -> None:
+    """Chiffre et stocke (ou supprime si key vide) une clé API externe."""
+    conn = get_conn()
+    if not key:
+        conn.execute('DELETE FROM external_api_keys WHERE service_id = ?', (service_id,))
+        conn.commit()
+        conn.close()
+        return
+    try:
+        key_enc = _api_keys_fernet().encrypt(key.encode('utf-8')).decode('utf-8')
+    except Exception:
+        key_enc = key
+    conn.execute(
+        '''INSERT INTO external_api_keys (service_id, key_enc, label, updated_at)
+           VALUES (?, ?, ?, datetime('now'))
+           ON CONFLICT(service_id) DO UPDATE SET
+               key_enc = excluded.key_enc,
+               label   = excluded.label,
+               updated_at = datetime('now')''',
+        (service_id, key_enc, label or service_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_external_keys() -> list:
+    """Liste les services avec clé configurée (sans exposer les valeurs)."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('SELECT service_id, label, updated_at FROM external_api_keys ORDER BY service_id')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def delete_external_key(service_id: str) -> None:
+    """Supprime une clé API externe."""
+    conn = get_conn()
+    conn.execute('DELETE FROM external_api_keys WHERE service_id = ?', (service_id,))
+    conn.commit()
+    conn.close()

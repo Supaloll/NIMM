@@ -755,6 +755,14 @@ const isAdmin = me.admin;
         });
         html += `</div>
         <button onclick="_saveGlobalKeys()" style="margin-top:10px;padding:6px 14px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:0.85rem">💾 Sauvegarder clés globales</button>
+
+    <div class="settings-section" id="ext-keys-section">
+        <h4>🔑 Services externes</h4>
+        <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 10px">
+            Clés API pour les services tiers utilisés par CoaNIMM. Stockées chiffrées localement.
+        </p>
+        <div id="ext-keys-list">Chargement…</div>
+    </div>
     </div>
     <div class="settings-section">
         <h4>🖥️ Mode serveur</h4>
@@ -765,6 +773,42 @@ const isAdmin = me.admin;
     }
 
     wrap.innerHTML = html;
+    // ── Services externes ──
+    const _extSvcs = (extKeys && extKeys.services) || [];
+    const _extListEl = document.getElementById('ext-keys-list');
+    if (_extListEl && _extSvcs.length) {
+        let _extHtml = '<div style="display:flex;flex-direction:column;gap:12px">';
+        const _cats = [...new Set(_extSvcs.map(s => s.category))];
+        for (const cat of _cats) {
+            _extHtml += `<div><strong style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase">${cat}</strong><div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">`;
+            for (const svc of _extSvcs.filter(s => s.category === cat)) {
+                const configured = svc.configured;
+                const configuredBadge = configured
+                    ? '<span style="color:var(--success,#4caf50);font-size:0.75rem" aria-label="configuré">✔ configuré</span>'
+                    : '<span style="color:var(--text-muted);font-size:0.75rem">non configuré</span>';
+                const keyInputId = `ext-key-${svc.id}`;
+                _extHtml += `<details style="border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+                    <summary style="cursor:pointer;font-size:0.85rem;display:flex;justify-content:space-between;align-items:center">
+                        <span><strong>${svc.label}</strong> ${svc.needs_key ? '' : '<em style="font-size:0.75rem">(sans clé)</em>'}</span>
+                        ${configuredBadge}
+                    </summary>
+                    <div style="margin-top:8px;font-size:0.8rem;color:var(--text-muted)">${svc.desc}</div>
+                    ${svc.needs_key ? `<div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+                        <label for="${keyInputId}" style="font-size:0.8rem;white-space:nowrap">${svc.key_label} :</label>
+                        <input id="${keyInputId}" type="password" autocomplete="off" placeholder="${configured ? '••••••••' : 'Saisir la clé'}"
+                            style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.8rem" />
+                        <button onclick="_saveExtKey('${svc.id}')" style="padding:4px 10px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:0.8rem" aria-label="Enregistrer la clé pour ${svc.label}">💾</button>
+                        ${configured ? `<button onclick="_deleteExtKey('${svc.id}', this)" style="padding:4px 10px;border-radius:6px;background:var(--danger,#e53935);color:#fff;border:none;cursor:pointer;font-size:0.8rem" aria-label="Supprimer la clé de ${svc.label}">🗑</button>` : ''}
+                    </div>` : '<div style="font-size:0.8rem;color:var(--success,#4caf50);margin-top:6px">✔ Accessible sans clé</div>'}
+                </details>`;
+            }
+            _extHtml += '</div></div>';
+        }
+        _extHtml += '</div>';
+        _extListEl.innerHTML = _extHtml;
+    } else if (_extListEl) {
+        _extListEl.innerHTML = '<em style="font-size:0.8rem">Aucun service référencé.</em>';
+    }
 
     if (isAdmin) {
         document.getElementById('server-mode-chk')?.addEventListener('change', async e => {
@@ -1382,12 +1426,13 @@ function _updateMaskIndicator(thread) {
 
 async function promptNewThreadModal() {
     // Charger les masques disponibles + la configuration en cours
-    const [masks, routing, prov, modelData, keys] = await Promise.all([
+    const [masks, routing, prov, modelData, keys, extKeys] = await Promise.all([
         fetch('/api/masks').then(r => r.json()).catch(() => []),
         fetch('/api/settings/routing').then(r => r.json()).catch(() => ({})),
         fetch('/api/settings/provider').then(r => r.json()).catch(() => ({})),
         fetch('/api/settings/model').then(r => r.json()).catch(() => ({})),
         fetch('/api/settings/api-keys').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/ext-keys').then(r => r.json()).catch(() => ({services:[]})),
     ]);
     const sel = document.getElementById('new-thread-mask-select');
     sel.innerHTML = masks.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
@@ -4851,6 +4896,53 @@ document.getElementById('presence-slider')?.addEventListener('input', (e) => {
 
 // ── Bouton mode fantôme ──
 let _ghostMode = false;
+
+async function _saveExtKey(serviceId) {
+    const input = document.getElementById(`ext-key-${serviceId}`);
+    if (!input) return;
+    const key = input.value.trim();
+    if (!key) { _notify('Saisir une clé avant de sauvegarder.', 'warn'); return; }
+    try {
+        const r = await fetch('/api/settings/ext-keys', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({service_id: serviceId, key})
+        });
+        if (!r.ok) throw new Error(await r.text());
+        input.value = '';
+        input.placeholder = '••••••••';
+        _notify('Clé enregistrée.', 'ok');
+        // Marquer comme configuré sans recharger toute la page
+        const details = input.closest('details');
+        if (details) {
+            const badge = details.querySelector('summary span:last-child');
+            if (badge) { badge.style.color = 'var(--success,#4caf50)'; badge.textContent = '✔ configuré'; }
+        }
+    } catch(e) {
+        _notify('Erreur : ' + e.message, 'error');
+    }
+}
+
+async function _deleteExtKey(serviceId, btn) {
+    if (!confirm(`Supprimer la clé pour ${serviceId} ?`)) return;
+    try {
+        const r = await fetch(`/api/settings/ext-keys/${serviceId}`, {method: 'DELETE'});
+        if (!r.ok) throw new Error(await r.text());
+        _notify('Clé supprimée.', 'ok');
+        // Retirer le bouton supprimer + mise à jour badge
+        if (btn) btn.remove();
+        const details = document.getElementById(`ext-key-${serviceId}`)?.closest('details');
+        if (details) {
+            const badge = details.querySelector('summary span:last-child');
+            if (badge) { badge.style.color = 'var(--text-muted)'; badge.textContent = 'non configuré'; }
+            const inp = document.getElementById(`ext-key-${serviceId}`);
+            if (inp) inp.placeholder = 'Saisir la clé';
+        }
+    } catch(e) {
+        _notify('Erreur : ' + e.message, 'error');
+    }
+}
+
 
 async function _loadGhostMode(threadId) {
     if (!threadId) { _ghostMode = false; return; }

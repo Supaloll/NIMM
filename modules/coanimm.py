@@ -619,6 +619,36 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     parts.append(qr if "qr_code" not in _disabled else _stub("nimm_qr_code", "generer un QR code"))
     parts.append(wp if "wikipedia" not in _disabled else _stub("nimm_wikipedia", "rechercher sur Wikipedia"))
     parts.append(wd if "wikidata" not in _disabled else _stub("nimm_wikidata", "interroger Wikidata"))
+    sr = (
+        "def nimm_sirene(query, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/sirene\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=15) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    dg = (
+        "def nimm_datagouv(query, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/datagouv\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=15) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    mt = (
+        "def nimm_meteo(location, days=3, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"location\": location, \"days\": days, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/meteo\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=15) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(sr if "sirene" not in _disabled else _stub("nimm_sirene", "rechercher une entreprise INSEE"))
+    parts.append(dg if "datagouv" not in _disabled else _stub("nimm_datagouv", "rechercher sur data.gouv.fr"))
+    parts.append(mt if "meteo" not in _disabled else _stub("nimm_meteo", "obtenir la meteo"))
     return "".join(parts)
 
 
@@ -1353,54 +1383,4 @@ def save_workflow(label: str, etapes: list, thread_id: str = None) -> dict:
         if sid not in skills:
             return {'status': 'error', 'message': f"Skill inconnu : {sid}"}
         sk = skills[sid]
-        if not sk.get('meta', {}).get('valide_par_laurent', False):
-            return {'status': 'error',
-                    'message': f"Le skill « {sk.get('label', sid)} » n'est pas validé par Laurent."}
-        etapes_valides.append({'skill_id': sid, 'label': sk.get('label', sid)})
-
-    # Union des capacités de toutes les étapes
-    all_caps = set()
-    for e in etapes_valides:
-        sk = skills[e['skill_id']]
-        all_caps.update(sk.get('meta', {}).get('capacites', []))
-
-    meta = {
-        'etapes': etapes_valides,
-        'capacites': sorted(all_caps),
-        'valide_par_laurent': True,
-        'version': 1,
-    }
-    result = db.save_prompt(None, label, '', type='workflow', meta=meta)
-    return {'status': 'created', 'workflow': result}
-
-
-def list_workflows() -> list:
-    """Retourne la liste des workflows enregistrés, triés du plus récent au plus ancien."""
-    raw = db.list_prompts('workflow')
-    out = []
-    for wid, w in raw.items():
-        out.append({
-            'id': wid,
-            'label': w.get('label', ''),
-            'created_at': w.get('created_at', ''),
-            'meta': w.get('meta', {}),
-        })
-    out.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-    return out
-
-
-async def run_workflow(workflow_id: str, thread_id: str = None) -> dict:
-    """Exécute un workflow étape par étape.
-
-    Pour chaque étape :
-    - charge le script du skill ;
-    - applique l'auto-audit si une fiche skill correspond (Étape C) ;
-    - exécute via _execute dans le workspace CoaNIMM global ;
-    - s'arrête et rapporte à la première erreur.
-
-    Retourne : {status, message, steps: [{label, status, output?, error?}],
-                files_info?, files_list?, files_count?}
-    """
-    workflows = db.list_prompts('workflow')
-    if workflow_id not in workflows:
-        return {'status': 'error', 'messag
+        if not sk.get('meta', {}).get('valide_par_laure
