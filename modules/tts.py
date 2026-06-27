@@ -361,6 +361,132 @@ def synthesize_edge(text: str, voice: str) -> Optional[bytes]:
 
 
 # ══════════════════════════════════════════
+# GEMINI TTS (API Google — voix naturelles, mono & multi-locuteurs)
+# ══════════════════════════════════════════
+
+GEMINI_VOICES = [
+    ('Zephyr', 'lumineuse'), ('Puck', 'enjouée'), ('Charon', 'informative'),
+    ('Kore', 'ferme'), ('Fenrir', 'vive'), ('Leda', 'jeune'), ('Orus', 'ferme'),
+    ('Aoede', 'légère'), ('Callirrhoe', 'décontractée'), ('Autonoe', 'lumineuse'),
+    ('Enceladus', 'soufflée'), ('Iapetus', 'claire'), ('Umbriel', 'décontractée'),
+    ('Algieba', 'douce'), ('Despina', 'douce'), ('Erinome', 'claire'),
+    ('Algenib', 'rauque'), ('Rasalgethi', 'informative'), ('Laomedeia', 'enjouée'),
+    ('Achernar', 'douce'), ('Alnilam', 'ferme'), ('Schedar', 'posée'),
+    ('Gacrux', 'mûre'), ('Pulcherrima', 'directe'), ('Achird', 'amicale'),
+    ('Zubenelgenubi', 'familière'), ('Vindemiatrix', 'douce'), ('Sadachbia', 'vive'),
+    ('Sadaltager', 'savante'), ('Sulafat', 'chaleureuse'),
+]
+
+
+def _gemini_tts_model():
+    try:
+        from core.database import get_setting
+        return get_setting('gemini_tts_model', 'gemini-2.5-flash-preview-tts') or 'gemini-2.5-flash-preview-tts'
+    except Exception:
+        return 'gemini-2.5-flash-preview-tts'
+
+
+def _gemini_api_key():
+    try:
+        from core.database import get_api_keys
+        keys = get_api_keys() or {}
+        return (keys.get('gemini') or keys.get('google') or '').strip()
+    except Exception:
+        return ''
+
+
+def _pcm_to_wav(pcm, rate=24000, channels=1, sampwidth=2):
+    import io, wave
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sampwidth)
+        wf.setframerate(rate)
+        wf.writeframes(pcm)
+    return buf.getvalue()
+
+
+def _gemini_tts_request(body, api_key, model, retries=2):
+    """POST à l'API Gemini TTS. Retourne le PCM (bytes) ou None. Retry sur 500 (cf. doc Google)."""
+    import urllib.request, urllib.error, json as _json, base64, time as _t
+    url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + api_key
+    data = _json.dumps(body).encode('utf-8')
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                res = _json.loads(r.read())
+            parts = (res.get('candidates') or [{}])[0].get('content', {}).get('parts', [])
+            for pp in parts:
+                inline = pp.get('inlineData') or pp.get('inline_data')
+                if inline and inline.get('data'):
+                    return base64.b64decode(inline['data'])
+            print('[TTS/Gemini] Réponse sans audio.')
+            return None
+        except urllib.error.HTTPError as e:
+            if e.code == 500 and attempt < retries:
+                _t.sleep(1.0)
+                continue
+            try:
+                _m = e.read()[:200]
+            except Exception:
+                _m = b''
+            print('[TTS/Gemini] HTTP ' + str(e.code) + ' : ' + str(_m))
+            return None
+        except Exception as e:
+            print('[TTS/Gemini] Erreur : ' + str(e))
+            return None
+    return None
+
+
+def synthesize_gemini(text, voice_name='Kore', style=''):
+    """Synthèse mono-locuteur via l'API Gemini TTS. Retourne du WAV (24 kHz) ou None."""
+    text = _clean_text(text)
+    if not text:
+        return None
+    api_key = _gemini_api_key()
+    if not api_key:
+        print('[TTS/Gemini] Aucune clé API Gemini configurée.')
+        return None
+    prompt = (style.strip() + '\n\n' + text) if (style and style.strip()) else text
+    body = {
+        'contents': [{'parts': [{'text': prompt}]}],
+        'generationConfig': {
+            'responseModalities': ['AUDIO'],
+            'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': voice_name}}},
+        },
+    }
+    pcm = _gemini_tts_request(body, api_key, _gemini_tts_model())
+    return _pcm_to_wav(pcm) if pcm else None
+
+
+def synthesize_gemini_multi(transcript, speakers, style=''):
+    """Synthèse multi-locuteurs (jusqu'à 2). speakers = [(nom, voix), ...]. WAV ou None."""
+    transcript = _clean_text(transcript)
+    if not transcript:
+        return None
+    api_key = _gemini_api_key()
+    if not api_key:
+        print('[TTS/Gemini] Aucune clé API Gemini configurée.')
+        return None
+    speakers = (speakers or [])[:2]
+    if not speakers:
+        return None
+    cfgs = [{'speaker': str(nom), 'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': vx}}}
+            for (nom, vx) in speakers]
+    prompt = (style.strip() + '\n\n' + transcript) if (style and style.strip()) else transcript
+    body = {
+        'contents': [{'parts': [{'text': prompt}]}],
+        'generationConfig': {
+            'responseModalities': ['AUDIO'],
+            'speechConfig': {'multiSpeakerVoiceConfig': {'speakerVoiceConfigs': cfgs}},
+        },
+    }
+    pcm = _gemini_tts_request(body, api_key, _gemini_tts_model())
+    return _pcm_to_wav(pcm) if pcm else None
+
+
+# ══════════════════════════════════════════
 # ROUTEUR PRINCIPAL
 # ══════════════════════════════════════════
 
@@ -375,6 +501,8 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE) -> tuple[Optional[bytes], 
         return synthesize_piper(text, voice[6:]), 'audio/wav'
     if voice.startswith('edge:'):
         return synthesize_edge(text, voice[5:]), 'audio/mpeg'
+    if voice.startswith('gemini:'):
+        return synthesize_gemini(text, voice[7:]), 'audio/wav'
     return synthesize_kokoro(text, voice), 'audio/wav'
 
 
@@ -407,6 +535,15 @@ def list_voices() -> list:
             'label':  f"🔵 Edge {v['note']} — {v['region']} {v['label']}",
             'lang':   v['region'],
             'engine': 'edge',
+        })
+
+    # ── Gemini TTS ── (⭐⭐⭐⭐⭐ — en ligne, clé Google requise, 70+ langues, multi-locuteurs)
+    for _gname, _gdesc in GEMINI_VOICES:
+        result.append({
+            'id':     f'gemini:{_gname}',
+            'label':  f'✨ Gemini ⭐⭐⭐⭐⭐ — {_gname} ({_gdesc})',
+            'lang':   '🌍 multi',
+            'engine': 'gemini',
         })
 
     return result

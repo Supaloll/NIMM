@@ -170,11 +170,13 @@ GENERATE_SYSTEM_PROMPT = (
     "  Assemble une liste d'images en un PDF (une image par page) et retourne le chemin du PDF.\n"
     "  nimm_read_table(path: str) -> str\n"
     "  Lit un fichier CSV/TSV et le renvoie en tableau Markdown lisible.\n"
+    "  nimm_audio_overview(content: str, voice1: str = '', voice2: str = '') -> str\n"
+    "  Crée un RÉSUMÉ AUDIO façon podcast : génère un dialogue à 2 voix sur le contenu puis le synthétise (Gemini TTS). Retourne le chemin du fichier audio.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
-    "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table) : "
+    "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -545,6 +547,19 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
     parts.append(rt if "read_table" not in _disabled else _stub("nimm_read_table", "lire un tableau"))
+    ao = (
+        "def nimm_audio_overview(content, voice1='', voice2='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"content\": content, \"voice1\": voice1, \"voice2\": voice2, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/audio_overview\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_audio_overview : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    parts.append(ao if "audio_overview" not in _disabled else _stub("nimm_audio_overview", "resume audio"))
     return "".join(parts)
 
 
