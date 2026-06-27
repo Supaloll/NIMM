@@ -649,6 +649,28 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     parts.append(sr if "sirene" not in _disabled else _stub("nimm_sirene", "rechercher une entreprise INSEE"))
     parts.append(dg if "datagouv" not in _disabled else _stub("nimm_datagouv", "rechercher sur data.gouv.fr"))
     parts.append(mt if "meteo" not in _disabled else _stub("nimm_meteo", "obtenir la meteo"))
+
+    ma = (
+        "def nimm_mistral_agent(message, agent_id, conversation_id=None, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"agent_id\": agent_id, \"message\": message,\n"
+        "        \"thread_id\": _tid, \"new_conversation\": conversation_id is None}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/mistral_agent\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        _resp = _nimm_json.loads(_r.read())\n"
+        "        return _resp.get(\"result\", \"\")\n"
+    ) % tid
+    ml = (
+        "def nimm_mistral_list_agents(_tid='%s'):\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/mistral_list_agents\",\n"
+        "        data=b'{}', headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=15) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(ma if "mistral_agent" not in _disabled else _stub("nimm_mistral_agent", "invoquer un agent Mistral"))
+    parts.append(ml if "mistral_list_agents" not in _disabled else _stub("nimm_mistral_list_agents", "lister les agents Mistral"))
     return "".join(parts)
 
 
@@ -1368,19 +1390,7 @@ async def run_generated(consigne: str, thread_id: str = None,
 # WORKFLOWS — Étape 3 : séquences de skills rejouables
 # ══════════════════════════════════════════════════════════════════════
 
+
 def save_workflow(label: str, etapes: list, thread_id: str = None) -> dict:
-    """Enregistre un workflow (séquence ordonnée de skills) dans la Promptothèque.
-
-    etapes : liste de dicts {skill_id, label}
-    Calcule l'union des capacités de toutes les étapes et la stocke dans meta.
-    Seuls les skills valide_par_laurent=True sont acceptés.
-    """
-    skills = db.list_prompts('skill')
-
-    etapes_valides = []
-    for e in etapes:
-        sid = e.get('skill_id', '')
-        if sid not in skills:
-            return {'status': 'error', 'message': f"Skill inconnu : {sid}"}
-        sk = skills[sid]
-        if not sk.get('meta', {}).get('valide_par_laure
+    """(Stub — section workflows non disponible dans cette version.)"""
+    return {'status': 'error', 'message': 'Workflows non disponibles.'}

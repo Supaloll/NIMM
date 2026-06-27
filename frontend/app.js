@@ -756,6 +756,63 @@ const isAdmin = me.admin;
         html += `</div>
         <button onclick="_saveGlobalKeys()" style="margin-top:10px;padding:6px 14px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:0.85rem">💾 Sauvegarder clés globales</button>
 
+
+    <div class="settings-section" id="mistral-agents-section">
+        <h4>🤖 Agents Mistral (Vibe)</h4>
+        <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 10px">
+            Créez et gérez des agents Mistral avec outils (recherche web, code, images, documents).
+            Accessibles depuis CoaNIMM avec <code>nimm_mistral_agent()</code>.
+        </p>
+        <div id="mistral-agents-list" style="margin-bottom:12px">Chargement…</div>
+        <details style="border:1px solid var(--border);border-radius:8px;padding:8px 12px">
+            <summary style="cursor:pointer;font-size:0.85rem;font-weight:600">➕ Créer un agent</summary>
+            <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;gap:8px;align-items:center">
+                    <label for="mag-name" style="font-size:0.82rem;white-space:nowrap;min-width:90px">Nom :</label>
+                    <input id="mag-name" type="text" placeholder="Mon agent" maxlength="60"
+                        style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.82rem" />
+                </div>
+                <div style="display:flex;gap:8px;align-items:flex-start">
+                    <label for="mag-desc" style="font-size:0.82rem;white-space:nowrap;min-width:90px;margin-top:4px">Description :</label>
+                    <textarea id="mag-desc" rows="2" placeholder="Rôle de l'agent…"
+                        style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.82rem;resize:vertical"></textarea>
+                </div>
+                <div style="display:flex;gap:8px;align-items:flex-start">
+                    <label for="mag-instructions" style="font-size:0.82rem;white-space:nowrap;min-width:90px;margin-top:4px">Instructions :</label>
+                    <textarea id="mag-instructions" rows="4" placeholder="System prompt de l'agent…"
+                        style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.82rem;resize:vertical"></textarea>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <label for="mag-model" style="font-size:0.82rem;white-space:nowrap;min-width:90px">Modèle :</label>
+                    <select id="mag-model" style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.82rem">
+                        <option value="mistral-medium-latest">Mistral Medium (recommandé)</option>
+                        <option value="mistral-small-latest">Mistral Small (rapide)</option>
+                        <option value="mistral-large-latest">Mistral Large (puissant)</option>
+                    </select>
+                </div>
+                <div style="font-size:0.82rem;font-weight:600;margin-top:4px">Outils :</div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px">
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem;cursor:pointer">
+                        <input type="checkbox" value="web_search" class="mag-tool-chk" /> Recherche web
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem;cursor:pointer">
+                        <input type="checkbox" value="code_interpreter" class="mag-tool-chk" /> Interpréteur de code
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem;cursor:pointer">
+                        <input type="checkbox" value="image_generation" class="mag-tool-chk" /> Génération d'images
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem;cursor:pointer">
+                        <input type="checkbox" value="document_library" class="mag-tool-chk" /> Bibliothèque de documents
+                    </label>
+                </div>
+                <button onclick="_magCreate()" style="padding:6px 14px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:0.82rem;margin-top:4px"
+                    aria-label="Créer l'agent Mistral">
+                    🤖 Créer l'agent
+                </button>
+                <div id="mag-status" style="font-size:0.8rem;color:var(--text-muted)"></div>
+            </div>
+        </details>
+    </div>
     <div class="settings-section" id="ext-keys-section">
         <h4>🔑 Services externes</h4>
         <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 10px">
@@ -843,6 +900,45 @@ const isAdmin = me.admin;
     }
 
     wrap.innerHTML = html;
+    // ── Agents Mistral ──
+    (async () => {
+        const magEl = document.getElementById('mistral-agents-list');
+        if (!magEl) return;
+        try {
+            const r = await fetch('/api/mistral-agents/list');
+            const {agents} = await r.json();
+            if (!agents || !agents.length) {
+                magEl.innerHTML = '<em style="font-size:0.8rem">Aucun agent configuré.</em>';
+                return;
+            }
+            const _toolLabel = t => ({'web_search':'🔍 web','code_interpreter':'💻 code','image_generation':'🎨 images','document_library':'📚 docs'})[t] || t;
+            let h = '<div style="display:flex;flex-direction:column;gap:8px">';
+            for (const ag of agents) {
+                const tools = (ag.tools || []).map(_toolLabel).join(', ') || 'aucun outil';
+                h += `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 12px">
+                    <summary style="cursor:pointer;font-size:0.85rem;display:flex;justify-content:space-between;align-items:center">
+                        <strong>🤖 ${ag.name}</strong>
+                        <span style="font-size:0.75rem;color:var(--text-muted)">${tools}</span>
+                    </summary>
+                    ${ag.description ? `<div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">${ag.description}</div>` : ''}
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                        ID : <code>${ag.agent_id}</code> · Modèle : ${ag.model || '?'}
+                    </div>
+                    <div style="font-size:0.78rem;background:var(--bg-secondary);border-radius:6px;padding:6px;margin-top:6px;font-family:monospace">
+                        nimm_mistral_agent("votre question", "${ag.agent_id}")
+                    </div>
+                    <div style="display:flex;gap:6px;margin-top:8px">
+                        <button onclick="_magUploadFile('${ag.agent_id}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Ajouter un document à cet agent">📎 Ajouter doc</button>
+                        <button onclick="_magDelete('${ag.agent_id}','${ag.name}',this)" style="padding:3px 8px;border-radius:6px;background:var(--danger,#e53935);color:#fff;border:none;cursor:pointer;font-size:0.75rem" aria-label="Supprimer cet agent">🗑 Supprimer</button>
+                    </div>
+                </details>`;
+            }
+            h += '</div>';
+            magEl.innerHTML = h;
+        } catch(e) {
+            magEl.innerHTML = '<em style="font-size:0.8rem;color:var(--danger,red)">Erreur chargement agents.</em>';
+        }
+    })();
     // ── Profils de voix Voxtral ──
     (async () => {
         const vbListEl = document.getElementById('voice-profiles-list');
@@ -5182,6 +5278,70 @@ async function _vbImportProfile(input) {
         _notify(`Voix "${data.name}" importée.`, 'ok');
         loadVoices && loadVoices();
     } catch(e) { _notify('Erreur import : ' + e.message, 'error'); }
+}
+
+
+// ══════════════════════════════════════════
+// AGENTS MISTRAL — fonctions JS
+// ══════════════════════════════════════════
+
+async function _magCreate() {
+    const name = (document.getElementById('mag-name')?.value || '').trim();
+    if (!name) { _notify('Nom de l\'agent requis.', 'warn'); return; }
+    const description = document.getElementById('mag-desc')?.value || '';
+    const instructions = document.getElementById('mag-instructions')?.value || '';
+    const model = document.getElementById('mag-model')?.value || 'mistral-medium-latest';
+    const tools = [...document.querySelectorAll('.mag-tool-chk:checked')].map(c => ({type: c.value}));
+    const status = document.getElementById('mag-status');
+    if (status) status.textContent = '⏳ Création en cours…';
+    try {
+        const r = await fetch('/api/mistral-agents/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, description, instructions, model, tools})
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        if (status) status.textContent = `✅ Agent "${data.name}" créé (ID : ${data.agent_id})`;
+        _notify(`Agent "${data.name}" créé.`, 'ok');
+        // Effacer le formulaire
+        ['mag-name','mag-desc','mag-instructions'].forEach(id => {
+            const el = document.getElementById(id); if (el) el.value = '';
+        });
+        document.querySelectorAll('.mag-tool-chk').forEach(c => c.checked = false);
+    } catch(e) {
+        if (status) status.textContent = '❌ ' + e.message;
+        _notify('Erreur : ' + e.message, 'error');
+    }
+}
+
+async function _magDelete(agentId, name, btn) {
+    if (!confirm(`Supprimer l'agent "${name}" ? Cette action le supprime aussi chez Mistral.`)) return;
+    try {
+        const r = await fetch(`/api/mistral-agents/${agentId}`, {method: 'DELETE'});
+        if (!r.ok) throw new Error(await r.text());
+        _notify(`Agent "${name}" supprimé.`, 'ok');
+        btn?.closest('details')?.remove();
+    } catch(e) { _notify('Erreur : ' + e.message, 'error'); }
+}
+
+function _magUploadFile(agentId) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,.txt,.md,.docx,.csv';
+    input.onchange = async () => {
+        if (!input.files || !input.files[0]) return;
+        const fd = new FormData();
+        fd.append('file', input.files[0], input.files[0].name);
+        try {
+            _notify('Upload en cours…', 'ok');
+            const r = await fetch(`/api/mistral-agents/${agentId}/upload-file`, {method: 'POST', body: fd});
+            if (!r.ok) throw new Error(await r.text());
+            const data = await r.json();
+            _notify(`Fichier "${data.filename}" ajouté à l'agent.`, 'ok');
+        } catch(e) { _notify('Erreur upload : ' + e.message, 'error'); }
+    };
+    input.click();
 }
 
 

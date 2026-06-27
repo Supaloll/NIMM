@@ -133,6 +133,7 @@ _CAP_HELPER_CALLS = {
     'nimm_generate_image': 'image', 'nimm_coloring_page': 'image',
     'nimm_wikipedia': 'recherche', 'nimm_wikidata': 'recherche',
     'nimm_sirene': 'recherche', 'nimm_datagouv': 'recherche', 'nimm_meteo': 'recherche',
+    'nimm_mistral_agent': 'recherche', 'nimm_mistral_list_agents': 'recherche',
     # nimm_qr_code : bénin (local uniquement, pas de réseau externe)
 }
 # Appels (obj, attr) qui écrivent/déplacent/suppriment
@@ -362,6 +363,4 @@ def risks_for_display(code: str) -> list:
     for r in c.get('blocked', []):
         out.append({'level': 'danger', 'message': r['message']})
     for r in c.get('needs_confirmation', []):
-        out.append({'level': 'warning', 'message': r['message']})
-    for w in _scan_delete_warnings(code):
-       
+        out.append({'level': 'warni
