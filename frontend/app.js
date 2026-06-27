@@ -4092,9 +4092,8 @@ const MODELS_BY_PROVIDER = {
         { value: 'deepseek-reasoner',  label: '💰💰 DeepSeek Reasoner — raisonnement avance' },
     ],
     gemini: [
-        { value: 'gemini-2.0-flash',   label: '💰 Gemini 2.0 Flash — rapide, economique' },
-        { value: 'gemini-1.5-flash',   label: '💰 Gemini 1.5 Flash — alternatif leger' },
-        { value: 'gemini-1.5-pro',     label: '💰💰💰 Gemini 1.5 Pro — le plus puissant' },
+        { value: 'gemini-3.5-flash',          label: '💰 Gemini 3.5 Flash — rapide, economique' },
+        { value: 'gemini-3.1-pro-preview',    label: '💰💰💰 Gemini 3.1 Pro — le plus puissant' },
     ],
     mistral: [
         { value: 'mistral-small-latest',   label: '💰 Mistral Small — leger, economique' },

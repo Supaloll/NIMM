@@ -692,10 +692,34 @@ def _genrer_fratrie(predicat_neutre: str) -> str:
         return 'soeur'
     return predicat_neutre
 
+# Groupe de synonymes couvrant toutes les variantes du lien de couple.
+# Un seul partenaire actif a la fois : epouse/epoux/mari/femme/compagnon/
+# compagne/partenaire/conjoint sont la meme relation pour cette regle.
+_PARTENAIRE_PREDICATS = PREDICAT_SYNONYMES.get('conjoint', set()) | {'conjoint'}
+
+def _purger_partenaires_concurrents(sujet: str, nouvel_objet: str, existing: list):
+    """Supprime tout ancien lien de couple de `sujet` vers un objet different
+    de `nouvel_objet`. Garantit qu'un seul partenaire est enregistre a la fois
+    (ex : on ne peut pas avoir 'conjoint' ET 'epouse' pointant vers deux
+    personnes differentes en meme temps)."""
+    ns = _normalize(_resolve_alias(sujet))
+    no = _normalize(nouvel_objet)
+    a_supprimer = [
+        e for e in existing
+        if _normalize(_resolve_alias(e.get('sujet', ''))) == ns
+        and _normalize(e.get('predicat', '')) in _PARTENAIRE_PREDICATS
+        and _normalize(e.get('objet', '')) != no
+    ]
+    for e in a_supprimer:
+        print(f"[MEMORY] Ancien partenaire retire : {e.get('sujet')} / {e.get('predicat')} = {e.get('objet')} (remplace par {nouvel_objet})")
+        delete_memory(e['key'])
+        existing.remove(e)
+
+
 def _save_symmetric(record: dict, existing: list):
-    """Crée le souvenir symétrique d'une relation si applicable.
-    Seules les relations horizontales (symétriques) génèrent une réciproque.
-    Les relations verticales (chirales) sont ignorées — le LLM extrait les deux sens."""
+    """Cree le souvenir symetrique d'une relation si applicable.
+    Seules les relations horizontales (symetriques) generent une reciproque.
+    Les relations verticales (chirales) sont ignorees - le LLM extrait les deux sens."""
     predicat = record.get('predicat', '')
     if predicat not in PREDICATS_INVERSES:
         return
@@ -710,6 +734,11 @@ def _save_symmetric(record: dict, existing: list):
     if not _is_prenom(objet):
         print(f"[MEMORY] ⏭️ Symétrique ignorée : '{objet}' n'est pas un prénom")
         return
+
+    # Purge des anciens partenaires concurrents avant de créer la symétrique
+    if predicat in _PARTENAIRE_PREDICATS:
+        _purger_partenaires_concurrents(sujet, objet, existing)
+        _purger_partenaires_concurrents(objet, sujet, existing)
 
     pred_sym = normalize_predicat(PREDICATS_INVERSES[predicat])
     # Réciproque de fratrie concernant l'utilisateur → genrer selon le genre défini par la personne.
@@ -979,6 +1008,9 @@ def save_inline_memory(record: dict, user_msg: str = '', existing: list = None):
         label = '✏️ Corrigé' if correction_explicite else '🔄 Renforcé'
         print(f"[MEMORY] {label} : {duplicate['sujet']} / {duplicate['predicat']} (poids={nouveau_poids:.2f})")
     else:
+        # Un seul partenaire actif à la fois : purge avant d'écrire le nouveau lien
+        if _normalize(record.get('predicat', '')) in _PARTENAIRE_PREDICATS:
+            _purger_partenaires_concurrents(record.get('sujet', ''), record.get('objet', ''), existing)
         # Calcul embedding si disponible (sujet + prédicat + valeur + objet)
         vec = _embed(f"{record.get('sujet','')} {record.get('predicat','')} {record.get('valeur','')} {record.get('objet','')}")
         if vec is not None:
