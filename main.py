@@ -1812,6 +1812,7 @@ _COANIMM_TOOLS = [
     {"tool": "transcribe", "label": "Transcrire un audio", "category": "Audio & voix"},
     {"tool": "speak", "label": "Donner la voix (texte → audio)", "category": "Audio & voix"},
     {"tool": "audio_overview", "label": "Résumé audio (2 voix)", "category": "Audio & voix"},
+    {"tool": "make_daisy", "label": "Livre audio DAISY 2.02 (Victor Reader, AMIS…)", "category": "Audio & voix"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
     {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
     {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
@@ -2088,6 +2089,57 @@ async def coanimm_make_document(req: CoanimmMakeDocReq):
     except Exception as e:
         return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
     print(f"[COANIMM] Document généré → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename}
+
+class CoanimmMakeDaisyReq(BaseModel):
+    title: str = ""
+    sections: list = []
+    lang: str = "fr"
+    voice: str = ""
+    style: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/make_daisy")
+async def coanimm_make_daisy(req: CoanimmMakeDaisyReq):
+    """Crée un livre DAISY 2.02 (ZIP .daisy) dans le workspace CoaNIMM."""
+    import core.database as _db, os as _os, time as _time, re as _re
+    if "make_daisy" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil DAISY désactivé dans les réglages CoaNIMM."}
+    voice = (req.voice or "").strip()
+    style = (req.style or "").strip()
+    if not voice:
+        voice = get_setting("tts_voice", "ff_siwis")
+    if not style and voice.startswith("gemini:"):
+        style = get_setting("gemini_tts_style", "")
+    try:
+        from modules.daisy import build_daisy
+        from modules.coanimm import _workspace_dir
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(
+            None,
+            lambda: build_daisy(
+                req.title or "Document",
+                req.sections or [],
+                lang=req.lang or "fr",
+                voice=voice,
+                style=style,
+            )
+        )
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur création DAISY : {e}"}
+    workdir = _workspace_dir(req.thread_id)
+    _os.makedirs(workdir, exist_ok=True)
+    base = _re.sub(r"[^\w\-]+", "_", (req.title or "livre").strip())[:50] or "livre"
+    filename = f"{base}_{int(_time.time())}.daisy"
+    filepath = _os.path.join(workdir, filename)
+    try:
+        with open(filepath, "wb") as _f:
+            _f.write(data)
+    except Exception as e:
+        return {"status": "error", "message": f"Sauvegarde échouée : {e}"}
+    print(f"[COANIMM] Livre DAISY 2.02 généré → {filepath}")
     return {"status": "ok", "filepath": filepath, "filename": filename}
 
 class CoanimmTranscribeReq(BaseModel):
@@ -3683,58 +3735,4 @@ async def images_save(req: ImageSaveRequest):
     filepath = os.path.join(_IMAGES_DIR, filename)
     try:
         if req.b64:
-            data = req.b64
-            if ',' in data:
-                data = data.split(',', 1)[1]
-            with open(filepath, 'wb') as f:
-                f.write(_base64.b64decode(data))
-        elif req.url:
-            async with _httpx.AsyncClient(timeout=30) as client:
-                r = await client.get(req.url)
-                r.raise_for_status()
-                with open(filepath, 'wb') as f:
-                    f.write(r.content)
-        else:
-            raise HTTPException(400, "b64 ou url requis")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, f"Erreur sauvegarde image : {e}")
-    img_id = save_image(filename, req.prompt, req.thread_id)
-    return {"id": img_id, "filename": filename}
-
-@app.get("/api/images")
-async def images_list():
-    """Liste toutes les images sauvegardées."""
-    return get_images()
-
-@app.get("/api/images/file/{filename}")
-async def images_file(filename: str):
-    """Sert le fichier image depuis data/images/."""
-    if '/' in filename or '\\' in filename or '..' in filename:
-        raise HTTPException(400, "Nom de fichier invalide")
-    filepath = os.path.join(_IMAGES_DIR, filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(404, "Image non trouvée")
-    return FileResponse(filepath, media_type="image/png")
-
-@app.patch("/api/images/{img_id}")
-async def images_rename(img_id: int, req: ImageRenameRequest):
-    """Renomme une image sur disque et en DB."""
-    images = get_images()
-    current = next((i for i in images if i['id'] == img_id), None)
-    if not current:
-        raise HTTPException(404, "Image non trouvée")
-    new_filename = req.filename.strip()
-    if not new_filename.endswith('.png'):
-        new_filename += '.png'
-    old_path = os.path.join(_IMAGES_DIR, current['filename'])
-    new_path = os.path.join(_IMAGES_DIR, new_filename)
-    if os.path.exists(old_path):
-        os.rename(old_path, new_path)
-    rename_image(img_id, new_filename)
-    return {"status": "ok", "filename": new_filename}
-
-@app.delete("/api/images/{img_id}")
-async def images_delete(img_id: int):
-    """Supprime une image (DB +
+  

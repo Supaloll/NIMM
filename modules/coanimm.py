@@ -172,11 +172,18 @@ GENERATE_SYSTEM_PROMPT = (
     "  Lit un fichier CSV/TSV et le renvoie en tableau Markdown lisible.\n"
     "  nimm_audio_overview(content: str, voice1: str = '', voice2: str = '') -> str\n"
     "  Crée un RÉSUMÉ AUDIO façon podcast : génère un dialogue à 2 voix sur le contenu puis le synthétise (Gemini TTS). Retourne le chemin du fichier audio.\n"
+    "  nimm_make_daisy(title: str, sections: list, lang: str = 'fr', voice: str = '', style: str = '') -> str\n"
+    "  Crée un LIVRE AUDIO DAISY 2.02 (format accessible standard Victor Reader, AMIS, EasyReader). "
+    "Produit un fichier .daisy (ZIP) avec ncc.html, fichiers SMIL et audio MP3 synchronisés. "
+    "sections : liste de dicts {'titre': str, 'texte': str}. "
+    "voice : voix TTS ('gemini:Kore', 'gemini:Charon'…) ; vide = voix configurée. "
+    "Retourne le chemin du fichier .daisy.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
-    "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview) : "
+    "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
+    "nimm_make_daisy) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -560,6 +567,19 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    return _res[\"filepath\"]\n"
     ) % tid
     parts.append(ao if "audio_overview" not in _disabled else _stub("nimm_audio_overview", "resume audio"))
+    dy = (
+        "def nimm_make_daisy(title, sections, lang='fr', voice='', style='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"title\": title, \"sections\": sections, \"lang\": lang, \"voice\": voice, \"style\": style, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/make_daisy\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=600) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_make_daisy : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    parts.append(dy if "make_daisy" not in _disabled else _stub("nimm_make_daisy", "creer un livre DAISY"))
     return "".join(parts)
 
 
@@ -1400,40 +1420,4 @@ async def run_workflow(workflow_id: str, thread_id: str = None) -> dict:
             try:
                 audited = await audit_against_skill(code, _skill_to_text(fiche),
                                                     consigne, thread_id)
-                if audited.strip() and _check_syntax(audited) is None:
-                    code = audited
-            except Exception as _ae:
-                print(f"[COANIMM-WF] Auto-audit ignoré étape {i + 1} : {_ae}")
-
-        before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
-        result = _execute(code, None, workdir, thread_id, granted_caps=_granted)
-
-        if result.get('status') == 'error':
-            steps_results.append({'label': elabel, 'status': 'error',
-                                   'error': result.get('message', 'Erreur inconnue')})
-            return {
-                'status': 'error',
-                'message': f"Arrêt sur l'étape « {elabel} » : {result.get('message', '')}",
-                'steps': steps_results,
-            }
-
-        new_files = _scan_new_files(workdir, before)
-        all_new_files.extend(new_files)
-        steps_results.append({
-            'label': elabel,
-            'status': 'ok',
-            'output': result.get('output', ''),
-        })
-
-    files_info, files_list = '', []
-    if all_new_files:
-        files_info, files_list = _route_new_files(all_new_files, thread_id)
-
-    return {
-        'status': 'ok',
-        'message': f"Workflow « {wf.get('label', '')} » terminé ({len(etapes)} étapes).",
-        'steps': steps_results,
-        'files_info': files_info,
-        'files_list': files_list,
-        'files_count': len(all_new_files),
-    }
+                if audited.st
