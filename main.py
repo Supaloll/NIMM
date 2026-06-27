@@ -3735,4 +3735,59 @@ async def images_save(req: ImageSaveRequest):
     filepath = os.path.join(_IMAGES_DIR, filename)
     try:
         if req.b64:
-  
+            b64_data = req.b64
+            if ',' in b64_data:
+                b64_data = b64_data.split(',', 1)[1]
+            img_bytes = _base64.b64decode(b64_data)
+            with open(filepath, 'wb') as f:
+                f.write(img_bytes)
+        elif req.url:
+            async with _httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.get(req.url)
+                r.raise_for_status()
+                with open(filepath, 'wb') as f:
+                    f.write(r.content)
+        else:
+            raise HTTPException(400, "b64 ou url requis")
+        img_id = save_image(filename, req.prompt, req.thread_id)
+        return {"id": img_id, "filename": filename}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/images")
+async def images_list():
+    """Retourne toutes les images de la galerie."""
+    return get_images()
+
+
+@app.get("/api/images/file/{filename}")
+async def images_file(filename: str):
+    """Sert un fichier image depuis le dossier data/images/."""
+    filepath = os.path.join(_IMAGES_DIR, filename)
+    if not os.path.isfile(filepath):
+        raise HTTPException(404, "Image introuvable")
+    return FileResponse(filepath)
+
+
+@app.patch("/api/images/{img_id}")
+async def images_rename(img_id: int, req: ImageRenameRequest):
+    """Renomme une image (nom DB uniquement)."""
+    ok = rename_image(img_id, req.filename)
+    if not ok:
+        raise HTTPException(404, "Image introuvable")
+    return {"status": "ok", "filename": req.filename}
+
+
+@app.delete("/api/images/{img_id}")
+async def images_delete(img_id: int):
+    """Supprime une image (DB + fichier disque)."""
+    filename = delete_image(img_id)
+    if not filename:
+        raise HTTPException(404, "Image introuvable")
+    filepath = os.path.join(_IMAGES_DIR, filename)
+    if os.path.isfile(filepath):
+        os.remove(filepath)
+    return {"status": "ok"}
