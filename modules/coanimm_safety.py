@@ -131,6 +131,8 @@ _CAP_HELPER_CALLS = {
     'nimm_describe_image': 'recherche', 'nimm_simplify': 'recherche', 'nimm_anonymize': 'recherche',
     'nimm_audio_overview': 'recherche',
     'nimm_generate_image': 'image', 'nimm_coloring_page': 'image',
+    'nimm_wikipedia': 'recherche', 'nimm_wikidata': 'recherche',
+    # nimm_qr_code : bénin (local uniquement, pas de réseau externe)
 }
 # Appels (obj, attr) qui écrivent/déplacent/suppriment
 _WRITE_ATTR_CALLS = {
@@ -363,9 +365,4 @@ def risks_for_display(code: str) -> list:
     for w in _scan_delete_warnings(code):
         out.append({'level': 'warning', 'message': w})
     seen, uniq = set(), []
-    for r in out:
-        k = (r['level'], r['message'])
-        if k not in seen:
-            seen.add(k)
-            uniq.append(r)
-    return uniq
+    for r in o

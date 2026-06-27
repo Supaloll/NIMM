@@ -580,6 +580,45 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    return _res[\"filepath\"]\n"
     ) % tid
     parts.append(dy if "make_daisy" not in _disabled else _stub("nimm_make_daisy", "creer un livre DAISY"))
+    qr = (
+        "def nimm_qr_code(content, qr_type='text', name='', vcard_phone='', vcard_email='',"
+        " vcard_org='', vcard_url='', vcard_note='', wifi_ssid='', wifi_password='', wifi_security='WPA', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"content\": content, \"qr_type\": qr_type, \"name\": name,"
+        " \"vcard_phone\": vcard_phone, \"vcard_email\": vcard_email, \"vcard_org\": vcard_org,"
+        " \"vcard_url\": vcard_url, \"vcard_note\": vcard_note, \"wifi_ssid\": wifi_ssid,"
+        " \"wifi_password\": wifi_password, \"wifi_security\": wifi_security,"
+        " \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/qr_code\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=30) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_qr_code : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    wp = (
+        "def nimm_wikipedia(query, lang='fr', sentences=5, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"lang\": lang, \"sentences\": sentences,"
+        " \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/wikipedia\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=30) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    wd = (
+        "def nimm_wikidata(query, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"query\": query, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/wikidata\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=30) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(qr if "qr_code" not in _disabled else _stub("nimm_qr_code", "generer un QR code"))
+    parts.append(wp if "wikipedia" not in _disabled else _stub("nimm_wikipedia", "rechercher sur Wikipedia"))
+    parts.append(wd if "wikidata" not in _disabled else _stub("nimm_wikidata", "interroger Wikidata"))
     return "".join(parts)
 
 
@@ -1364,60 +1403,4 @@ async def run_workflow(workflow_id: str, thread_id: str = None) -> dict:
     """
     workflows = db.list_prompts('workflow')
     if workflow_id not in workflows:
-        return {'status': 'error', 'message': f"Workflow introuvable : {workflow_id}"}
-
-    wf = workflows[workflow_id]
-    etapes = wf.get('meta', {}).get('etapes', [])
-    if not etapes:
-        return {'status': 'error', 'message': "Ce workflow ne contient aucune étape."}
-
-    # Capacités requises par le workflow vs capacités pré-accordées (Étape 2).
-    _granted = set(db.list_coanimm_capabilities())
-    _wf_caps = set(wf.get('meta', {}).get('capacites', [])) & {'reseau', 'programme', 'email'}
-    _missing_caps = _wf_caps - _granted
-    if _missing_caps:
-        return {'status': 'error',
-                'message': ("Ce workflow requiert des capacités non autorisées : "
-                            + ', '.join(sorted(_missing_caps))
-                            + ". Autorise-les dans « Capacités autorisées en exécution » avant de le lancer."),
-                'missing_capabilities': sorted(_missing_caps)}
-
-    skills = db.list_prompts('skill')
-    workdir = _workspace_dir(thread_id)
-    steps_results = []
-    all_new_files = []
-
-    for i, etape in enumerate(etapes):
-        sid = etape.get('skill_id', '')
-        elabel = etape.get('label', f"Étape {i + 1}")
-
-        if sid not in skills:
-            steps_results.append({'label': elabel, 'status': 'error',
-                                   'error': f"Skill introuvable : {sid}"})
-            return {
-                'status': 'error',
-                'message': f"Arrêt sur l'étape « {elabel} » : skill introuvable.",
-                'steps': steps_results,
-            }
-
-        sk = skills[sid]
-        code = sk.get('meta', {}).get('script', '')
-        consigne = sk.get('meta', {}).get('consigne_origine', elabel)
-
-        if not code.strip():
-            steps_results.append({'label': elabel, 'status': 'error',
-                                   'error': "Ce skill n'a pas de script exécutable enregistré."})
-            return {
-                'status': 'error',
-                'message': (f"Arrêt sur l'étape « {elabel} » : ce skill n'a pas de script "
-                            f"exécutable enregistré (recrée-le pour l'utiliser dans un workflow)."),
-                'steps': steps_results,
-            }
-
-        # Auto-audit à la lumière d'un skill correspondant (Étape C)
-        fiche = _find_relevant_skill(consigne)
-        if fiche:
-            try:
-                audited = await audit_against_skill(code, _skill_to_text(fiche),
-                                                    consigne, thread_id)
-                if audited.st
+        return {'status': 'error', 'messag
