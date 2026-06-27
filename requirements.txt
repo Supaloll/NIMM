@@ -56,4 +56,7 @@ playwright>=1.44.0
 python-dotenv>=1.0.0
 
 # ── Matching flou ──
-rapidfuzz>=3.0.0 
+rapidfuzz>=3.0.0
+
+# ── QR codes ──
+qrcode[pil]>=7.4.2   # génération QR code (texte, URL, vCard, Wi-Fi…) — PIL déjà présent via pillow

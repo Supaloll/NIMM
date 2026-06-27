@@ -1822,6 +1822,9 @@ _COANIMM_TOOLS = [
     {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
     {"tool": "describe_image", "label": "Décrire une image", "category": "Images"},
     {"tool": "resize_image", "label": "Redimensionner / convertir une image", "category": "Images"},
+    {"tool": "qr_code", "label": "Générer un QR code (texte, URL, vCard, Wi-Fi…)", "category": "Utilitaires"},
+    {"tool": "wikipedia", "label": "Rechercher sur Wikipedia / Wikimédia", "category": "Recherche & web"},
+    {"tool": "wikidata", "label": "Interroger Wikidata (données structurées)", "category": "Recherche & web"},
 ]
 
 class CoanimmToolToggleReq(BaseModel):
@@ -3711,6 +3714,184 @@ async def set_server_mode(req: SettingValue):
 
 
 # ══════════════════════════════════════════
+# ═══════════════════
+# QR CODES + WIKIMEDIA
+# ═══════════════════
+
+class CoanimmQrCodeReq(BaseModel):
+    content: str = ""
+    qr_type: str = "text"        # text | url | vcard | wifi | email | sms | geo
+    name: str = ""               # vCard : nom complet
+    vcard_phone: str = ""
+    vcard_email: str = ""
+    vcard_org: str = ""
+    vcard_url: str = ""
+    vcard_note: str = ""
+    wifi_ssid: str = ""
+    wifi_password: str = ""
+    wifi_security: str = "WPA"   # WPA | WEP | nopass
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/qr_code")
+async def coanimm_qr_code(req: CoanimmQrCodeReq):
+    """Génère un QR code et l’enregistre dans le workspace CoaNIMM."""
+    import core.database as _db, os as _os, time as _time
+    if "qr_code" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil QR code désactivé dans les réglages CoaNIMM."}
+    try:
+        import qrcode
+        from modules.coanimm import _workspace_dir
+        qr_type = (req.qr_type or "text").lower().strip()
+        if qr_type == "vcard":
+            parts_v = ["BEGIN:VCARD", "VERSION:3.0"]
+            if req.name:        parts_v.append(f"FN:{req.name}")
+            if req.vcard_phone: parts_v.append(f"TEL:{req.vcard_phone}")
+            if req.vcard_email: parts_v.append(f"EMAIL:{req.vcard_email}")
+            if req.vcard_org:   parts_v.append(f"ORG:{req.vcard_org}")
+            if req.vcard_url:   parts_v.append(f"URL:{req.vcard_url}")
+            if req.vcard_note:  parts_v.append(f"NOTE:{req.vcard_note}")
+            parts_v.append("END:VCARD")
+            data = "\n".join(parts_v)
+        elif qr_type == "wifi":
+            ssid = req.wifi_ssid or req.content
+            pwd  = req.wifi_password
+            sec  = req.wifi_security or "WPA"
+            data = f"WIFI:T:{sec};S:{ssid};P:{pwd};;"
+        elif qr_type == "email":
+            data = f"mailto:{req.content}"
+        elif qr_type == "sms":
+            data = f"sms:{req.content}"
+        elif qr_type == "geo":
+            data = f"geo:{req.content}"
+        else:
+            data = req.content
+        if not data.strip():
+            return {"status": "error", "message": "Contenu vide pour le QR code."}
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H)
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        workdir = _workspace_dir(req.thread_id)
+        _os.makedirs(workdir, exist_ok=True)
+        filename = f"qr_{qr_type}_{int(_time.time())}.png"
+        filepath = _os.path.join(workdir, filename)
+        img.save(filepath)
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur QR code : {e}"}
+    print(f"[COANIMM] QR code ({qr_type}) -> {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename, "qr_type": qr_type}
+
+
+class CoanimmWikipediaReq(BaseModel):
+    query: str = ""
+    lang: str = "fr"
+    sentences: int = 5
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/wikipedia")
+async def coanimm_wikipedia(req: CoanimmWikipediaReq):
+    """Recherche un article Wikipedia et retourne un résumé accessible."""
+    import core.database as _db, urllib.parse as _up, re as _re
+    if "wikipedia" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil Wikipedia désactivé]"}
+    query = (req.query or "").strip()
+    if not query:
+        return {"result": "[Requ\u00eate vide]"}
+    lang = (req.lang or "fr").strip().lower()[:5]
+    try:
+        async with _httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "NIMM/1.0"}) as client:
+            r = await client.get(
+                f"https://{lang}.wikipedia.org/w/api.php",
+                params={"action": "query", "list": "search", "srsearch": query,
+                        "srlimit": "1", "format": "json"})
+            results = (r.json().get("query") or {}).get("search") or []
+            if not results:
+                return {"result": f"Aucun article Wikipedia trouv\u00e9 pour \u00ab\u00a0{query}\u00a0\u00bb."}
+            title = results[0]["title"]
+            r2 = await client.get(
+                f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{_up.quote(title.replace(' ', '_'))}",
+                headers={"User-Agent": "NIMM/1.0"})
+            if r2.status_code != 200:
+                return {"result": f"Article Wikipedia \u00ab\u00a0{title}\u00a0\u00bb introuvable."}
+            s = r2.json()
+        extract     = s.get("extract") or ""
+        description = s.get("description") or ""
+        url = (s.get("content_urls") or {}).get("desktop", {}).get("page", "")
+        sents = _re.split(r'(?<=[.!?])\s+', extract.strip())
+        n = max(1, min(int(req.sentences or 5), 20))
+        text = " ".join(sents[:n])
+        result = f"**{title}**"
+        if description: result += f" ({description})"
+        result += f"\n\n{text}"
+        if url: result += f"\n\nSource\u00a0: {url}"
+        return {"result": result, "title": title, "url": url}
+    except Exception as e:
+        return {"result": f"[Erreur Wikipedia\u00a0: {e}]"}
+
+
+class CoanimmWikidataReq(BaseModel):
+    query: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/wikidata")
+async def coanimm_wikidata(req: CoanimmWikidataReq):
+    """Recherche une entité Wikidata et retourne ses propriétés principales."""
+    import core.database as _db
+    if "wikidata" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil Wikidata désactivé]"}
+    query = (req.query or "").strip()
+    if not query:
+        return {"result": "[Requ\u00eate vide]"}
+    WD = "https://www.wikidata.org/w/api.php"
+    try:
+        async with _httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "NIMM/1.0"}) as client:
+            r = await client.get(WD, params={
+                "action": "wbsearchentities", "search": query,
+                "language": "fr", "limit": "3", "format": "json"})
+            results = r.json().get("search") or []
+            if not results:
+                return {"result": f"Aucune entit\u00e9 Wikidata trouv\u00e9e pour \u00ab\u00a0{query}\u00a0\u00bb."}
+            lines_out = [f"R\u00e9sultats Wikidata pour \u00ab\u00a0{query}\u00a0\u00bb\u00a0:"]
+            for it in results[:3]:
+                qid_   = it.get("id", "")
+                label_ = it.get("label", qid_)
+                desc_  = it.get("description", "")
+                lines_out.append(
+                    f"\u2022 {label_} ({qid_})" + (f"\u00a0\u2014 {desc_}" if desc_ else "")
+                    + f"\n  https://www.wikidata.org/wiki/{qid_}")
+            first_qid = results[0].get("id")
+            if first_qid:
+                r2 = await client.get(WD, params={
+                    "action": "wbgetentities", "ids": first_qid,
+                    "languages": "fr|en", "props": "claims", "format": "json"})
+                claims = ((r2.json().get("entities") or {}).get(first_qid) or {}).get("claims") or {}
+                key_props = {
+                    "P31": "Type", "P17": "Pays", "P571": "Fondé le",
+                    "P569": "Naissance", "P570": "Décès",
+                    "P19": "Lieu de naissance", "P106": "Profession",
+                }
+                prop_lines = []
+                for pid, plabel in key_props.items():
+                    if pid not in claims: continue
+                    sv = (claims[pid][0].get("mainsnak") or {}).get("datavalue") or {}
+                    vtype = sv.get("type"); val = sv.get("value")
+                    if vtype == "string":
+                        prop_lines.append(f"  {plabel}\u00a0: {val}")
+                    elif vtype == "wikibase-entityid":
+                        eid = (val or {}).get("id", "?")
+                        prop_lines.append(f"  {plabel}\u00a0: {eid}")
+                    elif vtype == "time" and isinstance(val, dict):
+                        t = val.get("time", "")[:11].lstrip("+")
+                        prop_lines.append(f"  {plabel}\u00a0: {t}")
+                if prop_lines:
+                    lbl0 = results[0].get("label", first_qid)
+                    lines_out.append(f"\nPropri\u00e9t\u00e9s de {lbl0}\u00a0:")
+                    lines_out.extend(prop_lines)
+        return {"result": "\n".join(lines_out)}
+    except Exception as e:
+        return {"result": f"[Erreur Wikidata\u00a0: {e}]"}
+
+
 # GALERIE IMAGES
 # ══════════════════════════════════════════
 
