@@ -755,7 +755,7 @@ const isAdmin = me.admin;
         });
         html += `</div>
         <button onclick="_saveGlobalKeys()" style="margin-top:10px;padding:6px 14px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:0.85rem">💾 Sauvegarder clés globales</button>
-
+    </div>
 
     <div class="settings-section" id="mistral-agents-section">
         <h4>🤖 Agents Mistral (Vibe)</h4>
@@ -819,7 +819,6 @@ const isAdmin = me.admin;
             Clés API pour les services tiers utilisés par CoaNIMM. Stockées chiffrées localement.
         </p>
         <div id="ext-keys-list">Chargement…</div>
-    </div>
     </div>
 
     <div class="settings-section" id="voice-banking-section">
