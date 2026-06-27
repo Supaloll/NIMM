@@ -937,7 +937,7 @@ def init_db(user_id: str = None):
         # (provider, display_name, wallet_type, rate_in, rate_out, reset_policy)
         ('anthropic',  'Anthropic',    'tirelire',          3.00,  15.00, 'manual'),
         ('deepseek',   'DeepSeek',     'tirelire',          0.27,   1.10, 'manual'),
-        ('gemini',     'Gemini',       'compteur_requetes', 0.075,  0.30, 'daily'),
+        ('gemini',     'Gemini',       'tirelire',          1.50,   9.00, 'manual'),
         ('openai',     'OpenAI',       'tirelire',          2.50,  10.00, 'manual'),
         ('openrouter', 'OpenRouter',   'tirelire',          0.50,   1.50, 'manual'),
         ('mistral',    'Mistral',      'compteur_tokens',   0.10,   0.30, 'monthly'),
@@ -1602,15 +1602,16 @@ def mark_messages_processed(ids: list) -> None:
 
 # Tarifs de référence ($/1M tokens) — modifiables via update_wallet_rate()
 TARIFS_DEFAUT = {
-    'anthropic':  {'in': 3.00,  'out': 15.00},
-    'deepseek':   {'in': 0.27,  'out': 1.10},
-    'gemini':     {'in': 0.075, 'out': 0.30},
-    'openai':     {'in': 2.50,  'out': 10.00},
-    'openrouter': {'in': 0.50,  'out': 1.50},
-    'mistral':    {'in': 0.10,  'out': 0.30},
-    'ollama':     {'in': 0.0,   'out': 0.0},
-    'brave':      {'in': 0.0,   'out': 0.0},
-    'tavily':     {'in': 0.0,   'out': 0.0},
+    'anthropic':    {'in': 3.00,  'out': 15.00},
+    'deepseek':     {'in': 0.27,  'out': 1.10},
+    'gemini':       {'in': 1.50,  'out': 9.00},
+    'gemini_image': {'in': 0.50,  'out': 60.00},  # gemini-3.1-flash-image — pas encore loggé (voir ARCHITECTURE.md)
+    'openai':       {'in': 2.50,  'out': 10.00},
+    'openrouter':   {'in': 0.50,  'out': 1.50},
+    'mistral':      {'in': 0.10,  'out': 0.30},
+    'ollama':       {'in': 0.0,   'out': 0.0},
+    'brave':        {'in': 0.0,   'out': 0.0},
+    'tavily':       {'in': 0.0,   'out': 0.0},
 }
 
 def log_cost(provider: str, model: str, tokens_in: int, tokens_out: int,

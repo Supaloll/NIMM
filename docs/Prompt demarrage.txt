@@ -17,6 +17,7 @@ WORKFLOW :
 **REPLACE**
 [remplacement]
 
+Quand tu me donnes des blocs de code, adresse toi à Cline directement, pas de (dis à Cline…).
 5. UN bloc à la fois, confirmation entre chaque
 6. Respecte TOUJOURS l'architecture Hub-and-Spoke
 7. Cache-busting : en fin de session, mettre à jour ?v=YYYYMMDD dans index.html (2 occurrences : styles.css et app.js). Utiliser la date du jour. Si plusieurs sessions le même jour : 20250531-1, 20250531-2, etc.
