@@ -33,6 +33,7 @@ from core.database import (
     set_user_context, get_current_user,
     get_all_users, create_user, delete_user, update_user,
     save_image, get_images, rename_image, delete_image,
+    get_external_key, set_external_key, list_external_keys, delete_external_key,
     list_presets, save_preset, delete_preset, apply_preset,
     list_prompts, save_prompt, delete_prompt
 )
@@ -1825,6 +1826,9 @@ _COANIMM_TOOLS = [
     {"tool": "qr_code", "label": "Générer un QR code (texte, URL, vCard, Wi-Fi…)", "category": "Utilitaires"},
     {"tool": "wikipedia", "label": "Rechercher sur Wikipedia / Wikimédia", "category": "Recherche & web"},
     {"tool": "wikidata", "label": "Interroger Wikidata (données structurées)", "category": "Recherche & web"},
+    {"tool": "sirene", "label": "Annuaire entreprises (INSEE Sirene)", "category": "Recherche & web"},
+    {"tool": "datagouv", "label": "Recherche data.gouv.fr", "category": "Recherche & web"},
+    {"tool": "meteo", "label": "Météo (Open-Meteo, sans clé)", "category": "Recherche & web"},
 ]
 
 class CoanimmToolToggleReq(BaseModel):
@@ -3714,6 +3718,222 @@ async def set_server_mode(req: SettingValue):
 
 
 # ══════════════════════════════════════════
+# ══════════════════════════════════════════
+# SERVICES EXTERNES — registre + clés API
+# ══════════════════════════════════════════
+
+_EXT_SERVICES = [
+    # Services français (données publiques)
+    {"id": "sirene",       "label": "INSEE Sirene 3.11",        "category": "France",    "needs_key": True,  "key_label": "Bearer token INSEE",     "url": "https://api.insee.fr/",                 "desc": "Annuaire entreprises SIRET/SIREN/nom"},
+    {"id": "legifrance",   "label": "Légifrance (DILA)",        "category": "France",    "needs_key": True,  "key_label": "Clé PISTE (client_key)",  "url": "https://piste.gouv.fr/",                "desc": "Textes de loi, codes, jurisprudence"},
+    {"id": "meteo_france", "label": "Météo-France Publique",    "category": "France",    "needs_key": True,  "key_label": "Clé API Météo-France",    "url": "https://portail-api.meteofrance.fr/",   "desc": "Observations et prévisions officielles"},
+    {"id": "datagouv",     "label": "data.gouv.fr",             "category": "France",    "needs_key": False, "key_label": "",                        "url": "https://www.data.gouv.fr/api/1/",       "desc": "Open data officiel français"},
+    # Données scientifiques / académiques
+    {"id": "pubmed",       "label": "PubMed / NCBI",            "category": "Science",   "needs_key": False, "key_label": "Clé NCBI (optionnelle)",  "url": "https://eutils.ncbi.nlm.nih.gov/",      "desc": "Articles médicaux et scientifiques"},
+    {"id": "europeana",    "label": "Europeana",                "category": "Culture",   "needs_key": True,  "key_label": "API Key",                 "url": "https://api.europeana.eu/",             "desc": "Patrimoine culturel européen numérisé"},
+    {"id": "bnf",          "label": "BnF / Gallica",            "category": "Culture",   "needs_key": False, "key_label": "",                        "url": "https://gallica.bnf.fr/api/",           "desc": "Fonds numérisés Bibliothèque nationale"},
+    {"id": "openlib",      "label": "Open Library (IA)",        "category": "Culture",   "needs_key": False, "key_label": "",                        "url": "https://openlibrary.org/",              "desc": "Base mondiale de livres — Internet Archive"},
+    # Outils web / géo / actualités
+    {"id": "opencage",     "label": "OpenCage Geocoding",       "category": "Géo",       "needs_key": True,  "key_label": "API Key",                 "url": "https://opencagedata.com/",             "desc": "Géocodage : adresses ↔ coordonnées GPS"},
+    {"id": "newsapi",      "label": "NewsAPI",                  "category": "Actualités","needs_key": True,  "key_label": "API Key",                 "url": "https://newsapi.org/",                  "desc": "Actualités mondiales (100 req/jour gratuit)"},
+    {"id": "deepl",        "label": "DeepL",                    "category": "Langue",    "needs_key": True,  "key_label": "Auth Key",                "url": "https://www.deepl.com/pro-api",         "desc": "Traduction professionnelle (500 000 car/mois gratuit)"},
+    {"id": "wolfram",      "label": "Wolfram Alpha",            "category": "Science",   "needs_key": True,  "key_label": "App ID",                  "url": "https://products.wolframalpha.com/api/","desc": "Calculs, science, données factuelles"},
+]
+
+class ExtKeyReq(BaseModel):
+    service_id: str
+    key: str = ""
+    label: str = ""
+
+@app.get("/api/settings/ext-keys")
+async def ext_keys_list():
+    """Liste les services référencés et indique lesquels ont une clé configurée."""
+    configured = {r["service_id"] for r in list_external_keys()}
+    return {"services": [
+        {**svc, "configured": svc["id"] in configured}
+        for svc in _EXT_SERVICES
+    ]}
+
+@app.post("/api/settings/ext-keys")
+async def ext_keys_set(req: ExtKeyReq):
+    """Enregistre (ou supprime si key vide) une clé API externe."""
+    svc_ids = {s["id"] for s in _EXT_SERVICES}
+    if req.service_id not in svc_ids:
+        raise HTTPException(400, f"Service inconnu : {req.service_id}")
+    set_external_key(req.service_id, req.key.strip(), req.label)
+    return {"status": "ok", "service_id": req.service_id, "configured": bool(req.key.strip())}
+
+@app.delete("/api/settings/ext-keys/{service_id}")
+async def ext_keys_delete(service_id: str):
+    """Supprime une clé API externe."""
+    delete_external_key(service_id)
+    return {"status": "ok"}
+
+
+# ── Outils CoaNIMM : Sirene / data.gouv / météo ──
+
+class CoanimmSireneReq(BaseModel):
+    query: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/sirene")
+async def coanimm_sirene(req: CoanimmSireneReq):
+    """Recherche une entreprise dans l'annuaire INSEE Sirene (SIRET/SIREN/dénomination)."""
+    import core.database as _db
+    if "sirene" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil Sirene désactivé]"}
+    query = (req.query or "").strip()
+    if not query:
+        return {"result": "[Requête vide]"}
+    bearer = get_external_key("sirene")
+    if not bearer:
+        return {"result": "[Clé INSEE Sirene non configurée — renseigner dans Paramètres > Services externes]"}
+    try:
+        headers = {"Authorization": f"Bearer {bearer}", "Accept": "application/json"}
+        # Détecter si c'est un SIRET (14 chiffres), SIREN (9 chiffres) ou nom
+        clean = query.replace(" ", "").replace("\u00a0", "")
+        if clean.isdigit() and len(clean) == 14:
+            url = f"https://api.insee.fr/api-sirene/3.11/siret/{clean}"
+            async with _httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+                r = await client.get(url)
+            if r.status_code == 404: return {"result": f"SIRET {clean} introuvable."}
+            if r.status_code != 200: return {"result": f"Erreur INSEE : {r.status_code}"}
+            d = r.json().get("etablissement", {})
+            nom = (d.get("uniteLegale") or {}).get("denominationUniteLegale") or (d.get("uniteLegale") or {}).get("nomUniteLegale", "?")
+            adr = " ".join(filter(None, [
+                (d.get("adresseEtablissement") or {}).get("numeroVoieEtablissement", ""),
+                (d.get("adresseEtablissement") or {}).get("typeVoieEtablissement", ""),
+                (d.get("adresseEtablissement") or {}).get("libelleVoieEtablissement", ""),
+                (d.get("adresseEtablissement") or {}).get("codePostalEtablissement", ""),
+                (d.get("adresseEtablissement") or {}).get("libelleCommuneEtablissement", ""),
+            ]))
+            act = (d.get("uniteLegale") or {}).get("activitePrincipaleUniteLegale", "")
+            return {"result": f"**{nom}**\nSIRET : {clean}\nAdresse : {adr}\nActivité (NAF) : {act}"}
+        elif clean.isdigit() and len(clean) == 9:
+            url = f"https://api.insee.fr/api-sirene/3.11/siren/{clean}"
+            async with _httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+                r = await client.get(url)
+            if r.status_code != 200: return {"result": f"SIREN {clean} introuvable (code {r.status_code})."}
+            d = r.json().get("uniteLegale", {})
+            nom = d.get("denominationUniteLegale") or d.get("nomUniteLegale", "?")
+            act = d.get("activitePrincipaleUniteLegale", "")
+            eff = d.get("trancheEffectifsUniteLegale", "")
+            return {"result": f"**{nom}**\nSIREN : {clean}\nActivité (NAF) : {act}\nTranche effectifs : {eff}"}
+        else:
+            url = "https://api.insee.fr/api-sirene/3.11/siret"
+            params = {"q": f"denominationUniteLegale:{query}* OR nomUniteLegale:{query}*",
+                      "nombre": "5", "champs": "siret,denominationUniteLegale,nomUniteLegale,activitePrincipaleUniteLegale,codePostalEtablissement,libelleCommuneEtablissement"}
+            async with _httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+                r = await client.get(url, params=params)
+            if r.status_code != 200: return {"result": f"Erreur recherche Sirene : {r.status_code}"}
+            etabs = r.json().get("etablissements", [])
+            if not etabs: return {"result": f"Aucune entreprise trouvée pour \u00ab\u00a0{query}\u00a0\u00bb."}
+            lines_out = [f"Résultats Sirene pour \u00ab\u00a0{query}\u00a0\u00bb :"]
+            for e in etabs[:5]:
+                ul = e.get("uniteLegale") or {}
+                nom = ul.get("denominationUniteLegale") or ul.get("nomUniteLegale", "?")
+                siret = e.get("siret", "")
+                cp = e.get("codePostalEtablissement", "")
+                ville = e.get("libelleCommuneEtablissement", "")
+                naf = ul.get("activitePrincipaleUniteLegale", "")
+                lines_out.append(f"\u2022 {nom} — SIRET {siret} — {cp} {ville} — NAF {naf}")
+            return {"result": "\n".join(lines_out)}
+    except Exception as e:
+        return {"result": f"[Erreur Sirene : {e}]"}
+
+
+class CoanimmDatagouvReq(BaseModel):
+    query: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/datagouv")
+async def coanimm_datagouv(req: CoanimmDatagouvReq):
+    """Recherche des jeux de données sur data.gouv.fr."""
+    import core.database as _db
+    if "datagouv" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil data.gouv désactivé]"}
+    query = (req.query or "").strip()
+    if not query:
+        return {"result": "[Requête vide]"}
+    try:
+        async with _httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "NIMM/1.0"}) as client:
+            r = await client.get("https://www.data.gouv.fr/api/1/datasets/",
+                                 params={"q": query, "page_size": "5", "sort": "reuse_count"})
+            if r.status_code != 200:
+                return {"result": f"Erreur data.gouv : {r.status_code}"}
+            data = r.json()
+        datasets = (data.get("data") or [])
+        if not datasets:
+            return {"result": f"Aucun jeu de données trouvé pour \u00ab\u00a0{query}\u00a0\u00bb."}
+        lines_out = [f"Jeux de données data.gouv.fr pour \u00ab\u00a0{query}\u00a0\u00bb :"]
+        for ds in datasets[:5]:
+            title = ds.get("title", "?")
+            org   = (ds.get("organization") or {}).get("name", ds.get("owner") or "")
+            descr = (ds.get("description") or "")[:120].replace("\n", " ")
+            url   = f"https://www.data.gouv.fr/fr/datasets/{ds.get('id', '')}"
+            reuses = ds.get("metrics", {}).get("reuses", 0)
+            lines_out.append(f"\u2022 **{title}**" + (f" ({org})" if org else "") + f"\n  {descr}...\n  {url} ({reuses} réutilisations)")
+        return {"result": "\n\n".join(lines_out)}
+    except Exception as e:
+        return {"result": f"[Erreur data.gouv : {e}]"}
+
+
+class CoanimmMeteoReq(BaseModel):
+    location: str = ""
+    days: int = 3
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/meteo")
+async def coanimm_meteo(req: CoanimmMeteoReq):
+    """Météo pour une ville ou des coordonnées, via Open-Meteo (sans clé API)."""
+    import core.database as _db, urllib.parse as _up
+    if "meteo" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil météo désactivé]"}
+    location = (req.location or "").strip()
+    if not location:
+        return {"result": "[Lieu non précisé]"}
+    _WMO = {0:"dégagé",1:"principalement dégagé",2:"partiellement nuageux",3:"couvert",
+            45:"brouillard",48:"brouillard givrant",51:"bruine légère",53:"bruine modérée",
+            55:"bruine dense",61:"pluie légère",63:"pluie modérée",65:"pluie forte",
+            71:"neige légère",73:"neige modérée",75:"neige forte",
+            80:"averses légères",81:"averses modérées",82:"averses violentes",
+            95:"orage",96:"orage + grêle",99:"orage + forte grêle"}
+    try:
+        async with _httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "NIMM/1.0"}) as client:
+            # Géocodage via Nominatim (OSM)
+            geo = await client.get("https://nominatim.openstreetmap.org/search",
+                                   params={"q": location, "format": "json", "limit": "1"})
+            places = geo.json()
+            if not places:
+                return {"result": f"Lieu introuvable : {location}"}
+            lat  = float(places[0]["lat"])
+            lon  = float(places[0]["lon"])
+            name = places[0].get("display_name", location).split(",")[0]
+            days = max(1, min(int(req.days or 3), 7))
+            # Open-Meteo forecast
+            wx = await client.get("https://api.open-meteo.com/v1/forecast", params={
+                "latitude": lat, "longitude": lon,
+                "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode",
+                "timezone": "auto", "forecast_days": days})
+            wd = wx.json().get("daily", {})
+        dates  = wd.get("time", [])
+        t_max  = wd.get("temperature_2m_max", [])
+        t_min  = wd.get("temperature_2m_min", [])
+        precip = wd.get("precipitation_sum", [])
+        codes  = wd.get("weathercode", [])
+        lines_out = [f"Météo à **{name}** pour {days} jour(s) :"]
+        for i, d in enumerate(dates):
+            wmo = _WMO.get(int(codes[i]) if i < len(codes) else 0, "?")
+            prec = f"{precip[i]:.1f} mm" if i < len(precip) else "?"
+            tmax = f"{t_max[i]:.0f}°C" if i < len(t_max) else "?"
+            tmin = f"{t_min[i]:.0f}°C" if i < len(t_min) else "?"
+            lines_out.append(f"  {d} : {tmax}/{tmin} — {wmo} — {prec} pluie")
+        lines_out.append(f"Source : Open-Meteo (lat={lat:.2f}, lon={lon:.2f})")
+        return {"result": "\n".join(lines_out)}
+    except Exception as e:
+        return {"result": f"[Erreur météo : {e}]"}
+
+
 # ═══════════════════
 # QR CODES + WIKIMEDIA
 # ═══════════════════
