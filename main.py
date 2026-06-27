@@ -1806,6 +1806,8 @@ _COANIMM_TOOLS = [
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
+    {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},
+    {"tool": "pdf_from_images", "label": "PDF à partir d'images", "category": "Documents"},
     {"tool": "transcribe", "label": "Transcrire un audio", "category": "Audio & voix"},
     {"tool": "speak", "label": "Donner la voix (texte → audio)", "category": "Audio & voix"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
@@ -2316,6 +2318,90 @@ async def coanimm_merge_pdf(req: CoanimmMergePdfReq):
         return {"status": "error", "message": f"Erreur fusion PDF : {e}"}
     print(f"[COANIMM] PDF fusionné ({len(valid)}) → {filepath}")
     return {"status": "ok", "filepath": filepath, "filename": filename, "count": len(valid)}
+
+class CoanimmSplitPdfReq(BaseModel):
+    path: str = ""
+    pages: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/split_pdf")
+async def coanimm_split_pdf(req: CoanimmSplitPdfReq):
+    """Extrait des pages d'un PDF (ex. pages='1-3,5') dans un nouveau PDF."""
+    import core.database as _db, os as _os, time as _time, re as _re
+    if "split_pdf" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil découpe PDF désactivé dans les réglages CoaNIMM."}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"status": "error", "message": f"Fichier introuvable : {path}"}
+    try:
+        from pypdf import PdfReader, PdfWriter
+        from modules.coanimm import _workspace_dir
+        reader = PdfReader(path)
+        total = len(reader.pages)
+        idx = []
+        for part in (req.pages or "").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                _a, _, _b = part.partition("-")
+                try:
+                    _a = int(_a); _b = int(_b)
+                except Exception:
+                    continue
+                for _n in range(_a, _b + 1):
+                    if 1 <= _n <= total:
+                        idx.append(_n - 1)
+            else:
+                try:
+                    _n = int(part)
+                    if 1 <= _n <= total:
+                        idx.append(_n - 1)
+                except Exception:
+                    continue
+        if not idx:
+            return {"status": "error", "message": f"Aucune page valide (le PDF a {total} page(s)). Exemple : pages='1-3,5'."}
+        writer = PdfWriter()
+        for _i in idx:
+            writer.add_page(reader.pages[_i])
+        workdir = _workspace_dir(req.thread_id)
+        _os.makedirs(workdir, exist_ok=True)
+        base = _re.sub(r"[^\w\-]+", "_", _os.path.splitext(_os.path.basename(path))[0])[:40] or "extrait"
+        filename = f"{base}_pages_{int(_time.time())}.pdf"
+        filepath = _os.path.join(workdir, filename)
+        with open(filepath, "wb") as _f:
+            writer.write(_f)
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur découpe PDF : {e}"}
+    return {"status": "ok", "filepath": filepath, "filename": filename, "count": len(idx)}
+
+class CoanimmPdfFromImagesReq(BaseModel):
+    paths: list = []
+    name: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/pdf_from_images")
+async def coanimm_pdf_from_images(req: CoanimmPdfFromImagesReq):
+    """Assemble une liste d'images en un PDF (une image par page)."""
+    import core.database as _db, os as _os, time as _time, re as _re
+    if "pdf_from_images" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil PDF depuis images désactivé dans les réglages CoaNIMM."}
+    paths = [pp for pp in (req.paths or []) if isinstance(pp, str) and _os.path.isfile(pp)]
+    if not paths:
+        return {"status": "error", "message": "Aucune image valide fournie."}
+    try:
+        from PIL import Image
+        from modules.coanimm import _workspace_dir
+        imgs = [Image.open(pp).convert("RGB") for pp in paths]
+        workdir = _workspace_dir(req.thread_id)
+        _os.makedirs(workdir, exist_ok=True)
+        base = _re.sub(r"[^\w\-]+", "_", (req.name or "document").strip())[:40] or "document"
+        filename = f"{base}_{int(_time.time())}.pdf"
+        filepath = _os.path.join(workdir, filename)
+        imgs[0].save(filepath, "PDF", save_all=True, append_images=imgs[1:])
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur création PDF : {e}"}
+    return {"status": "ok", "filepath": filepath, "filename": filename, "count": len(paths)}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
