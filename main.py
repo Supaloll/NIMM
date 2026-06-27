@@ -1808,6 +1808,7 @@ _COANIMM_TOOLS = [
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},
     {"tool": "pdf_from_images", "label": "PDF à partir d'images", "category": "Documents"},
+    {"tool": "read_table", "label": "Lire un tableau (CSV/TSV)", "category": "Documents"},
     {"tool": "transcribe", "label": "Transcrire un audio", "category": "Audio & voix"},
     {"tool": "speak", "label": "Donner la voix (texte → audio)", "category": "Audio & voix"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
@@ -2402,6 +2403,48 @@ async def coanimm_pdf_from_images(req: CoanimmPdfFromImagesReq):
     except Exception as e:
         return {"status": "error", "message": f"Erreur création PDF : {e}"}
     return {"status": "ok", "filepath": filepath, "filename": filename, "count": len(paths)}
+
+class CoanimmReadTableReq(BaseModel):
+    path: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/read_table")
+async def coanimm_read_table(req: CoanimmReadTableReq):
+    """Lit un fichier CSV/TSV et le renvoie en tableau Markdown lisible. Lecture seule."""
+    import core.database as _db, os as _os, csv as _csv
+    if "read_table" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil lecture de tableau désactivé dans les réglages CoaNIMM]"}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"result": f"[Fichier introuvable : {path}]"}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as _f:
+            sample = _f.read(4096)
+        delim = ","
+        for _d in [";", "\t", "|", ","]:
+            if _d in sample:
+                delim = _d
+                break
+        rows = []
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as _f:
+            for _i, _row in enumerate(_csv.reader(_f, delimiter=delim)):
+                if _i >= 200:
+                    break
+                rows.append(_row)
+    except Exception as e:
+        return {"result": f"[Erreur lecture tableau : {e}]"}
+    if not rows:
+        return {"result": "[Fichier vide]"}
+    ncol = max(len(r) for r in rows)
+    def _esc(c):
+        return str(c).replace("|", "\\|").replace("\n", " ").strip()
+    head = (list(rows[0]) + [""] * ncol)[:ncol]
+    out = ["| " + " | ".join(_esc(c) for c in head) + " |",
+           "| " + " | ".join("---" for _ in range(ncol)) + " |"]
+    for _r in rows[1:]:
+        _r = (list(_r) + [""] * ncol)[:ncol]
+        out.append("| " + " | ".join(_esc(c) for c in _r) + " |")
+    return {"result": ("\n".join(out))[:8000]}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────

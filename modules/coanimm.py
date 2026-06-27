@@ -168,11 +168,13 @@ GENERATE_SYSTEM_PROMPT = (
     "  Extrait des pages d'un PDF (ex. pages='1-3,5') dans un nouveau PDF et retourne son chemin.\n"
     "  nimm_pdf_from_images(paths: list, name: str = '') -> str\n"
     "  Assemble une liste d'images en un PDF (une image par page) et retourne le chemin du PDF.\n"
+    "  nimm_read_table(path: str) -> str\n"
+    "  Lit un fichier CSV/TSV et le renvoie en tableau Markdown lisible.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
-    "nimm_split_pdf, nimm_pdf_from_images) : "
+    "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -533,6 +535,16 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     ) % tid
     parts.append(sd if "split_pdf" not in _disabled else _stub("nimm_split_pdf", "decouper un PDF"))
     parts.append(pi if "pdf_from_images" not in _disabled else _stub("nimm_pdf_from_images", "creer un PDF depuis des images"))
+    rt = (
+        "def nimm_read_table(path, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": path, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/read_table\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(rt if "read_table" not in _disabled else _stub("nimm_read_table", "lire un tableau"))
     return "".join(parts)
 
 
