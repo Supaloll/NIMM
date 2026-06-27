@@ -3723,6 +3723,12 @@ document.getElementById('preview-voice-btn')?.addEventListener('click', async ()
     }
 });
 
+// ── Visibilité des options Gemini TTS ──
+function _updateGeminiTtsVisibility(hasGeminiKey) {
+    const rows = document.getElementById('gemini-tts-rows');
+    if (rows) rows.style.display = hasGeminiKey ? '' : 'none';
+}
+
 // ── Grisage options routing selon clés configurées ──
 function _applyProviderConstraints(keys) {
     // 1. Désactiver les options sans clé
@@ -3938,6 +3944,19 @@ async function loadSettingsIntoUI() {
         // Surveiller l'état embeddings si activé
         _watchEmbeddingsStatus();
 
+        // Options Gemini TTS (modèle + style)
+        try {
+            const [gtm, gts] = await Promise.all([
+                fetch('/api/settings/gemini-tts-model').then(r => r.json()),
+                fetch('/api/settings/gemini-tts-style').then(r => r.json()),
+            ]);
+            const modelSel = document.getElementById('gemini-tts-model-select');
+            if (modelSel && gtm.model) modelSel.value = gtm.model;
+            const styleInp = document.getElementById('gemini-tts-style');
+            if (styleInp) styleInp.value = gts.style || '';
+            _updateGeminiTtsVisibility(!!keys.gemini);
+        } catch(e) {}
+
     } catch(e) {
         console.error('[NIMM] Erreur chargement settings :', e);
     }
@@ -4073,6 +4092,26 @@ document.getElementById('toggle-settings').addEventListener('click', async () =>
 document.getElementById('voice-select')?.addEventListener('change', (e) => {
     _selectedVoice = e.target.value;
     localStorage.setItem('nimm-voice', _selectedVoice);
+});
+
+// Gestion du sélecteur de modèle Gemini TTS
+document.getElementById('gemini-tts-model-select')?.addEventListener('change', async (e) => {
+    try {
+        await fetch('/api/settings/gemini-tts-model', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: e.target.value })
+        });
+    } catch(err) { console.error('[TTS] Erreur sauvegarde modèle Gemini :', err); }
+});
+
+// Gestion du champ de style Gemini TTS (sauvegarde au blur)
+document.getElementById('gemini-tts-style')?.addEventListener('change', async (e) => {
+    try {
+        await fetch('/api/settings/gemini-tts-style', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ style: e.target.value })
+        });
+    } catch(err) { console.error('[TTS] Erreur sauvegarde style Gemini :', err); }
 });
 
 
