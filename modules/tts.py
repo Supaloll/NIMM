@@ -490,19 +490,20 @@ def synthesize_gemini_multi(transcript, speakers, style=''):
 # ROUTEUR PRINCIPAL
 # ══════════════════════════════════════════
 
-def synthesize(text: str, voice: str = DEFAULT_VOICE) -> tuple[Optional[bytes], str]:
+def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '') -> tuple[Optional[bytes], str]:
     """
     Point d'entrée unique. Retourne (bytes, media_type).
-    Voix préfixée 'piper:' → Piper  (audio/wav)
-    Voix préfixée 'edge:'  → Edge   (audio/mpeg)
-    Tout le reste          → Kokoro (audio/wav)
+    Voix préfixée 'piper:'  → Piper  (audio/wav)
+    Voix préfixée 'edge:'   → Edge   (audio/mpeg)
+    Voix préfixée 'gemini:' → Gemini TTS (audio/wav) — style optionnel
+    Tout le reste           → Kokoro (audio/wav)
     """
     if voice.startswith('piper:'):
         return synthesize_piper(text, voice[6:]), 'audio/wav'
     if voice.startswith('edge:'):
         return synthesize_edge(text, voice[5:]), 'audio/mpeg'
     if voice.startswith('gemini:'):
-        return synthesize_gemini(text, voice[7:]), 'audio/wav'
+        return synthesize_gemini(text, voice[7:], style=style), 'audio/wav'
     return synthesize_kokoro(text, voice), 'audio/wav'
 
 
@@ -541,9 +542,4 @@ def list_voices() -> list:
     for _gname, _gdesc in GEMINI_VOICES:
         result.append({
             'id':     f'gemini:{_gname}',
-            'label':  f'✨ Gemini ⭐⭐⭐⭐⭐ — {_gname} ({_gdesc})',
-            'lang':   '🌍 multi',
-            'engine': 'gemini',
-        })
-
-    return result
+            'label':  f'✨ Gemini ⭐⭐⭐⭐⭐ — {_gname} (

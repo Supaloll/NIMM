@@ -2515,6 +2515,16 @@ async def set_gemini_tts_model(req: dict):
     set_setting("gemini_tts_model", m)
     return {"status": "ok", "model": m}
 
+@app.get("/api/settings/gemini-tts-style")
+async def get_gemini_tts_style():
+    return {"style": get_setting("gemini_tts_style", "")}
+
+@app.post("/api/settings/gemini-tts-style")
+async def set_gemini_tts_style(req: dict):
+    s = (req.get("style") or "").strip()
+    set_setting("gemini_tts_style", s)
+    return {"status": "ok"}
+
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
 
@@ -3103,6 +3113,7 @@ import io
 class TTSRequest(BaseModel):
     text:  str
     voice: Optional[str] = 'ff_siwis'
+    style: Optional[str] = None
 
 @app.post("/api/tts/speak")
 async def tts_speak(req: TTSRequest):
@@ -3112,8 +3123,13 @@ async def tts_speak(req: TTSRequest):
         import asyncio
         from modules.tts import synthesize
         loop = asyncio.get_running_loop()
+        voice = req.voice or 'ff_siwis'
+        # Style : priorité au champ de la requête, sinon réglage persisté (voix Gemini seulement)
+        style = (req.style or "").strip()
+        if not style and voice.startswith('gemini:'):
+            style = get_setting("gemini_tts_style", "")
         audio_bytes, media_type = await loop.run_in_executor(
-            None, synthesize, req.text, req.voice or 'ff_siwis'
+            None, synthesize, req.text, voice, style
         )
         ext = 'mp3' if 'mpeg' in media_type else 'wav'
         return StreamingResponse(
@@ -3721,19 +3737,4 @@ async def images_rename(img_id: int, req: ImageRenameRequest):
 
 @app.delete("/api/images/{img_id}")
 async def images_delete(img_id: int):
-    """Supprime une image (DB + disque)."""
-    filename = delete_image(img_id)
-    if not filename:
-        raise HTTPException(404, "Image non trouvée")
-    filepath = os.path.join(_IMAGES_DIR, filename)
-    if os.path.exists(filepath):
-        os.remove(filepath)
-    return {"status": "ok"}
-
-# ══════════════════════════════════════════
-# LANCEMENT DIRECT
-# ══════════════════════════════════════════
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8080)
+    """Supprime une image (DB +
