@@ -1805,14 +1805,18 @@ _COANIMM_TOOLS = [
     {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
+    {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "transcribe", "label": "Transcrire un audio", "category": "Audio & voix"},
     {"tool": "speak", "label": "Donner la voix (texte → audio)", "category": "Audio & voix"},
     {"tool": "ask_llm", "label": "Sous-tâche IA", "category": "Texte & langue"},
     {"tool": "translate", "label": "Traduire", "category": "Texte & langue"},
     {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
+    {"tool": "simplify", "label": "Simplifier (FALC)", "category": "Texte & langue"},
+    {"tool": "anonymize", "label": "Anonymiser un texte", "category": "Texte & langue"},
     {"tool": "image", "label": "Génération d'image", "category": "Images"},
     {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
     {"tool": "describe_image", "label": "Décrire une image", "category": "Images"},
+    {"tool": "resize_image", "label": "Redimensionner / convertir une image", "category": "Images"},
 ]
 
 class CoanimmToolToggleReq(BaseModel):
@@ -2173,6 +2177,145 @@ async def coanimm_describe_image(req: CoanimmDescribeImageReq):
     except Exception as e:
         return {"result": f"[Erreur description image : {e}]"}
     return {"result": (out or "")[:6000]}
+
+class CoanimmSimplifyReq(BaseModel):
+    text: str = ""
+    niveau: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/simplify")
+async def coanimm_simplify(req: CoanimmSimplifyReq):
+    """Réécrit un texte en langage simple (FALC — Facile À Lire et à Comprendre)."""
+    import core.database as _db
+    if "simplify" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil simplification désactivé dans les réglages CoaNIMM]"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"result": "(texte vide)"}
+    _sys = ("Réécris le texte de l'utilisateur en FRANÇAIS FACILE À LIRE ET À COMPRENDRE (FALC) : "
+            "phrases courtes (une idée par phrase), mots simples et courants, voix active, pas de jargon "
+            "ni d'abréviations, explique les mots difficiles entre parenthèses, garde le sens et les "
+            "informations importantes. Réponds UNIQUEMENT par le texte simplifié.")
+    if (req.niveau or "").strip():
+        _sys += " Niveau visé : " + req.niveau.strip()[:200] + "."
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        out = await call_llm(
+            messages=[{"role": "user", "content": text[:12000]}],
+            provider=settings.get("provider", "deepseek"),
+            model=settings.get("model"),
+            system_prompt=_sys, max_tokens=2500, temperature=0.3,
+            api_keys=settings.get("api_keys", {}),
+        )
+    except Exception as e:
+        return {"result": f"[Erreur simplification : {e}]"}
+    return {"result": (out or "")[:14000]}
+
+class CoanimmResizeImageReq(BaseModel):
+    path: str = ""
+    max_width: int = 1200
+    fmt: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/resize_image")
+async def coanimm_resize_image(req: CoanimmResizeImageReq):
+    """Redimensionne et/ou convertit une image, l'enregistre dans le workspace CoaNIMM."""
+    import core.database as _db, os as _os, time as _time
+    if "resize_image" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil redimensionnement d'image désactivé dans les réglages CoaNIMM."}
+    path = (req.path or "").strip()
+    if not path or not _os.path.isfile(path):
+        return {"status": "error", "message": f"Fichier introuvable : {path}"}
+    try:
+        from PIL import Image
+        from modules.coanimm import _workspace_dir
+        img = Image.open(path)
+        mw = max(16, int(req.max_width or 1200))
+        if img.width > mw:
+            ratio = mw / float(img.width)
+            img = img.resize((mw, max(1, int(img.height * ratio))))
+        fmt = (req.fmt or "").strip().lower().lstrip(".") or (_os.path.splitext(path)[1].lower().lstrip(".") or "png")
+        _map = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "webp": "WEBP", "gif": "GIF", "bmp": "BMP", "tiff": "TIFF"}
+        pilfmt = _map.get(fmt, "PNG")
+        if pilfmt == "JPEG" and img.mode in ("RGBA", "P", "LA"):
+            img = img.convert("RGB")
+        workdir = _workspace_dir(req.thread_id)
+        _os.makedirs(workdir, exist_ok=True)
+        ext = "jpg" if pilfmt == "JPEG" else fmt
+        filename = f"image_{int(_time.time())}.{ext}"
+        filepath = _os.path.join(workdir, filename)
+        img.save(filepath, format=pilfmt)
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur redimensionnement : {e}"}
+    print(f"[COANIMM] Image redimensionnée → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename}
+
+class CoanimmAnonymizeReq(BaseModel):
+    text: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/anonymize")
+async def coanimm_anonymize(req: CoanimmAnonymizeReq):
+    """Masque les données personnelles d'un texte (anonymisation)."""
+    import core.database as _db
+    if "anonymize" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil anonymisation désactivé dans les réglages CoaNIMM]"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"result": "(texte vide)"}
+    _sys = ("Anonymise le texte de l'utilisateur : remplace les données personnelles "
+            "(noms et prénoms de personnes, adresses postales, e-mails, numéros de téléphone, "
+            "numéros de sécurité sociale, IBAN, dates de naissance, immatriculations) par des "
+            "marqueurs génériques entre crochets : [NOM], [EMAIL], [TÉLÉPHONE], [ADRESSE], [DATE], etc. "
+            "Garde le reste du texte intact et lisible. Réponds UNIQUEMENT par le texte anonymisé.")
+    try:
+        from core.engine import call_llm
+        from core.hub import load_settings
+        settings = load_settings(req.thread_id)
+        out = await call_llm(
+            messages=[{"role": "user", "content": text[:12000]}],
+            provider=settings.get("provider", "deepseek"), model=settings.get("model"),
+            system_prompt=_sys, max_tokens=2500, temperature=0.1,
+            api_keys=settings.get("api_keys", {}),
+        )
+    except Exception as e:
+        return {"result": f"[Erreur anonymisation : {e}]"}
+    return {"result": (out or "")[:14000]}
+
+class CoanimmMergePdfReq(BaseModel):
+    paths: list = []
+    name: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/merge_pdf")
+async def coanimm_merge_pdf(req: CoanimmMergePdfReq):
+    """Fusionne plusieurs PDF en un seul, enregistré dans le workspace CoaNIMM."""
+    import core.database as _db, os as _os, time as _time, re as _re
+    if "merge_pdf" in _db.list_coanimm_disabled_tools():
+        return {"status": "error", "message": "Outil fusion PDF désactivé dans les réglages CoaNIMM."}
+    paths = [pp for pp in (req.paths or []) if isinstance(pp, str) and pp.strip()]
+    valid = [pp for pp in paths if _os.path.isfile(pp)]
+    if not valid:
+        return {"status": "error", "message": "Aucun fichier PDF valide fourni."}
+    try:
+        from pypdf import PdfWriter
+        from modules.coanimm import _workspace_dir
+        w = PdfWriter()
+        for _pp in valid:
+            w.append(_pp)
+        workdir = _workspace_dir(req.thread_id)
+        _os.makedirs(workdir, exist_ok=True)
+        base = _re.sub(r"[^\w\-]+", "_", (req.name or "fusion").strip())[:50] or "fusion"
+        filename = f"{base}_{int(_time.time())}.pdf"
+        filepath = _os.path.join(workdir, filename)
+        with open(filepath, "wb") as _f:
+            w.write(_f)
+    except Exception as e:
+        return {"status": "error", "message": f"Erreur fusion PDF : {e}"}
+    print(f"[COANIMM] PDF fusionné ({len(valid)}) → {filepath}")
+    return {"status": "ok", "filepath": filepath, "filename": filename, "count": len(valid)}
 
 
 # ── WORKFLOWS ──────────────────────────────────────────────────────────────────
