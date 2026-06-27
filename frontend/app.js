@@ -764,6 +764,76 @@ const isAdmin = me.admin;
         <div id="ext-keys-list">Chargement…</div>
     </div>
     </div>
+
+    <div class="settings-section" id="voice-banking-section">
+        <h4>🎙️ Ma voix (Voxtral TTS)</h4>
+        <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 10px">
+            Clonez votre voix à partir d'un court enregistrement (5–30 sec).
+            Utilise l'API Mistral (clé requise). Votre audio est envoyé à Mistral pour créer un profil vocal réutilisable.
+        </p>
+        <div id="voice-profiles-list" style="margin-bottom:12px">Chargement…</div>
+        <details style="border:1px solid var(--border);border-radius:8px;padding:8px 12px">
+            <summary style="cursor:pointer;font-size:0.85rem;font-weight:600">➕ Créer une nouvelle voix</summary>
+            <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;gap:8px;align-items:center">
+                    <label for="vb-name" style="font-size:0.82rem;white-space:nowrap">Nom :</label>
+                    <input id="vb-name" type="text" placeholder="Ma voix" maxlength="50"
+                        style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.82rem" />
+                </div>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <label for="vb-lang" style="font-size:0.82rem;white-space:nowrap">Langue :</label>
+                    <select id="vb-lang" style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.82rem">
+                        <option value="fr">Français</option>
+                        <option value="en">Anglais</option>
+                        <option value="es">Espagnol</option>
+                        <option value="de">Allemand</option>
+                        <option value="it">Italien</option>
+                        <option value="pt">Portugais</option>
+                        <option value="ar">Arabe</option>
+                        <option value="hi">Hindi</option>
+                        <option value="nl">Néerlandais</option>
+                    </select>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <label for="vb-gender" style="font-size:0.82rem;white-space:nowrap">Genre :</label>
+                    <select id="vb-gender" style="flex:1;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.82rem">
+                        <option value="">Non précisé</option>
+                        <option value="female">Féminin</option>
+                        <option value="male">Masculin</option>
+                    </select>
+                </div>
+                <div style="font-size:0.82rem;font-weight:600;margin-top:4px">Source audio :</div>
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                    <button id="vb-rec-btn" onclick="_vbToggleRecord()"
+                        style="padding:6px 12px;border-radius:8px;background:var(--danger,#e53935);color:#fff;border:none;cursor:pointer;font-size:0.82rem"
+                        aria-label="Démarrer l'enregistrement">
+                        🎙️ Enregistrer
+                    </button>
+                    <span id="vb-rec-timer" style="font-size:0.82rem;color:var(--text-muted)"></span>
+                    <span style="font-size:0.8rem;color:var(--text-muted)">— ou —</span>
+                    <label style="font-size:0.82rem;cursor:pointer;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary)">
+                        📁 Importer un fichier audio
+                        <input id="vb-file-input" type="file" accept="audio/*" style="display:none" onchange="_vbFileSelected(this)" />
+                    </label>
+                </div>
+                <div id="vb-audio-preview" style="display:none;margin-top:4px">
+                    <audio id="vb-preview-player" controls style="width:100%;height:32px"></audio>
+                </div>
+                <button id="vb-create-btn" onclick="_vbCreateVoice()" disabled
+                    style="padding:6px 14px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:0.82rem;margin-top:4px;opacity:0.5"
+                    aria-label="Créer le profil de voix">
+                    ✨ Créer le profil Voxtral
+                </button>
+                <div id="vb-status" style="font-size:0.8rem;color:var(--text-muted)"></div>
+            </div>
+        </details>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            <label style="font-size:0.82rem;cursor:pointer;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary)">
+                📥 Importer .nimmvoice
+                <input type="file" accept=".nimmvoice,.zip" style="display:none" onchange="_vbImportProfile(this)" />
+            </label>
+        </div>
+    </div>
     <div class="settings-section">
         <h4>🖥️ Mode serveur</h4>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem">
@@ -773,6 +843,39 @@ const isAdmin = me.admin;
     }
 
     wrap.innerHTML = html;
+    // ── Profils de voix Voxtral ──
+    (async () => {
+        const vbListEl = document.getElementById('voice-profiles-list');
+        if (!vbListEl) return;
+        try {
+            const r = await fetch('/api/voice/profiles');
+            const {profiles} = await r.json();
+            if (!profiles || !profiles.length) {
+                vbListEl.innerHTML = '<em style="font-size:0.8rem">Aucun profil créé.</em>';
+                return;
+            }
+            let h = '<div style="display:flex;flex-direction:column;gap:8px">';
+            for (const p of profiles) {
+                const isDefault = p.is_default;
+                h += `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+                    <div>
+                        <strong style="font-size:0.85rem">🟠 ${p.name}</strong>
+                        ${isDefault ? '<span style="font-size:0.75rem;color:var(--success,#4caf50)"> ⭐ par défaut</span>' : ''}
+                        <div style="font-size:0.75rem;color:var(--text-muted)">${(p.language||'fr').toUpperCase()} ${p.gender ? '· ' + p.gender : ''} · créé le ${(p.created_at||'').slice(0,10)}</div>
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                        ${!isDefault ? `<button onclick="_vbSetDefault('${p.id}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Définir comme voix par défaut">⭐ Défaut</button>` : ''}
+                        <button onclick="_vbExport('${p.id}','${p.name}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Exporter la voix">💾 Export</button>
+                        <button onclick="_vbDelete('${p.id}','${p.name}',this)" style="padding:3px 8px;border-radius:6px;background:var(--danger,#e53935);color:#fff;border:none;cursor:pointer;font-size:0.75rem" aria-label="Supprimer ce profil">🗑</button>
+                    </div>
+                </div>`;
+            }
+            h += '</div>';
+            vbListEl.innerHTML = h;
+        } catch(e) {
+            vbListEl.innerHTML = '<em style="font-size:0.8rem;color:var(--danger,red)">Erreur chargement profils.</em>';
+        }
+    })();
     // ── Services externes ──
     const _extSvcs = (extKeys && extKeys.services) || [];
     const _extListEl = document.getElementById('ext-keys-list');
@@ -4941,6 +5044,144 @@ async function _deleteExtKey(serviceId, btn) {
     } catch(e) {
         _notify('Erreur : ' + e.message, 'error');
     }
+}
+
+
+// ══════════════════════════════════════════
+// VOICE BANKING — fonctions JS
+// ══════════════════════════════════════════
+
+let _vbMediaRecorder = null;
+let _vbChunks = [];
+let _vbRecording = false;
+let _vbAudioBlob = null;
+let _vbTimerInterval = null;
+let _vbTimerSec = 0;
+
+function _vbToggleRecord() {
+    const btn = document.getElementById('vb-rec-btn');
+    const timer = document.getElementById('vb-rec-timer');
+    if (_vbRecording) {
+        // Arrêter
+        _vbMediaRecorder && _vbMediaRecorder.stop();
+        _vbRecording = false;
+        btn.textContent = '🎙️ Enregistrer';
+        clearInterval(_vbTimerInterval);
+        timer.textContent = '';
+        return;
+    }
+    // Démarrer
+    navigator.mediaDevices.getUserMedia({audio: true}).then(stream => {
+        _vbChunks = [];
+        _vbMediaRecorder = new MediaRecorder(stream);
+        _vbMediaRecorder.ondataavailable = e => { if (e.data.size > 0) _vbChunks.push(e.data); };
+        _vbMediaRecorder.onstop = () => {
+            _vbAudioBlob = new Blob(_vbChunks, {type: 'audio/webm'});
+            const url = URL.createObjectURL(_vbAudioBlob);
+            const preview = document.getElementById('vb-audio-preview');
+            const player = document.getElementById('vb-preview-player');
+            if (preview && player) { player.src = url; preview.style.display = ''; }
+            const createBtn = document.getElementById('vb-create-btn');
+            if (createBtn) { createBtn.disabled = false; createBtn.style.opacity = '1'; }
+            stream.getTracks().forEach(t => t.stop());
+        };
+        _vbMediaRecorder.start();
+        _vbRecording = true;
+        btn.textContent = '⏹ Arrêter';
+        btn.setAttribute('aria-label', "Arrêter l'enregistrement");
+        _vbTimerSec = 0;
+        timer.textContent = '0s';
+        _vbTimerInterval = setInterval(() => {
+            _vbTimerSec++;
+            timer.textContent = _vbTimerSec + 's';
+            if (_vbTimerSec >= 60) _vbToggleRecord(); // auto-stop à 60s
+        }, 1000);
+    }).catch(e => {
+        _notify('Microphone inaccessible : ' + e.message, 'error');
+    });
+}
+
+function _vbFileSelected(input) {
+    if (!input.files || !input.files[0]) return;
+    _vbAudioBlob = input.files[0];
+    const url = URL.createObjectURL(_vbAudioBlob);
+    const preview = document.getElementById('vb-audio-preview');
+    const player = document.getElementById('vb-preview-player');
+    if (preview && player) { player.src = url; preview.style.display = ''; }
+    const createBtn = document.getElementById('vb-create-btn');
+    if (createBtn) { createBtn.disabled = false; createBtn.style.opacity = '1'; }
+}
+
+async function _vbCreateVoice() {
+    if (!_vbAudioBlob) { _notify('Enregistrez ou importez un audio d\'abord.', 'warn'); return; }
+    const name = (document.getElementById('vb-name')?.value || '').trim() || 'Ma voix';
+    const lang = document.getElementById('vb-lang')?.value || 'fr';
+    const gender = document.getElementById('vb-gender')?.value || '';
+    const status = document.getElementById('vb-status');
+    const btn = document.getElementById('vb-create-btn');
+    if (status) status.textContent = '⏳ Création du profil en cours…';
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+    try {
+        const fd = new FormData();
+        const ext = _vbAudioBlob.name ? _vbAudioBlob.name.split('.').pop() : 'webm';
+        fd.append('name', name);
+        fd.append('language', lang);
+        fd.append('gender', gender);
+        fd.append('file', _vbAudioBlob, `sample.${ext}`);
+        const r = await fetch('/api/voice/create', {method: 'POST', body: fd});
+        if (!r.ok) { const t = await r.text(); throw new Error(t); }
+        const data = await r.json();
+        if (status) status.textContent = `✅ Profil "${data.name}" créé avec succès !`;
+        _notify(`Voix "${data.name}" créée.`, 'ok');
+        _vbAudioBlob = null;
+        // Recharger la liste des voix et profils
+        loadVoices && loadVoices();
+        setTimeout(() => { document.getElementById('voice-banking-section')?.scrollIntoView({behavior:'smooth'}); }, 200);
+    } catch(e) {
+        if (status) status.textContent = '❌ Erreur : ' + e.message;
+        _notify('Erreur création voix : ' + e.message, 'error');
+        if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+    }
+}
+
+async function _vbSetDefault(pid) {
+    try {
+        const r = await fetch(`/api/voice/default/${pid}`, {method: 'POST'});
+        if (!r.ok) throw new Error(await r.text());
+        _notify('Voix définie par défaut.', 'ok');
+        loadVoices && loadVoices();
+    } catch(e) { _notify('Erreur : ' + e.message, 'error'); }
+}
+
+async function _vbDelete(pid, name, btn) {
+    if (!confirm(`Supprimer la voix "${name}" ? Cette action supprime aussi le profil chez Mistral.`)) return;
+    try {
+        const r = await fetch(`/api/voice/profile/${pid}`, {method: 'DELETE'});
+        if (!r.ok) throw new Error(await r.text());
+        _notify(`Voix "${name}" supprimée.`, 'ok');
+        btn?.closest('[style*="border"]')?.remove();
+        loadVoices && loadVoices();
+    } catch(e) { _notify('Erreur suppression : ' + e.message, 'error'); }
+}
+
+function _vbExport(pid, name) {
+    const a = document.createElement('a');
+    a.href = `/api/voice/export/${pid}`;
+    a.download = name.replace(/\s+/g,'_').toLowerCase() + '.nimmvoice';
+    a.click();
+}
+
+async function _vbImportProfile(input) {
+    if (!input.files || !input.files[0]) return;
+    const fd = new FormData();
+    fd.append('file', input.files[0], input.files[0].name);
+    try {
+        const r = await fetch('/api/voice/import', {method:'POST', body: fd});
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        _notify(`Voix "${data.name}" importée.`, 'ok');
+        loadVoices && loadVoices();
+    } catch(e) { _notify('Erreur import : ' + e.message, 'error'); }
 }
 
 

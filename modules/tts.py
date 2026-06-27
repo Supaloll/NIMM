@@ -504,6 +504,8 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '') -> tuple[
         return synthesize_edge(text, voice[5:]), 'audio/mpeg'
     if voice.startswith('gemini:'):
         return synthesize_gemini(text, voice[7:], style=style), 'audio/wav'
+    if voice.startswith('voxtral:'):
+        return synthesize_voxtral(text, voice[8:]), 'audio/mpeg'
     return synthesize_kokoro(text, voice), 'audio/wav'
 
 
@@ -542,4 +544,62 @@ def list_voices() -> list:
     for _gname, _gdesc in GEMINI_VOICES:
         result.append({
             'id':     f'gemini:{_gname}',
-            'label':  f'✨ Gemini ⭐⭐⭐⭐⭐ — {_gname} (
+            'label':  f'✨ Gemini ⭐⭐⭐⭐⭐ — {_gname} ({_gdesc})',
+            'lang':   '🌐',
+            'engine': 'gemini',
+        })
+
+    # ── Voxtral TTS ── (⭐⭐⭐⭐⭐ — Mistral, clonage de voix personnalisé)
+    try:
+        from core.database import list_voice_profiles
+        for _vp in list_voice_profiles():
+            _badge = ' ⭐ [par défaut]' if _vp.get('is_default') else ''
+            result.append({
+                'id':         f"voxtral:{_vp['mistral_voice_id']}",
+                'label':      f"🟠 Voxtral ⭐⭐⭐⭐⭐ — {_vp['name']}{_badge}",
+                'lang':       f"{_vp.get('language','fr').upper()}",
+                'engine':     'voxtral',
+                'profile_id': _vp['id'],
+            })
+    except Exception:
+        pass
+
+    return result
+
+
+# ══════════════════════════════════════════
+# VOXTRAL TTS (Mistral — voice cloning)
+# ══════════════════════════════════════════
+
+def synthesize_voxtral(text: str, mistral_voice_id: str) -> Optional[bytes]:
+    """
+    Synthèse vocale via Mistral Voxtral TTS.
+    voice_id = identifiant de voix stocké chez Mistral.
+    Retourne des bytes MP3.
+    """
+    import json, urllib.request
+    try:
+        from core.database import get_api_keys
+        api_key = (get_api_keys().get('mistral') or '').strip()
+    except Exception:
+        api_key = ''
+    if not api_key:
+        raise RuntimeError("Clé API Mistral non configurée — impossible d'utiliser Voxtral TTS.")
+
+    body = json.dumps({
+        'model': 'voxtral-mini-tts-2603',
+        'voice': mistral_voice_id,
+        'input': text,
+        'response_format': 'mp3',
+    }).encode('utf-8')
+
+    req = urllib.request.Request(
+        'https://api.mistral.ai/v1/audio/speech',
+        data=body,
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        }
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read()

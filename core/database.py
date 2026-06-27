@@ -733,6 +733,20 @@ def init_db(user_id: str = None):
         )
     ''')
 
+    # ── Profils de voix personnalisées (Voxtral TTS) ──
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS voice_profiles (
+            id                TEXT PRIMARY KEY,
+            name              TEXT NOT NULL,
+            mistral_voice_id  TEXT NOT NULL,
+            sample_path       TEXT DEFAULT '',
+            language          TEXT DEFAULT 'fr',
+            gender            TEXT DEFAULT '',
+            created_at        TEXT DEFAULT (datetime('now')),
+            is_default        INTEGER DEFAULT 0
+        )
+    ''')
+
     # ── Index FTS5 — recherche mémoire rapide ──
     c.execute('''
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
@@ -2552,3 +2566,75 @@ def delete_external_key(service_id: str) -> None:
     conn.execute('DELETE FROM external_api_keys WHERE service_id = ?', (service_id,))
     conn.commit()
     conn.close()
+
+# ══════════════════════════
+# PROFILS DE VOIX PERSONNALISÉES (Voxtral TTS)
+# ══════════════════════════
+
+def create_voice_profile(name: str, mistral_voice_id: str,
+                         sample_path: str = '', language: str = 'fr', gender: str = '') -> str:
+    """Crée un profil de voix et retourne son id local."""
+    import uuid
+    pid = str(uuid.uuid4())
+    conn = get_conn()
+    conn.execute(
+        '''INSERT INTO voice_profiles (id, name, mistral_voice_id, sample_path, language, gender)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (pid, name, mistral_voice_id, sample_path, language, gender)
+    )
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def list_voice_profiles() -> list:
+    """Retourne tous les profils de voix enregistrés."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('SELECT * FROM voice_profiles ORDER BY is_default DESC, created_at DESC')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_voice_profile(pid: str) -> dict:
+    """Retourne un profil de voix par son id local, ou {}."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('SELECT * FROM voice_profiles WHERE id = ?', (pid,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else {}
+
+
+def delete_voice_profile(pid: str) -> None:
+    """Supprime un profil de voix (et son fichier sample si présent)."""
+    import os
+    profile = get_voice_profile(pid)
+    if profile.get('sample_path') and os.path.isfile(profile['sample_path']):
+        try: os.unlink(profile['sample_path'])
+        except OSError: pass
+    conn = get_conn()
+    conn.execute('DELETE FROM voice_profiles WHERE id = ?', (pid,))
+    conn.commit()
+    conn.close()
+
+
+def set_default_voice_profile(pid: str) -> None:
+    """Définit un profil comme voix par défaut (un seul à la fois)."""
+    conn = get_conn()
+    conn.execute('UPDATE voice_profiles SET is_default = 0')
+    if pid:
+        conn.execute('UPDATE voice_profiles SET is_default = 1 WHERE id = ?', (pid,))
+    conn.commit()
+    conn.close()
+
+
+def get_default_voice_profile() -> dict:
+    """Retourne le profil de voix par défaut, ou {}."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('SELECT * FROM voice_profiles WHERE is_default = 1 LIMIT 1')
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else {}
