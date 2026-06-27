@@ -694,10 +694,11 @@ async function _loadUsersTab() {
     if (!wrap) return;
     wrap.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem">Chargement…</div>';
 
-    const [users, serverMode, globalKeys] = await Promise.all([
+    const [users, serverMode, globalKeys, extKeys] = await Promise.all([
         fetch('/api/users').then(r => r.json()).catch(() => []),
         fetch('/api/settings/server-mode').then(r => r.json()).catch(() => ({ enabled: false })),
         fetch('/api/settings/global-keys').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/ext-keys').then(r => r.json()).catch(() => ({services:[]})),
     ]);
 
     const me = users.find(u => u.id === _currentUserId) || { id: _currentUserId, name: _currentUserId, admin: false };
