@@ -156,10 +156,18 @@ GENERATE_SYSTEM_PROMPT = (
     "  Synthétise un texte en AUDIO (TTS) et retourne le chemin du fichier son. Pour un livre audio.\n"
     "  nimm_describe_image(path: str, prompt: str = '') -> str\n"
     "  Décrit une image (texte alternatif accessible) via le modèle de vision et retourne le texte.\n"
+    "  nimm_simplify(text: str, niveau: str = '') -> str\n"
+    "  Réécrit un texte en FALC (Facile À Lire et à Comprendre) : phrases courtes, mots simples. Accessibilité cognitive.\n"
+    "  nimm_resize_image(path: str, max_width: int = 1200, fmt: str = '') -> str\n"
+    "  Redimensionne et/ou convertit une image (jpg, png, webp…) et retourne le chemin du fichier produit.\n"
+    "  nimm_anonymize(text: str) -> str\n"
+    "  Masque les données personnelles d'un texte (noms, e-mails, téléphones, adresses…) et retourne le texte anonymisé.\n"
+    "  nimm_merge_pdf(paths: list, name: str = '') -> str\n"
+    "  Fusionne plusieurs fichiers PDF (liste de chemins) en un seul et retourne le chemin du PDF produit.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
-    "nimm_describe_image) : "
+    "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -448,6 +456,52 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     ) % tid
     parts.append(sp if "speak" not in _disabled else _stub("nimm_speak", "donner la voix"))
     parts.append(di if "describe_image" not in _disabled else _stub("nimm_describe_image", "decrire une image"))
+    si = (
+        "def nimm_simplify(text, niveau='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"text\": text, \"niveau\": niveau, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/simplify\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    ri = (
+        "def nimm_resize_image(path, max_width=1200, fmt='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": path, \"max_width\": max_width, \"fmt\": fmt, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/resize_image\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_resize_image : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    parts.append(si if "simplify" not in _disabled else _stub("nimm_simplify", "simplifier un texte"))
+    parts.append(ri if "resize_image" not in _disabled else _stub("nimm_resize_image", "redimensionner une image"))
+    an = (
+        "def nimm_anonymize(text, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"text\": text, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/anonymize\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    mp = (
+        "def nimm_merge_pdf(paths, name='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"paths\": paths, \"name\": name, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/merge_pdf\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get(\"status\") != \"ok\":\n"
+        "        raise RuntimeError(\"nimm_merge_pdf : \" + _res.get(\"message\", \"?\"))\n"
+        "    return _res[\"filepath\"]\n"
+    ) % tid
+    parts.append(an if "anonymize" not in _disabled else _stub("nimm_anonymize", "anonymiser un texte"))
+    parts.append(mp if "merge_pdf" not in _disabled else _stub("nimm_merge_pdf", "fusionner des PDF"))
     return "".join(parts)
 
 
