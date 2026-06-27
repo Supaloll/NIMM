@@ -3955,6 +3955,13 @@ async function loadSettingsIntoUI() {
             const styleInp = document.getElementById('gemini-tts-style');
             if (styleInp) styleInp.value = gts.style || '';
             _updateGeminiTtsVisibility(!!keys.gemini);
+            // Voix Gemini par défaut si clé présente et aucune voix jamais choisie
+            if (keys.gemini && !localStorage.getItem('nimm-voice')) {
+                _selectedVoice = 'gemini:Kore';
+                localStorage.setItem('nimm-voice', _selectedVoice);
+                const voiceSel = document.getElementById('voice-select');
+                if (voiceSel) voiceSel.value = _selectedVoice;
+            }
         } catch(e) {}
 
     } catch(e) {
