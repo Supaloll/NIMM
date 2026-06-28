@@ -861,6 +861,11 @@ const isAdmin = me.admin;
                 </div>
                 <div style="font-size:0.82rem;font-weight:600;margin-top:4px">Source audio :</div>
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                    <select id="vb-mic-select" aria-label="Choisir le microphone"
+                        style="flex:1;min-width:140px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);font-size:0.82rem"
+                        onchange="_vbUpdateMicList()">
+                        <option value="">Micro par défaut</option>
+                    </select>
                     <button id="vb-rec-btn" onclick="_vbToggleRecord()"
                         style="padding:6px 12px;border-radius:8px;background:var(--danger,#e53935);color:#fff;border:none;cursor:pointer;font-size:0.82rem"
                         aria-label="Démarrer l'enregistrement">
@@ -939,6 +944,8 @@ const isAdmin = me.admin;
             magEl.innerHTML = '<em style="font-size:0.8rem;color:var(--danger,red)">Erreur chargement agents.</em>';
         }
     })();
+    // ── Lister les micros disponibles ──
+    _vbPopulateMicList();
     // ── Profils de voix Voxtral ──
     (async () => {
         const vbListEl = document.getElementById('voice-profiles-list');
@@ -960,6 +967,7 @@ const isAdmin = me.admin;
                         <div style="font-size:0.75rem;color:var(--text-muted)">${(p.language||'fr').toUpperCase()} ${p.gender ? '· ' + p.gender : ''} · créé le ${(p.created_at||'').slice(0,10)}</div>
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                        <button onclick="_vbPreview('voxtral:${p.mistral_voice_id}', this)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Écouter un aperçu de cette voix">🔊 Aperçu</button>
                         ${!isDefault ? `<button onclick="_vbSetDefault('${p.id}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Définir comme voix par défaut">⭐ Défaut</button>` : ''}
                         <button onclick="_vbExport('${p.id}','${p.name}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Exporter la voix">💾 Export</button>
                         <button onclick="_vbDelete('${p.id}','${p.name}',this)" style="padding:3px 8px;border-radius:6px;background:var(--danger,#e53935);color:#fff;border:none;cursor:pointer;font-size:0.75rem" aria-label="Supprimer ce profil">🗑</button>
@@ -5096,6 +5104,32 @@ document.getElementById('presence-slider')?.addEventListener('input', (e) => {
 // ── Bouton mode fantôme ──
 let _ghostMode = false;
 
+// ── Notification accessible (aria-live) ─────────────────────────────────────
+function _notify(msg, type) {
+    type = type || 'info';
+    let area = document.getElementById('_nimm-notify-area');
+    if (!area) {
+        area = document.createElement('div');
+        area.id = '_nimm-notify-area';
+        area.setAttribute('aria-live', 'polite');
+        area.setAttribute('aria-atomic', 'true');
+        area.style.cssText = 'position:fixed;bottom:1.2rem;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none';
+        document.body.appendChild(area);
+    }
+    const colors = {ok:'#2e7d32', warn:'#e65100', error:'#c62828', info:'#1565c0'};
+    const el = document.createElement('div');
+    el.setAttribute('role', 'status');
+    el.textContent = msg;
+    el.style.cssText = (
+        'padding:8px 18px;border-radius:8px;font-size:0.85rem;color:#fff;'
+        + 'background:' + (colors[type] || colors.info) + ';'
+        + 'box-shadow:0 2px 8px rgba(0,0,0,.3);max-width:320px;text-align:center;'
+        + 'pointer-events:auto;'
+    );
+    area.appendChild(el);
+    setTimeout(() => { el.remove(); }, 3500);
+}
+
 async function _saveExtKey(serviceId) {
     const input = document.getElementById(`ext-key-${serviceId}`);
     if (!input) return;
@@ -5162,12 +5196,16 @@ function _vbToggleRecord() {
         _vbMediaRecorder && _vbMediaRecorder.stop();
         _vbRecording = false;
         btn.textContent = '🎙️ Enregistrer';
+        btn.setAttribute('aria-label', "Démarrer l'enregistrement");
         clearInterval(_vbTimerInterval);
         timer.textContent = '';
         return;
     }
-    // Démarrer
-    navigator.mediaDevices.getUserMedia({audio: true}).then(stream => {
+    // Démarrer — utiliser le micro sélectionné si disponible
+    const _micSel = document.getElementById('vb-mic-select');
+    const _micId = _micSel ? _micSel.value : '';
+    const _audioConstraint = _micId ? {deviceId: {exact: _micId}} : true;
+    navigator.mediaDevices.getUserMedia({audio: _audioConstraint}).then(stream => {
         _vbChunks = [];
         _vbMediaRecorder = new MediaRecorder(stream);
         _vbMediaRecorder.ondataavailable = e => { if (e.data.size > 0) _vbChunks.push(e.data); };
@@ -5196,6 +5234,25 @@ function _vbToggleRecord() {
         _notify('Microphone inaccessible : ' + e.message, 'error');
     });
 }
+
+async function _vbPopulateMicList() {
+    const sel = document.getElementById('vb-mic-select');
+    if (!sel || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+        // Demander permission micro pour débloquer les labels
+        await navigator.mediaDevices.getUserMedia({audio: true}).then(s => s.getTracks().forEach(t => t.stop())).catch(() => {});
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const mics = devices.filter(d => d.kind === 'audioinput');
+        sel.innerHTML = '<option value="">Micro par défaut</option>';
+        mics.forEach((m, i) => {
+            const opt = document.createElement('option');
+            opt.value = m.deviceId;
+            opt.textContent = m.label || ('Microphone ' + (i + 1));
+            sel.appendChild(opt);
+        });
+    } catch(e) { console.warn('[VB] enumerateDevices :', e); }
+}
+function _vbUpdateMicList() { /* appelé au changement, rien à faire */ }
 
 function _vbFileSelected(input) {
     if (!input.files || !input.files[0]) return;
@@ -5258,6 +5315,25 @@ async function _vbDelete(pid, name, btn) {
         btn?.closest('[style*="border"]')?.remove();
         loadVoices && loadVoices();
     } catch(e) { _notify('Erreur suppression : ' + e.message, 'error'); }
+}
+
+async function _vbPreview(voiceId, btn) {
+    const orig = btn.textContent;
+    btn.textContent = '⏳'; btn.disabled = true;
+    try {
+        const r = await fetch('/api/tts/speak', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: "Bonjour, voici un aperçu de ma voix personnalisée dans NIMM.", voice: voiceId})
+        });
+        if (!r.ok) { const t = await r.text(); throw new Error(t); }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => { btn.textContent = orig; btn.disabled = false; URL.revokeObjectURL(url); };
+        audio.onerror = () => { btn.textContent = orig; btn.disabled = false; _notify('Lecture impossible.', 'error'); };
+        await audio.play();
+    } catch(e) { btn.textContent = orig; btn.disabled = false; _notify('Aperçu impossible : ' + e.message, 'error'); }
 }
 
 function _vbExport(pid, name) {
