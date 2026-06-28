@@ -490,7 +490,7 @@ def synthesize_gemini_multi(transcript, speakers, style=''):
 # ROUTEUR PRINCIPAL
 # ══════════════════════════════════════════
 
-def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '') -> tuple[Optional[bytes], str]:
+def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '', api_key: str = '') -> tuple[Optional[bytes], str]:
     """
     Point d'entrée unique. Retourne (bytes, media_type).
     Voix préfixée 'piper:'  → Piper  (audio/wav)
@@ -505,7 +505,7 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '') -> tuple[
     if voice.startswith('gemini:'):
         return synthesize_gemini(text, voice[7:], style=style), 'audio/wav'
     if voice.startswith('voxtral:'):
-        return synthesize_voxtral(text, voice[8:]), 'audio/mpeg'
+        return synthesize_voxtral(text, voice[8:], api_key=api_key), 'audio/mpeg'
     return synthesize_kokoro(text, voice), 'audio/wav'
 
 
@@ -571,18 +571,19 @@ def list_voices() -> list:
 # VOXTRAL TTS (Mistral — voice cloning)
 # ══════════════════════════════════════════
 
-def synthesize_voxtral(text: str, mistral_voice_id: str) -> Optional[bytes]:
+def synthesize_voxtral(text: str, mistral_voice_id: str, api_key: str = '') -> Optional[bytes]:
     """
     Synthèse vocale via Mistral Voxtral TTS.
     voice_id = identifiant de voix stocké chez Mistral.
     Retourne des bytes MP3.
     """
     import json, urllib.request
-    try:
-        from core.database import get_api_keys
-        api_key = (get_api_keys().get('mistral') or '').strip()
-    except Exception:
-        api_key = ''
+    if not api_key:
+        try:
+            from core.database import get_api_keys
+            api_key = (get_api_keys().get('mistral') or '').strip()
+        except Exception:
+            api_key = ''
     if not api_key:
         raise RuntimeError("Clé API Mistral non configurée — impossible d'utiliser Voxtral TTS.")
 
