@@ -102,7 +102,7 @@ async def call_llm(
     elif provider == 'openrouter':
         return await _call_openai_compat(messages, model or 'mistralai/mistral-7b-instruct', system_prompt, max_tokens, temperature, api_keys, 'openrouter', 'https://openrouter.ai/api/v1', images=images)
     elif provider == 'mistral':
-        return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', 'https://api.mistral.ai/v1', images=images)
+        return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', 'https://api.mistral.ai/v1', images=images, tools=tools)
     elif provider == 'ollama':
         return await _call_ollama(messages, model or 'llama3', system_prompt, max_tokens, temperature)
     else:
@@ -318,7 +318,17 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
         data = r.json()
         usage = data.get('usage', {})
         _log(provider_name, model, usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0))
-        return data['choices'][0]['message']['content']
+        content = data['choices'][0]['message']['content'] or ''
+        citations = (data.get('citations')
+                     or data['choices'][0].get('message', {}).get('citations') or [])
+        if citations:
+            footer = '\n\n---\n**Sources**\n'
+            for _i, _c in enumerate(citations, 1):
+                _url   = _c.get('url', '')
+                _title = _c.get('title') or _c.get('snippet', _url)[:60] or _url
+                footer += f'{_i}. [{_title}]({_url})\n'
+            content = content + footer
+        return content
 
 
 # ══════════════════════════════════════════
@@ -704,6 +714,15 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                             _dsml_stream = True
                         if not _dsml_stream:
                             yield token
+                    _cits = (data.get('citations') or
+                             data['choices'][0].get('message', {}).get('citations') or [])
+                    if _cits:
+                        _f = '\n\n---\n**Sources**\n'
+                        for _i, _c in enumerate(_cits, 1):
+                            _u = _c.get('url', '')
+                            _t = _c.get('title') or _c.get('snippet', _u)[:60] or _u
+                            _f += f'{_i}. [{_t}]({_u})\n'
+                        yield _f
                 except Exception:
                     continue
 

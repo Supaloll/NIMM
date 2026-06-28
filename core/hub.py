@@ -2395,7 +2395,12 @@ async def process_message(
     # 8. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
     web_context = ''
-    if web_search:
+    # Web search : natif Mistral si provider=mistral, sinon Brave/Tavily
+    _mistral_ws_tools = None
+    if web_search and provider == 'mistral':
+        _mistral_ws_tools = [{'type': 'web_search'}]
+        print('[HUB] 🌐 Web search Mistral natif')
+    if web_search and provider != 'mistral':
         try:
             from modules.websearch import search
             web_context = await search(user_message)
@@ -2433,7 +2438,7 @@ async def process_message(
             # Phase 1 : détection tool calls
             async for event in call_llm_stream_with_tools(
                 messages=messages,
-                tools=NIMM_TOOLS,
+                tools=(_mistral_ws_tools + NIMM_TOOLS) if _mistral_ws_tools else NIMM_TOOLS,
                 provider=settings['provider'],
                 model=settings.get('model'),
                 system_prompt=system_prompt,
@@ -2665,7 +2670,11 @@ async def process_message_stream(
     # 5. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
     web_context = ''
-    if web_search:
+    _mistral_ws_tools = None
+    if web_search and provider == 'mistral':
+        _mistral_ws_tools = [{'type': 'web_search'}]
+        print('[HUB] 🌐 Web search Mistral natif (stream)')
+    if web_search and provider != 'mistral':
         yield "data: [WEB_SEARCH_LOADING]\n\n"
         try:
             from modules.websearch import search
@@ -2731,7 +2740,7 @@ async def process_message_stream(
             # Phase 1 : stream avec détection tool calls
             async for event in call_llm_stream_with_tools(
                 messages=messages,
-                tools=NIMM_TOOLS,
+                tools=(_mistral_ws_tools + NIMM_TOOLS) if _mistral_ws_tools else NIMM_TOOLS,
                 provider=settings['provider'],
                 model=settings.get('model'),
                 system_prompt=system_prompt,
