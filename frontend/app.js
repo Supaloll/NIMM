@@ -3968,8 +3968,11 @@ document.getElementById('preview-voice-btn')?.addEventListener('click', async ()
         const blob  = await r.blob();
         const url   = URL.createObjectURL(blob);
         const audio = new Audio(url);
-        audio.onended = () => { btn.innerHTML = '▶ Écouter'; btn.disabled = false; URL.revokeObjectURL(url); };
-        audio.play();
+        const reset = () => { btn.innerHTML = '▶ Écouter'; btn.disabled = false; URL.revokeObjectURL(url); };
+        audio.onended = reset;
+        audio.onerror = reset;
+        const p = audio.play();
+        if (p) p.catch(reset);
     } catch(e) {
         btn.innerHTML = '▶ Écouter';
         btn.disabled    = false;

@@ -3189,8 +3189,17 @@ async def tts_speak(req: TTSRequest):
         style = (req.style or "").strip()
         if not style and voice.startswith('gemini:'):
             style = get_setting("gemini_tts_style", "")
+        # Lire la clé API dans le contexte asyncio (avant le thread executor)
+        _voxtral_key = ''
+        if voice.startswith('voxtral:'):
+            try:
+                from core.database import get_api_keys
+                _voxtral_key = (get_api_keys().get('mistral') or '').strip()
+            except Exception:
+                _voxtral_key = ''
+        import functools as _ft
         audio_bytes, media_type = await loop.run_in_executor(
-            None, synthesize, req.text, voice, style
+            None, _ft.partial(synthesize, req.text, voice, style, _voxtral_key)
         )
         ext = 'mp3' if 'mpeg' in media_type else 'wav'
         return StreamingResponse(
