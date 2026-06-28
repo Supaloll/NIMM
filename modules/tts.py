@@ -587,8 +587,7 @@ def synthesize_voxtral(text: str, mistral_voice_id: str) -> Optional[bytes]:
         raise RuntimeError("Clé API Mistral non configurée — impossible d'utiliser Voxtral TTS.")
 
     body = json.dumps({
-        'model': 'voxtral-mini-tts-2603',
-        'voice': mistral_voice_id,
+        'voice_id': mistral_voice_id,
         'input': text,
         'response_format': 'mp3',
     }).encode('utf-8')
@@ -601,5 +600,11 @@ def synthesize_voxtral(text: str, mistral_voice_id: str) -> Optional[bytes]:
             'Content-Type': 'application/json',
         }
     )
+    import base64 as _b64
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+        data = json.loads(resp.read())
+        # Mistral retourne {"audio_data": "<base64>"}
+        audio_b64 = data.get('audio_data', '')
+        if not audio_b64:
+            raise RuntimeError(f'Mistral TTS : pas de audio_data dans la réponse : {data}')
+        return _b64.b64decode(audio_b64)
