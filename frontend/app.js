@@ -968,6 +968,7 @@ const isAdmin = me.admin;
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                         <button onclick="_vbPreview('voxtral:${p.mistral_voice_id}', this)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Écouter un aperçu de cette voix">🔊 Aperçu</button>
+                        <button data-pid="${p.id}" data-name="${p.name}" onclick="_vbDelete(this.dataset.pid, this.dataset.name)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem;color:var(--danger,#c00)" aria-label="Supprimer ce profil vocal">🗑️ Supprimer</button>
                         ${!isDefault ? `<button onclick="_vbSetDefault('${p.id}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Définir comme voix par défaut">⭐ Défaut</button>` : ''}
                         <button onclick="_vbExport('${p.id}','${p.name}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Exporter la voix">💾 Export</button>
                         <button onclick="_vbDelete('${p.id}','${p.name}',this)" style="padding:3px 8px;border-radius:6px;background:var(--danger,#e53935);color:#fff;border:none;cursor:pointer;font-size:0.75rem" aria-label="Supprimer ce profil">🗑</button>
@@ -5359,6 +5360,20 @@ async function _vbPreview(voiceId, btn) {
         });
     } catch(e) { btn.textContent = orig; btn.disabled = false; _notify('Aperçu impossible : ' + e.message, 'error'); }
 }
+
+async function _vbDelete(pid, name) {
+    if (!confirm(`Supprimer le profil vocal "${name}" ? Cette action est irréversible (suppression aussi chez Mistral).`)) return;
+    try {
+        const r = await fetch(`/api/voice/profile/${pid}`, {method: 'DELETE'});
+        if (!r.ok) { const t = await r.text(); throw new Error(t); }
+        _notify(`Profil "${name}" supprimé.`, 'ok');
+        // Recharger la liste
+        const section = document.getElementById('voice-banking-section');
+        if (section) { const btn = section.querySelector('button[onclick*="_loadVoiceBanking"]'); if (btn) btn.click(); }
+        loadVoices && loadVoices();
+    } catch(e) { _notify('Erreur suppression : ' + e.message, 'error'); }
+}
+
 
 function _vbExport(pid, name) {
     const a = document.createElement('a');
