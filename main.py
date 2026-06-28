@@ -3295,6 +3295,42 @@ async def voice_set_default(pid: str):
     return {"status": "ok", "default_profile_id": pid}
 
 
+
+@app.get("/api/voice/test-tts/{pid}")
+async def voice_test_tts(pid: str):
+    """Teste la synthèse Voxtral pour un profil donné (diagnostic)."""
+    import json, urllib.request, traceback as _tb
+    from core.database import get_voice_profile, get_api_keys
+    profile = get_voice_profile(pid)
+    if not profile:
+        return {"error": "Profil introuvable", "pid": pid}
+    vid = profile.get("mistral_voice_id", "")
+    if not vid:
+        return {"error": "mistral_voice_id vide dans la DB", "profile": dict(profile)}
+    api_key = (get_api_keys().get("mistral") or "").strip()
+    if not api_key:
+        return {"error": "Clé API Mistral non configurée"}
+    body = json.dumps({"voice_id": vid, "input": "Test.", "response_format": "mp3"}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.mistral.ai/v1/audio/speech",
+        data=body,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            import base64 as _b64
+            data = json.loads(resp.read())
+            audio_b64 = data.get("audio_data", "")
+            return {
+                "ok": True,
+                "voice_id": vid,
+                "audio_bytes": len(_b64.b64decode(audio_b64)) if audio_b64 else 0,
+                "keys_in_response": list(data.keys()),
+            }
+    except Exception as e:
+        return {"error": str(e), "traceback": _tb.format_exc(), "voice_id": vid}
+
+
 @app.delete("/api/voice/profile/{pid}")
 async def voice_delete_profile(pid: str):
     """Supprime un profil de voix (local + Mistral)."""

@@ -5326,13 +5326,37 @@ async function _vbPreview(voiceId, btn) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({text: "Bonjour, voici un aperçu de ma voix personnalisée dans NIMM.", voice: voiceId})
         });
-        if (!r.ok) { const t = await r.text(); throw new Error(t); }
+        if (!r.ok) {
+            const t = await r.text();
+            let msg = t;
+            try { msg = JSON.parse(t).detail || t; } catch(_) {}
+            _notify('Aperçu impossible : ' + msg, 'error');
+            btn.textContent = orig; btn.disabled = false;
+            return;
+        }
         const blob = await r.blob();
         const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.onended = () => { btn.textContent = orig; btn.disabled = false; URL.revokeObjectURL(url); };
-        audio.onerror = () => { btn.textContent = orig; btn.disabled = false; _notify('Lecture impossible.', 'error'); };
-        await audio.play();
+        // Utiliser le player déjà dans le DOM + le rendre visible
+        let player = document.getElementById('vb-preview-player');
+        if (!player) {
+            player = document.createElement('audio');
+            player.id = 'vb-preview-player';
+            document.body.appendChild(player);
+        }
+        const previewDiv = document.getElementById('vb-audio-preview');
+        if (previewDiv) previewDiv.style.display = 'block';
+        player.src = url;
+        player.onended = () => { btn.textContent = orig; btn.disabled = false; URL.revokeObjectURL(url); };
+        player.onerror = (e) => {
+            btn.textContent = orig; btn.disabled = false;
+            _notify('Erreur lecture audio : ' + (e.message||''), 'error');
+        };
+        const p = player.play();
+        _notify('Lecture de l''aperçu en cours…', 'ok');
+        if (p) p.catch(err => {
+            _notify('Autoplay bloqué : cliquez sur le lecteur audio affiché.', 'info');
+            btn.textContent = orig; btn.disabled = false;
+        });
     } catch(e) { btn.textContent = orig; btn.disabled = false; _notify('Aperçu impossible : ' + e.message, 'error'); }
 }
 
