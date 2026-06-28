@@ -971,7 +971,7 @@ const isAdmin = me.admin;
                         <button data-pid="${p.id}" data-name="${p.name}" onclick="_vbDelete(this.dataset.pid, this.dataset.name)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem;color:var(--danger,#c00)" aria-label="Supprimer ce profil vocal">🗑️ Supprimer</button>
                         ${!isDefault ? `<button onclick="_vbSetDefault('${p.id}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Définir comme voix par défaut">⭐ Défaut</button>` : ''}
                         <button onclick="_vbExport('${p.id}','${p.name}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Exporter la voix">💾 Export</button>
-                        <button onclick="_vbDelete('${p.id}','${p.name}',this)" style="padding:3px 8px;border-radius:6px;background:var(--danger,#e53935);color:#fff;border:none;cursor:pointer;font-size:0.75rem" aria-label="Supprimer ce profil">🗑</button>
+                        <button data-pid="${p.id}" data-name="${p.name}" onclick="_vbRecreate(this.dataset.pid, this.dataset.name)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Recréer ce profil avec un nouvel audio">♻️ Recréer</button>
                     </div>
                 </div>`;
             }
@@ -5291,6 +5291,14 @@ async function _vbCreateVoice() {
         if (status) status.textContent = `✅ Profil "${data.name}" créé avec succès !`;
         _notify(`Voix "${data.name}" créée.`, 'ok');
         _vbAudioBlob = null;
+        // Supprimer l’ancien profil si c’est une recréation
+        const _section = document.getElementById('voice-banking-section');
+        const _oldPid = _section?.dataset?.replacePid;
+        if (_oldPid && _oldPid !== data.id) {
+            delete _section.dataset.replacePid;
+            try { await fetch(`/api/voice/profile/${_oldPid}`, {method: 'DELETE'}); } catch(_) {}
+            _notify(`Ancien profil supprimé automatiquement.`, 'ok');
+        }
         // Recharger la liste des voix et profils
         loadVoices && loadVoices();
         setTimeout(() => { document.getElementById('voice-banking-section')?.scrollIntoView({behavior:'smooth'}); }, 200);
@@ -5310,16 +5318,6 @@ async function _vbSetDefault(pid) {
     } catch(e) { _notify('Erreur : ' + e.message, 'error'); }
 }
 
-async function _vbDelete(pid, name, btn) {
-    if (!confirm(`Supprimer la voix "${name}" ? Cette action supprime aussi le profil chez Mistral.`)) return;
-    try {
-        const r = await fetch(`/api/voice/profile/${pid}`, {method: 'DELETE'});
-        if (!r.ok) throw new Error(await r.text());
-        _notify(`Voix "${name}" supprimée.`, 'ok');
-        btn?.closest('[style*="border"]')?.remove();
-        loadVoices && loadVoices();
-    } catch(e) { _notify('Erreur suppression : ' + e.message, 'error'); }
-}
 
 async function _vbPreview(voiceId, btn) {
     const orig = btn.textContent;
@@ -5370,11 +5368,23 @@ async function _vbDelete(pid, name) {
         const r = await fetch(`/api/voice/profile/${pid}`, {method: 'DELETE'});
         if (!r.ok) { const t = await r.text(); throw new Error(t); }
         _notify(`Profil "${name}" supprimé.`, 'ok');
-        // Recharger la liste
         const section = document.getElementById('voice-banking-section');
-        if (section) { const btn = section.querySelector('button[onclick*="_loadVoiceBanking"]'); if (btn) btn.click(); }
+        if (section) delete section.dataset.replacePid;
         loadVoices && loadVoices();
     } catch(e) { _notify('Erreur suppression : ' + e.message, 'error'); }
+}
+
+function _vbRecreate(pid, name) {
+    const section = document.getElementById('voice-banking-section');
+    if (section) section.dataset.replacePid = pid;
+    const nameInput = document.getElementById('vb-name');
+    if (nameInput) nameInput.value = name;
+    section?.scrollIntoView({behavior: 'smooth'});
+    setTimeout(() => {
+        const lbl = document.querySelector('label[for="vb-file-input"]');
+        (lbl || document.getElementById('vb-file-input'))?.focus();
+    }, 400);
+    _notify(`Choisissez un nouvel audio pour recréer la voix "${name}". L’ancien profil sera supprimé automatiquement après création.`, 'info');
 }
 
 
