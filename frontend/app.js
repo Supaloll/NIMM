@@ -5352,7 +5352,7 @@ async function _vbPreview(voiceId, btn) {
             _notify('Erreur lecture audio : ' + (e.message||''), 'error');
         };
         const p = player.play();
-        _notify('Lecture de l''aperçu en cours…', 'ok');
+        _notify("Lecture de l'aperçu en cours…", 'ok');
         if (p) p.catch(err => {
             _notify('Autoplay bloqué : cliquez sur le lecteur audio affiché.', 'info');
             btn.textContent = orig; btn.disabled = false;
