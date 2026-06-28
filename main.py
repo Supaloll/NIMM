@@ -3229,9 +3229,27 @@ async def tts_speak(req: TTSRequest):
 
 @app.get("/api/tts/voices")
 async def tts_voices():
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
     try:
         from modules.tts import list_voices
         return {"voices": list_voices()}
+    except Exception as e:
+        return {"voices": [], "error": str(e)}
+
+@app.get("/api/coanimm/list_voices")
+async def coanimm_list_voices():
+    """Liste les voix TTS disponibles (pour CoaNIMM nimm_list_voices)."""
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
+    try:
+        from modules.tts import list_voices
+        voices = list_voices()
+        return {"voices": [{"id": v["id"], "label": v["label"], "engine": v.get("engine","")} for v in voices]}
     except Exception as e:
         return {"voices": [], "error": str(e)}
 
