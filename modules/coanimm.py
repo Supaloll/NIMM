@@ -172,18 +172,22 @@ GENERATE_SYSTEM_PROMPT = (
     "  Lit un fichier CSV/TSV et le renvoie en tableau Markdown lisible.\n"
     "  nimm_audio_overview(content: str, voice1: str = '', voice2: str = '') -> str\n"
     "  Crée un RÉSUMÉ AUDIO façon podcast : génère un dialogue à 2 voix sur le contenu puis le synthétise (Gemini TTS). Retourne le chemin du fichier audio.\n"
+    "  nimm_list_voices() -> list\n"
+    "  Retourne la liste des voix TTS disponibles (Edge, Gemini, Voxtral…) avec leur id et label. "
+    "Utiliser avant nimm_make_daisy ou nimm_speak pour choisir la bonne voix.\n"
     "  nimm_make_daisy(title: str, sections: list, lang: str = 'fr', voice: str = '', style: str = '') -> str\n"
     "  Crée un LIVRE AUDIO DAISY 2.02 (format accessible standard Victor Reader, AMIS, EasyReader). "
     "Produit un fichier .daisy (ZIP) avec ncc.html, fichiers SMIL et audio MP3 synchronisés. "
     "sections : liste de dicts {'titre': str, 'texte': str}. "
-    "voice : voix TTS ('gemini:Kore', 'gemini:Charon'…) ; vide = voix configurée. "
+    "voice : id de voix (appeler nimm_list_voices() pour les options y compris voix Voxtral personnalisées) ; "
+    "vide = voix par défaut. "
     "Retourne le chemin du fichier .daisy.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
     "nimm_search_documents, nimm_extract_text, nimm_ask_llm, nimm_read_url, nimm_translate, "
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
     "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
-    "nimm_make_daisy) : "
+    "nimm_make_daisy, nimm_list_voices) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -450,6 +454,11 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     ) % tid
     parts.append(tx if "transcribe" not in _disabled else _stub("nimm_transcribe", "transcrire un audio"))
     sp = (
+        "def nimm_list_voices(_tid='%s'):\n"
+        "    import requests\n"
+        "    _res = requests.get('http://localhost:8080/api/coanimm/list_voices', timeout=10).json()\n"
+        "    return _res.get('voices', [])\n"
+        % tid,
         "def nimm_speak(text, voice='', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"text\": text, \"voice\": voice, \"thread_id\": _tid}).encode()\n"
         "    _req = _nimm_ur.Request(\n"
