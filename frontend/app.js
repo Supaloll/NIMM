@@ -889,10 +889,14 @@ const isAdmin = me.admin;
                 <div id="vb-status" style="font-size:0.8rem;color:var(--text-muted)"></div>
             </div>
         </details>
-        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <label style="font-size:0.82rem;cursor:pointer;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary)">
                 📥 Importer .nimmvoice
                 <input type="file" accept=".nimmvoice,.zip" style="display:none" onchange="_vbImportProfile(this)" />
+            </label>
+            <label style="font-size:0.82rem;display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="checkbox" id="vb-import-recreate" />
+                Recréer la voix chez Mistral (autre clé API)
             </label>
         </div>
     </div>
@@ -947,40 +951,7 @@ const isAdmin = me.admin;
     // ── Lister les micros disponibles ──
     _vbPopulateMicList();
     // ── Profils de voix Voxtral ──
-    (async () => {
-        const vbListEl = document.getElementById('voice-profiles-list');
-        if (!vbListEl) return;
-        try {
-            const r = await fetch('/api/voice/profiles');
-            const {profiles} = await r.json();
-            if (!profiles || !profiles.length) {
-                vbListEl.innerHTML = '<em style="font-size:0.8rem">Aucun profil créé.</em>';
-                return;
-            }
-            let h = '<div style="display:flex;flex-direction:column;gap:8px">';
-            for (const p of profiles) {
-                const isDefault = p.is_default;
-                h += `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px">
-                    <div>
-                        <strong style="font-size:0.85rem">🟠 ${p.name}</strong>
-                        ${isDefault ? '<span style="font-size:0.75rem;color:var(--success,#4caf50)"> ⭐ par défaut</span>' : ''}
-                        <div style="font-size:0.75rem;color:var(--text-muted)">${(p.language||'fr').toUpperCase()} ${p.gender ? '· ' + p.gender : ''} · créé le ${(p.created_at||'').slice(0,10)}</div>
-                    </div>
-                    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-                        <button onclick="_vbPreview('voxtral:${p.mistral_voice_id}', this)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Écouter un aperçu de cette voix">🔊 Aperçu</button>
-                        <button data-pid="${p.id}" data-name="${p.name}" onclick="_vbDelete(this.dataset.pid, this.dataset.name)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem;color:var(--danger,#c00)" aria-label="Supprimer ce profil vocal">🗑️ Supprimer</button>
-                        ${!isDefault ? `<button onclick="_vbSetDefault('${p.id}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Définir comme voix par défaut">⭐ Défaut</button>` : ''}
-                        <button onclick="_vbExport('${p.id}','${p.name}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Exporter la voix">💾 Export</button>
-                        <button data-pid="${p.id}" data-name="${p.name}" onclick="_vbRecreate(this.dataset.pid, this.dataset.name)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Recréer ce profil avec un nouvel audio">♻️ Recréer</button>
-                    </div>
-                </div>`;
-            }
-            h += '</div>';
-            vbListEl.innerHTML = h;
-        } catch(e) {
-            vbListEl.innerHTML = '<em style="font-size:0.8rem;color:var(--danger,red)">Erreur chargement profils.</em>';
-        }
-    })();
+    _vbLoadProfiles();
     // ── Services externes ──
     const _extSvcs = (extKeys && extKeys.services) || [];
     const _extListEl = document.getElementById('ext-keys-list');
@@ -5300,6 +5271,7 @@ async function _vbCreateVoice() {
             _notify(`Ancien profil supprimé automatiquement.`, 'ok');
         }
         // Recharger la liste des voix et profils
+        await _vbLoadProfiles();
         loadVoices && loadVoices();
         setTimeout(() => { document.getElementById('voice-banking-section')?.scrollIntoView({behavior:'smooth'}); }, 200);
     } catch(e) {
@@ -5314,10 +5286,46 @@ async function _vbSetDefault(pid) {
         const r = await fetch(`/api/voice/default/${pid}`, {method: 'POST'});
         if (!r.ok) throw new Error(await r.text());
         _notify('Voix définie par défaut.', 'ok');
+        await _vbLoadProfiles();
         loadVoices && loadVoices();
     } catch(e) { _notify('Erreur : ' + e.message, 'error'); }
 }
 
+
+async function _vbLoadProfiles() {
+    const vbListEl = document.getElementById('voice-profiles-list');
+    if (!vbListEl) return;
+    try {
+        const r = await fetch('/api/voice/profiles');
+        const {profiles} = await r.json();
+        if (!profiles || !profiles.length) {
+            vbListEl.innerHTML = '<em style="font-size:0.8rem">Aucun profil créé.</em>';
+            return;
+        }
+        let h = '<div style="display:flex;flex-direction:column;gap:8px">';
+        for (const p of profiles) {
+            const isDefault = p.is_default;
+            h += `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <div>
+                    <strong style="font-size:0.85rem">🟠 ${p.name}</strong>
+                    ${isDefault ? '<span style="font-size:0.75rem;color:var(--success,#4caf50)"> ⭐ par défaut</span>' : ''}
+                    <div style="font-size:0.75rem;color:var(--text-muted)">${(p.language||'fr').toUpperCase()} ${p.gender ? '· ' + p.gender : ''} · créé le ${(p.created_at||'').slice(0,10)}</div>
+                </div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                    <button onclick="_vbPreview('voxtral:${p.mistral_voice_id}', this)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Écouter un aperçu de cette voix">🔊 Aperçu</button>
+                    <button data-pid="${p.id}" data-name="${p.name}" onclick="_vbDelete(this.dataset.pid, this.dataset.name)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem;color:var(--danger,#c00)" aria-label="Supprimer ce profil vocal">🗑️ Supprimer</button>
+                    ${!isDefault ? `<button onclick="_vbSetDefault('${p.id}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Définir comme voix par défaut">⭐ Défaut</button>` : ''}
+                    <button onclick="_vbExport('${p.id}','${p.name}')" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Exporter la voix">💾 Export</button>
+                    <button data-pid="${p.id}" data-name="${p.name}" onclick="_vbRecreate(this.dataset.pid, this.dataset.name)" style="padding:3px 8px;border-radius:6px;background:var(--bg-secondary);border:1px solid var(--border);cursor:pointer;font-size:0.75rem" aria-label="Recréer ce profil avec un nouvel audio">♻️ Recréer</button>
+                </div>
+            </div>`;
+        }
+        h += '</div>';
+        vbListEl.innerHTML = h;
+    } catch(e) {
+        vbListEl.innerHTML = '<em style="font-size:0.8rem;color:var(--danger,red)">Erreur chargement profils.</em>';
+    }
+}
 
 async function _vbPreview(voiceId, btn) {
     const orig = btn.textContent;
@@ -5370,6 +5378,7 @@ async function _vbDelete(pid, name) {
         _notify(`Profil "${name}" supprimé.`, 'ok');
         const section = document.getElementById('voice-banking-section');
         if (section) delete section.dataset.replacePid;
+        await _vbLoadProfiles();
         loadVoices && loadVoices();
     } catch(e) { _notify('Erreur suppression : ' + e.message, 'error'); }
 }
@@ -5397,13 +5406,17 @@ function _vbExport(pid, name) {
 
 async function _vbImportProfile(input) {
     if (!input.files || !input.files[0]) return;
+    const recreate = document.getElementById('vb-import-recreate')?.checked ? '1' : '0';
     const fd = new FormData();
     fd.append('file', input.files[0], input.files[0].name);
+    fd.append('recreate', recreate);
+    _notify(recreate === '1' ? 'Import et recréation chez Mistral en cours…' : 'Import en cours…', 'info');
     try {
         const r = await fetch('/api/voice/import', {method:'POST', body: fd});
         if (!r.ok) throw new Error(await r.text());
         const data = await r.json();
-        _notify(`Voix "${data.name}" importée.`, 'ok');
+        _notify(`Voix "${data.name}" importée${data.recreated ? ' et recréée chez Mistral' : ''}.`, 'ok');
+        await _vbLoadProfiles();
         loadVoices && loadVoices();
     } catch(e) { _notify('Erreur import : ' + e.message, 'error'); }
 }

@@ -67,7 +67,7 @@ def _pcm_to_mp3(pcm_bytes: bytes, sample_rate: int = 24000,
     return enc.encode(pcm_bytes) + enc.flush()
 
 
-def _synthesize_section(text: str, voice: str, style: str) -> tuple[bytes, float]:
+def _synthesize_section(text: str, voice: str, style: str, api_key: str = "") -> tuple[bytes, float]:
     """Synthétise un texte → (mp3_bytes, durée_secondes).
 
     Retourne (b'', 0.0) si la synthèse échoue ou si aucune voix TTS
@@ -77,7 +77,7 @@ def _synthesize_section(text: str, voice: str, style: str) -> tuple[bytes, float
         return b'', 0.0
     try:
         from modules.tts import synthesize
-        audio_bytes, media_type = synthesize(text, voice, style)
+        audio_bytes, media_type = synthesize(text, voice, style, api_key=api_key)
         if not audio_bytes:
             return b'', 0.0
 
@@ -219,7 +219,7 @@ def _build_ncc(title: str, lang: str, sections_nav: list[dict],
 # ── Point d'entrée ─────────────────────────────────────────────────────────
 
 def build_daisy(title: str, sections: list, lang: str = 'fr',
-                voice: str = '', style: str = '') -> bytes:
+                voice: str = '', style: str = '', api_key: str = '') -> bytes:
     """Construit un livre DAISY 2.02 et retourne le ZIP en bytes.
 
     Args:
@@ -260,7 +260,7 @@ def build_daisy(title: str, sections: list, lang: str = 'fr',
 
             # Synthèse audio : un MP3 par section (tout le texte concaténé)
             full_text = f'{titre}. {" ".join(paras)}'
-            mp3_bytes, sec_dur = _synthesize_section(full_text, voice, style)
+            mp3_bytes, sec_dur = _synthesize_section(full_text, voice, style, api_key=api_key)
 
             # Durées par paragraphe (proportionnelles aux longueurs)
             if sec_dur > 0 and paras:
