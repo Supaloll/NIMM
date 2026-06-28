@@ -3277,6 +3277,10 @@ async def voice_create(name: str = Form(...), language: str = Form("fr"),
 @app.get("/api/voice/profiles")
 async def voice_profiles_list():
     """Liste les profils de voix personnalisées."""
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
     from core.database import list_voice_profiles
     profiles = list_voice_profiles()
     # Ne pas exposer sample_path
@@ -3296,9 +3300,36 @@ async def voice_set_default(pid: str):
 
 
 
+@app.get("/api/voice/list-mistral")
+async def voice_list_mistral():
+    """Liste les voix stockées chez Mistral (diagnostic)."""
+    import json, urllib.request
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
+    from core.database import get_api_keys
+    api_key = (get_api_keys().get("mistral") or "").strip()
+    if not api_key:
+        return {"error": "Clé API Mistral non configurée"}
+    req = urllib.request.Request(
+        "https://api.mistral.ai/v1/audio/voices",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return {"mistral_voices": json.loads(resp.read())}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/voice/test-tts/{pid}")
 async def voice_test_tts(pid: str):
     """Teste la synthèse Voxtral pour un profil donné (diagnostic)."""
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
     import json, urllib.request, traceback as _tb
     from core.database import get_voice_profile, get_api_keys
     profile = get_voice_profile(pid)
@@ -3327,6 +3358,12 @@ async def voice_test_tts(pid: str):
                 "audio_bytes": len(_b64.b64decode(audio_b64)) if audio_b64 else 0,
                 "keys_in_response": list(data.keys()),
             }
+    except urllib.error.HTTPError as e:
+        body = ""
+        try: body = e.read().decode("utf-8", errors="replace")
+        except: pass
+        return {"error": f"HTTP {e.code}: {e.reason}", "mistral_error_body": body,
+                "request_body_sent": json.loads(body_bytes := json.dumps({"voice_id": vid, "input": "Test.", "response_format": "mp3"})), "voice_id": vid}
     except Exception as e:
         return {"error": str(e), "traceback": _tb.format_exc(), "voice_id": vid}
 
