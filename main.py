@@ -2112,6 +2112,10 @@ class CoanimmMakeDaisyReq(BaseModel):
 async def coanimm_make_daisy(req: CoanimmMakeDaisyReq):
     """Crée un livre DAISY 2.02 (ZIP .daisy) dans le workspace CoaNIMM."""
     import core.database as _db, os as _os, time as _time, re as _re
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
     if "make_daisy" in _db.list_coanimm_disabled_tools():
         return {"status": "error", "message": "Outil DAISY désactivé dans les réglages CoaNIMM."}
     voice = (req.voice or "").strip()
@@ -2120,6 +2124,14 @@ async def coanimm_make_daisy(req: CoanimmMakeDaisyReq):
         voice = get_setting("tts_voice", "ff_siwis")
     if not style and voice.startswith("gemini:"):
         style = get_setting("gemini_tts_style", "")
+    # Lire la cle Mistral avant le thread executor (ContextVar)
+    _voxtral_key = ""
+    if voice.startswith("voxtral:"):
+        try:
+            from core.database import get_api_keys
+            _voxtral_key = (get_api_keys().get("mistral") or "").strip()
+        except Exception:
+            pass
     try:
         from modules.daisy import build_daisy
         from modules.coanimm import _workspace_dir
@@ -2132,6 +2144,7 @@ async def coanimm_make_daisy(req: CoanimmMakeDaisyReq):
                 lang=req.lang or "fr",
                 voice=voice,
                 style=style,
+                api_key=_voxtral_key,
             )
         )
     except RuntimeError as e:
@@ -3301,6 +3314,10 @@ async def voice_profiles_list():
 @app.post("/api/voice/default/{pid}")
 async def voice_set_default(pid: str):
     """Définit un profil comme voix TTS par défaut."""
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
     from core.database import set_default_voice_profile, get_voice_profile
     if not get_voice_profile(pid):
         raise HTTPException(404, "Profil introuvable.")
@@ -3381,6 +3398,10 @@ async def voice_test_tts(pid: str):
 async def voice_delete_profile(pid: str):
     """Supprime un profil de voix (local + Mistral)."""
     import json, urllib.request
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
     from core.database import get_api_keys, get_voice_profile, delete_voice_profile
     profile = get_voice_profile(pid)
     if not profile:
@@ -3406,6 +3427,10 @@ async def voice_delete_profile(pid: str):
 async def voice_export(pid: str):
     """Exporte un profil de voix en .nimmvoice (zip : sample audio + metadata JSON)."""
     import json, os, zipfile, io
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
     from core.database import get_voice_profile
     profile = get_voice_profile(pid)
     if not profile:
@@ -3431,35 +3456,70 @@ async def voice_export(pid: str):
 
 
 @app.post("/api/voice/import")
-async def voice_import(file: UploadFile = File(...)):
-    """Importe un profil .nimmvoice et crée le profil en base (sans re-créer chez Mistral)."""
-    import json, os, zipfile, io, time
-    from core.database import create_voice_profile
+async def voice_import(file: UploadFile = File(...), recreate: str = Form("0")):
+    """Importe un profil .nimmvoice. Si recreate=1, recree la voix chez Mistral."""
+    import json, os, zipfile, io, time, base64, urllib.request, urllib.error
+    from core.database import _load_users
+    if not get_current_user():
+        _users = _load_users()
+        if _users: set_user_context(_users[0]['id'])
+    from core.database import create_voice_profile, get_api_keys
     data = await file.read()
     buf = io.BytesIO(data)
     try:
         with zipfile.ZipFile(buf) as zf:
             meta = json.loads(zf.read("metadata.json"))
-            # Extraire le sample si présent
             sample_files = [n for n in zf.namelist() if n.startswith("sample")]
+            sample_bytes = b""
+            sample_ext = ".mp3"
             sample_path = ""
             if sample_files:
                 voice_dir = os.path.join("data", "voice_samples")
                 os.makedirs(voice_dir, exist_ok=True)
-                ext = os.path.splitext(sample_files[0])[1]
-                sample_path = os.path.join(voice_dir, f"import_{int(time.time())}{ext}")
+                sample_ext = os.path.splitext(sample_files[0])[1] or ".mp3"
+                sample_path = os.path.join(voice_dir, f"import_{int(time.time())}{sample_ext}")
+                sample_bytes = zf.read(sample_files[0])
                 with open(sample_path, "wb") as fp:
-                    fp.write(zf.read(sample_files[0]))
+                    fp.write(sample_bytes)
     except Exception as e:
         raise HTTPException(400, f"Fichier .nimmvoice invalide : {e}")
+    name = meta.get("name", "Voix importee")
+    mistral_voice_id = meta.get("mistral_voice_id", "")
+    recreated = False
+    if recreate == "1":
+        if not sample_bytes:
+            raise HTTPException(400, "Impossible de recreer : aucun sample audio dans le fichier.")
+        api_key = (get_api_keys().get("mistral") or "").strip()
+        if not api_key:
+            raise HTTPException(400, "Cle API Mistral non configuree.")
+        body = json.dumps({
+            "name": name,
+            "sample_audio": base64.b64encode(sample_bytes).decode(),
+            "sample_filename": f"sample{sample_ext}",
+            "languages": [meta.get("language", "fr")],
+            "gender": meta.get("gender") or None,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.mistral.ai/v1/audio/voices",
+            data=body,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                mdata = json.loads(resp.read())
+                mistral_voice_id = mdata.get("id", "")
+                recreated = True
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            raise HTTPException(502, f"Erreur Mistral API : {e.code} - {detail}")
     pid = create_voice_profile(
-        name=meta.get("name", "Voix importée"),
-        mistral_voice_id=meta.get("mistral_voice_id", ""),
+        name=name,
+        mistral_voice_id=mistral_voice_id,
         sample_path=sample_path,
         language=meta.get("language", "fr"),
         gender=meta.get("gender", ""),
     )
-    return {"status": "ok", "profile_id": pid, "name": meta.get("name", "?")}
+    return {"status": "ok", "profile_id": pid, "name": name, "recreated": recreated}
 
 # ══════════════════════════════════════════
 # AGENTS MISTRAL — gestion + conversations
