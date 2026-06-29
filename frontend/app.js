@@ -4099,6 +4099,7 @@ function _applyProviderConstraints(keys) {
         { selId: 'routing-titre',   warnId: 'warn-titre'   },
         { selId: 'routing-synthese', warnId: 'warn-synthese' },
         { selId: 'routing-coanimm',  warnId: 'warn-coanimm'  },
+        { selId: 'routing-websearch', warnId: 'warn-websearch' },
     ];
     checks.forEach(({ selId, warnId }) => {
         const sel  = document.getElementById(selId);
@@ -4224,6 +4225,11 @@ async function loadSettingsIntoUI() {
         const coanimmSel = document.getElementById('routing-coanimm');
         if (coanimmSel) {
             coanimmSel.value = routing.coanimm?.provider || 'same';
+        }
+
+        const websearchSel = document.getElementById('routing-websearch');
+        if (websearchSel) {
+            websearchSel.value = routing.web_search?.provider || 'same';
         }
 
         // Indiquer si les clés sont configurées
@@ -4643,6 +4649,12 @@ document.getElementById('routing-synthese')?.addEventListener('change', async (e
 document.getElementById('routing-coanimm')?.addEventListener('change', async (e) => {
     const val = e.target.value;
     await _saveRouting('coanimm', val === 'same' ? {} : { provider: val });
+    _autoSaveFlash(e.target);
+});
+
+document.getElementById('routing-websearch')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    await _saveRouting('web_search', val === 'same' ? {} : { provider: val });
     _autoSaveFlash(e.target);
 });
 

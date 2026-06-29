@@ -371,6 +371,13 @@
                 </select>
                 <span class="routing-warning hidden" id="warn-coanimm" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
 
+                <span class="routing-label">🌐 Recherche web</span>
+                <select id="routing-websearch" class="routing-select" aria-label="Provider pour la recherche web">
+                    <option value="same">↩ Brave / Tavily (par défaut)</option>
+                    <option value="mistral" data-needs-key="mistral">🔵 Mistral (web search natif)</option>
+                </select>
+                <span class="routing-warning hidden" id="warn-websearch" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+
                 <span class="routing-label">🔠 PDF (texte sélectionnable)</span>
                 <span class="routing-fixed">Local gratuit (pypdf)</span>
 

@@ -233,6 +233,7 @@ def _load_provider_routing() -> dict:
         'titre':    {},
         'synthese': {},
         'coanimm':  {},
+        'web_search': {},
     }
     return {**defaults, **saved}
 
@@ -1556,6 +1557,41 @@ from modules.coanimm_ops import (OPS_TOOLS as _COANIMM_OPS_TOOLS,
 NIMM_TOOLS = NIMM_TOOLS + _COANIMM_OPS_TOOLS + _COANIMM_ASYNC_TOOLS
 
 
+async def _search_via_mistral(query: str, api_keys: dict) -> str:
+    """
+    Recherche web via l'outil natif Mistral web_search.
+    Retourne le texte de la reponse + citations formatees.
+    """
+    import httpx as _httpx
+    import json as _json
+    _mkey = (api_keys.get('mistral') or '').strip()
+    if not _mkey:
+        raise ValueError('Cle API Mistral manquante pour la recherche web.')
+    _payload = {
+        'model': 'mistral-small-latest',
+        'messages': [{'role': 'user', 'content': query}],
+        'tools': [{'type': 'web_search'}],
+        'max_tokens': 1024,
+    }
+    async with _httpx.AsyncClient(timeout=30) as _c:
+        _r = await _c.post(
+            'https://api.mistral.ai/v1/chat/completions',
+            headers={'Authorization': f'Bearer {_mkey}', 'Content-Type': 'application/json'},
+            json=_payload
+        )
+        _r.raise_for_status()
+        _data = _r.json()
+    _content = _data['choices'][0]['message'].get('content') or ''
+    _cits = (_data.get('citations')
+             or _data['choices'][0].get('message', {}).get('citations') or [])
+    if _cits:
+        _content += '\n\nSources :'
+        for _i, _c in enumerate(_cits, 1):
+            _u = _c.get('url', '')
+            _t = _c.get('title') or _c.get('snippet', _u)[:60] or _u
+            _content += f'\n{_i}. {_t} ({_u})'
+    return _content or '[Aucun resultat]'
+
 async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     """
     Exécute un outil demandé par le LLM et retourne le résultat en texte.
@@ -1609,9 +1645,21 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
 
     elif name == 'search_web':
         try:
-            from modules.websearch import search_with_cache as brave_search
-            result = await brave_search(query, classify=classify_perissabilite_jours)
-            print(f"[HUB] 🌐 Tool search_web({query!r}) → {len(result or '')} chars")
+            # Vérifier le routing : Mistral ou Brave/Tavily
+            _ws_routing = _load_provider_routing().get('web_search', {})
+            _ws_provider = _ws_routing.get('provider', '') if isinstance(_ws_routing, dict) else ''
+            if _ws_provider == 'mistral':
+                try:
+                    from core.database import get_api_keys as _gak
+                    _ws_keys = _gak()
+                except Exception:
+                    _ws_keys = {}
+                result = await _search_via_mistral(query, _ws_keys)
+                print(f"[HUB] 🔵 Tool search_web (Mistral) {query!r} → {len(result or '')} chars")
+            else:
+                from modules.websearch import search_with_cache as brave_search
+                result = await brave_search(query, classify=classify_perissabilite_jours)
+                print(f"[HUB] 🌐 Tool search_web({query!r}) → {len(result or '')} chars")
             return result or '[Aucun résultat web pour cette requête]'
         except Exception as e:
             print(f"[HUB] ⚠️ Erreur search_web : {e}")
