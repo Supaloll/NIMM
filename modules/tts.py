@@ -507,6 +507,10 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '', api_key: 
         return synthesize_gemini(text, voice[7:], style=style), 'audio/wav'
     if voice.startswith('voxtral:'):
         return synthesize_voxtral(text, voice[8:], api_key=api_key), 'audio/mpeg'
+    if voice.startswith('mistral:'):
+        return synthesize_mistral_speech(text, voice_id=voice[8:], api_key=api_key), 'audio/mpeg'
+    if voice.startswith('mistral-clone:'):
+        return synthesize_mistral_speech(text, ref_audio_b64=voice[14:], api_key=api_key), 'audio/mpeg'
     return synthesize_kokoro(text, voice), 'audio/wav'
 
 
@@ -565,6 +569,21 @@ def list_voices() -> list:
     except Exception:
         pass
 
+    # -- Mistral Audio Speech (voix preset)
+    try:
+        for _mv in list_mistral_voices():
+            _mvid = _mv.get('voice_id') or _mv.get('id') or ''
+            _mvlabel = _mv.get('name') or _mv.get('display_name') or _mvid
+            if _mvid:
+                result.append({
+                    'id':     'mistral:' + _mvid,
+                    'label':  '🟠 Mistral Speech ⭐⭐⭐⭐⭐ — ' + _mvlabel,
+                    'lang':   '🌐',
+                    'engine': 'mistral',
+                })
+    except Exception:
+        pass
+
     return result
 
 
@@ -610,4 +629,79 @@ def synthesize_voxtral(text: str, mistral_voice_id: str, api_key: str = '') -> O
         audio_b64 = data.get('audio_data', '')
         if not audio_b64:
             raise RuntimeError(f'Mistral TTS : pas de audio_data dans la réponse : {data}')
+        return _b64.b64decode(audio_b64)
+
+
+# ==========================================
+# MISTRAL AUDIO SPEECH (preset + zero-shot cloning)
+# ==========================================
+
+def list_mistral_voices(api_key: str = '') -> list:
+    """
+    Retourne la liste des voix Mistral preset (GET /v1/audio/voices).
+    Retourne [] si cle absente ou API indisponible.
+    """
+    import json, urllib.request
+    if not api_key:
+        try:
+            from core.database import get_api_keys
+            api_key = (get_api_keys().get('mistral') or '').strip()
+        except Exception:
+            api_key = ''
+    if not api_key:
+        return []
+    try:
+        req = urllib.request.Request(
+            'https://api.mistral.ai/v1/audio/voices',
+            headers={'Authorization': f'Bearer {api_key}'}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read()).get('voices', [])
+    except Exception:
+        return []
+
+
+def synthesize_mistral_speech(
+    text: str,
+    voice_id: str = '',
+    ref_audio_b64: str = '',
+    fmt: str = 'mp3',
+    api_key: str = ''
+) -> Optional[bytes]:
+    """
+    TTS Mistral : voix preset (voice_id) ou clonage zero-shot (ref_audio_b64).
+    Retourne des bytes MP3.
+    """
+    import json, urllib.request, base64 as _b64
+    if not api_key:
+        try:
+            from core.database import get_api_keys
+            api_key = (get_api_keys().get('mistral') or '').strip()
+        except Exception:
+            api_key = ''
+    if not api_key:
+        raise RuntimeError('Cle API Mistral non configuree.')
+    payload: dict = {
+        'input': text,
+        'model': 'voxtral-mini-tts-2603',
+        'response_format': fmt,
+    }
+    if voice_id:
+        payload['voice_id'] = voice_id
+    if ref_audio_b64:
+        payload['ref_audio'] = ref_audio_b64
+    body = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(
+        'https://api.mistral.ai/v1/audio/speech',
+        data=body,
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        }
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        rdata = json.loads(resp.read())
+        audio_b64 = rdata.get('audio_data', '')
+        if not audio_b64:
+            raise RuntimeError(f'Mistral Audio Speech : pas de audio_data : {rdata}')
         return _b64.b64decode(audio_b64)
