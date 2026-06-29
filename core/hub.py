@@ -25,6 +25,10 @@ from modules.memory import extract_all_tags
 
 from modules.quiz import wrap_bare_quiz as _wrap_bare_quiz
 
+# ContextVar pour passer les citations Mistral (routing web search) au stream SSE
+from contextvars import ContextVar as _ContextVar
+_pending_citations: _ContextVar = _ContextVar('nimm_pending_citations', default=None)
+
 
 # ══════════════════════════════════════════
 # ASSAINISSEUR D'HISTORIQUE (correctif 400 Mistral)
@@ -1584,12 +1588,11 @@ async def _search_via_mistral(query: str, api_keys: dict) -> str:
     _content = _data['choices'][0]['message'].get('content') or ''
     _cits = (_data.get('citations')
              or _data['choices'][0].get('message', {}).get('citations') or [])
+    # Encoder les citations en JSON en fin de resultat pour que hub.py
+    # puisse les extraire et les emettre en SSE independamment du LLM principal
     if _cits:
-        _content += '\n\nSources :'
-        for _i, _c in enumerate(_cits, 1):
-            _u = _c.get('url', '')
-            _t = _c.get('title') or _c.get('snippet', _u)[:60] or _u
-            _content += f'\n{_i}. {_t} ({_u})'
+        import json as _jc
+        _content += f'\n\n[NIMM_CITATIONS]{_jc.dumps(_cits, ensure_ascii=False)}'
     return _content or '[Aucun resultat]'
 
 async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
@@ -1656,6 +1659,15 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                     _ws_keys = {}
                 result = await _search_via_mistral(query, _ws_keys)
                 print(f"[HUB] 🔵 Tool search_web (Mistral) {query!r} → {len(result or '')} chars")
+                # Extraire les citations encodees et les stocker pour SSE
+                import re as _re_cit, json as _jc2
+                _m = _re_cit.search(r'\[NIMM_CITATIONS\](.*)', result or '')
+                if _m:
+                    try:
+                        _pending_citations.set(_jc2.loads(_m.group(1)))
+                    except Exception:
+                        pass
+                    result = result[:_m.start()].rstrip()
             else:
                 from modules.websearch import search_with_cache as brave_search
                 result = await brave_search(query, classify=classify_perissabilite_jours)
@@ -2821,6 +2833,12 @@ async def process_message_stream(
                         if call['name'] == 'search_web':
                             yield "data: [WEB_SEARCH_LOADING]\n\n"
                         tool_result = await _execute_tool(call['name'], call['args'], thread_id)
+                        # Emettre les citations Mistral routing si presentes
+                        _cit_val = _pending_citations.get(None)
+                        if _cit_val is not None:
+                            import json as _jc3
+                            yield f"data: [CITATIONS]{_jc3.dumps(_cit_val, ensure_ascii=False)}\n\n"
+                            _pending_citations.set(None)
                         messages.append({
                             'role':         'tool',
                             'tool_call_id': call['id'],
