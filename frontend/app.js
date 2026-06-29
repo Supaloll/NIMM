@@ -1415,9 +1415,7 @@ function renderSidebar() {
         div.className = 'thread-item' + (t.thread_id === currentThreadId ? ' active' : '');
         div.setAttribute('role', 'button');
         div.setAttribute('tabindex', '0');
-        div.removeAttribute('aria-label');
-        if (t.thread_id === currentThreadId) div.setAttribute('aria-current', 'true');
-        else div.removeAttribute('aria-current');
+        div.setAttribute('aria-label', (t.name || 'Fil') + (t.thread_id === currentThreadId ? ' (fil actif)' : ''));
         const _ouvrir = () => { if (isMobile()) closeSidebar(); selectThread(t.thread_id); };
         div.addEventListener('click', (e) => {
             if (e.target.closest('.thread-menu-btn, .thread-dropdown')) return; // pas depuis le menu
@@ -1881,8 +1879,8 @@ async function promptThreadParamsModal() {
         };
         modal.classList.remove('hidden');
         setTimeout(() => {
-            const title = document.getElementById('new-thread-modal-title');
-            if (title) { title.setAttribute('tabindex', '-1'); title.focus(); }
+            const modalBox = modal.querySelector('[role="dialog"]');
+            if (modalBox) { modalBox.setAttribute('tabindex', '-1'); modalBox.focus(); }
             else (providerSel || modal.querySelector('select, button'))?.focus();
         }, 80);
         okBtn.onclick = async () => {
@@ -10058,7 +10056,7 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
 // ══════════════════════════════════════════
 (function () {
     var SHORTCUTS = {
-        'c': 'toggle-history',    // Fils
+        'f': 'toggle-history',    // Fils
         'a': 'toggle-agenda',     // Agenda
         'm': 'toggle-memory',     // Mémoire
         'g': 'toggle-galerie',    // Galerie d'images
@@ -10069,7 +10067,7 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
         't': 'toggle-coanimm'              // agenT CoaNIMM
     };
     var LABELS = {
-        'toggle-history': 'Alt+Shift+C', 'toggle-agenda': 'Alt+Shift+A',
+        'toggle-history': 'Alt+Shift+F', 'toggle-agenda': 'Alt+Shift+A',
         'toggle-memory': 'Alt+Shift+M', 'toggle-galerie': 'Alt+Shift+G',
         'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P',
         'toggle-prompt-library': 'Alt+Shift+O',
