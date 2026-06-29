@@ -1946,6 +1946,7 @@ _COANIMM_TOOLS = [
     {"tool": "simplify", "label": "Simplifier (FALC)", "category": "Texte & langue"},
     {"tool": "anonymize", "label": "Anonymiser un texte", "category": "Texte & langue"},
     {"tool": "expurgate_doc", "label": "Expurger un document entier", "category": "Documents"},
+    {"tool": "ocr_document", "label": "OCR Mistral (PDF/image → texte structuré)", "category": "Documents"},
     {"tool": "codestral_fim", "label": "Compléter du code (Codestral FIM)", "category": "Code"},
     {"tool": "image", "label": "Génération d'image", "category": "Images"},
     {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
@@ -4247,6 +4248,73 @@ async def mistral_audio_analyze(file: UploadFile = File(...), prompt: str = Form
         _res = _r.json()
     _text = ((_res.get('choices') or [{}])[0].get('message', {}).get('content') or '').strip()
     return {"text": _text, "name": file.filename, "model": "voxtral-small-latest"}
+
+
+class MistralOcrReq(BaseModel):
+    url: str = ""
+    thread_id: str = ""
+
+@app.post("/api/mistral/ocr")
+async def mistral_ocr(file: UploadFile = File(None), url: str = Form(default=""), thread_id: str = Form(default="")):
+    """
+    OCR via mistral-ocr-latest.
+    Accepte un fichier upload (PDF ou image) OU une URL distante.
+    Retourne le texte extrait en Markdown.
+    """
+    import base64 as _b64, httpx as _httpx
+    from core.database import get_api_keys as _gak
+    _mkey = (_gak().get("mistral") or "").strip()
+    if not _mkey:
+        raise HTTPException(400, "Clé API Mistral non configurée.")
+
+    if file and file.filename:
+        _data = await file.read()
+        _fname = (file.filename or "").lower()
+        _ext = _fname.rsplit(".", 1)[-1] if "." in _fname else ""
+        if _ext == "pdf":
+            _mime = "application/pdf"
+            _doc_type = "document_url"
+            _doc_key = "document_url"
+        elif _ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"):
+            _mime = file.content_type or f"image/{_ext}"
+            _doc_type = "image_url"
+            _doc_key = "image_url"
+        else:
+            raise HTTPException(400, "Format non supporté : PDF ou image (jpg, png, webp, gif, bmp, tiff).")
+        _b64_str = _b64.b64encode(_data).decode()
+        _doc_url = f"data:{_mime};base64,{_b64_str}"
+    elif url.strip():
+        _url = url.strip()
+        if _url.lower().endswith(".pdf") or "pdf" in _url.lower():
+            _doc_type = "document_url"
+            _doc_key = "document_url"
+        else:
+            _doc_type = "image_url"
+            _doc_key = "image_url"
+        _doc_url = _url
+    else:
+        raise HTTPException(400, "Fournissez un fichier ou une URL.")
+
+    _payload = {
+        "model": "mistral-ocr-latest",
+        "document": {
+            "type": _doc_type,
+            _doc_key: _doc_url,
+        }
+    }
+    async with _httpx.AsyncClient(timeout=120) as _client:
+        _r = await _client.post(
+            "https://api.mistral.ai/v1/ocr",
+            headers={"Authorization": f"Bearer {_mkey}", "Content-Type": "application/json"},
+            json=_payload
+        )
+        if _r.status_code != 200:
+            raise HTTPException(_r.status_code, f"Erreur OCR Mistral : {_r.text[:300]}")
+        _res = _r.json()
+
+    _pages = _res.get("pages", [])
+    _text = "\n\n".join(p.get("markdown", "") for p in _pages).strip()
+    return {"text": _text, "pages": len(_pages), "model": "mistral-ocr-latest"}
 
 
 @app.post("/api/upload")
