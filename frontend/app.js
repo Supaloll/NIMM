@@ -1362,10 +1362,10 @@ function renderSidebar() {
     const newChatBtn = document.createElement('button');
     newChatBtn.className = 'thread-new-chat-btn';
     newChatBtn.id = 'new-thread-btn';
-    newChatBtn.textContent = '💬 Nouveau fil';
+    newChatBtn.innerHTML = '<span aria-hidden="true">💬</span> Nouveau fil';
     newChatBtn.setAttribute('aria-label', 'Nouveau fil');
     newChatBtn.setAttribute('aria-keyshortcuts', 'Alt+N');
-    newChatBtn.title = 'Alt+N';
+    newChatBtn.title = 'Nouveau fil';
     newChatBtn.addEventListener('click', async () => {
         const result = await promptNewThreadModal();
         if (result) {
@@ -1379,10 +1379,10 @@ function renderSidebar() {
         const newTabBtn = document.createElement('button');
         newTabBtn.className = 'thread-new-tab-btn';
         newTabBtn.id = 'new-tab-btn';
-        newTabBtn.textContent = '📑 Onglet';
+        newTabBtn.innerHTML = '<span aria-hidden="true">📑</span> Onglet';
         newTabBtn.setAttribute('aria-label', 'Nouvel onglet');
         newTabBtn.setAttribute('aria-keyshortcuts', 'Alt+O');
-        newTabBtn.title = 'Alt+O';
+        newTabBtn.title = 'Nouvel onglet';
         newTabBtn.addEventListener('click', async () => {
             const name = await promptModal("Nom de l'onglet");
             if (!name) return;
@@ -1413,19 +1413,16 @@ function renderSidebar() {
     roots.forEach(t => {
         const div = document.createElement('div');
         div.className = 'thread-item' + (t.thread_id === currentThreadId ? ' active' : '');
-        div.setAttribute('role', 'button');
-        div.setAttribute('tabindex', '0');
-        div.setAttribute('aria-label', (t.name || 'Fil') + (t.thread_id === currentThreadId ? ' (fil actif)' : ''));
         const _ouvrir = () => { if (isMobile()) closeSidebar(); selectThread(t.thread_id); };
-        div.addEventListener('click', (e) => {
-            if (e.target.closest('.thread-menu-btn, .thread-dropdown')) return; // pas depuis le menu
-            _ouvrir();
-        });
-        div.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _ouvrir(); } });
 
         const name = document.createElement('span');
         name.className   = 'thread-name';
+        name.setAttribute('role', 'button');
+        name.setAttribute('tabindex', '0');
+        name.setAttribute('aria-label', (t.name || 'Fil') + (t.thread_id === currentThreadId ? ' (fil actif)' : ''));
         name.textContent = t.name;
+        name.addEventListener('click', _ouvrir);
+        name.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _ouvrir(); } });
 
         // Badge onglets (desktop) ou liste puce (mobile)
         const childTabs = threads.filter(x => x.mode === `tab:${t.thread_id}`);
@@ -1452,7 +1449,7 @@ function renderSidebar() {
         menuBtn.className = 'thread-menu-btn';
         menuBtn.textContent = '...';
         menuBtn.title = 'Options';
-        menuBtn.setAttribute('aria-label', 'Options du fil');
+        menuBtn.setAttribute('aria-label', 'Options : ' + (t.name || 'fil'));
         menuBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             document.querySelectorAll('.thread-dropdown.open').forEach(d => d.classList.remove('open'));
@@ -5373,7 +5370,7 @@ document.getElementById('presence-slider')?.addEventListener('input', (e) => {
 (function setupAutoTTSToggle() {
     const btn = document.createElement('button');
     btn.id        = 'autotts-toggle';
-    btn.title     = 'Alt+L';
+    btn.title     = 'Lecture automatique';
     btn.setAttribute('aria-label', 'Lecture automatique');
     btn.setAttribute('aria-keyshortcuts', 'Alt+L');
     btn.setAttribute('aria-pressed', _autoTTS ? 'true' : 'false');
@@ -5814,9 +5811,9 @@ async function _loadGhostMode(threadId) {
 (function setupGhostToggle() {
     const btn = document.createElement('button');
     btn.id        = 'ghost-toggle';
-    btn.title     = 'Alt+F';
+    btn.title     = 'Mode fantôme';
     btn.className = 'topbar-icon-btn';
-    btn.textContent = '👻';
+    btn.innerHTML = '<span aria-hidden="true">👻</span>';
     btn.setAttribute('aria-label', 'Mode fantôme');
     btn.setAttribute('aria-keyshortcuts', 'Alt+F');
     btn.setAttribute('aria-pressed', 'false');
