@@ -28,7 +28,7 @@
 
     <!-- BARRE SUPÉRIEURE -->
     <header id="top-bar"><h2 class="sr-only">Barre d'outils</h2>
-        <button id="toggle-history" title="Conversations" aria-label="Conversations">
+        <button id="toggle-history" title="Fils" aria-label="Fils">
             <svg viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
                 <line x1="0" y1="2" x2="20" y2="2"/>
                 <line x1="0" y1="8" x2="20" y2="8"/>
@@ -97,12 +97,12 @@
 
         <div id="sidebar-backdrop"></div>
         <!-- PANNEAU HISTORIQUE -->
-        <aside id="history-panel"><h2 class="sr-only">Liste des conversations</h2>
+        <aside id="history-panel"><h2 class="sr-only">Liste des fils</h2>
             <div id="thread-list"></div>
         </aside>
 
         <!-- ZONE CHAT -->
-        <main id="chat-area"><h2 class="sr-only">Conversation</h2>
+        <main id="chat-area"><h2 class="sr-only">Fil courant</h2>
             <div id="messages-wrap">
                 <!-- Bandeau résumé à la demande -->
                 <div id="summary-banner" hidden
@@ -329,7 +329,7 @@
 
                 <span class="routing-label">🧠 Mémoire (extraction)</span>
                 <select id="routing-memory" class="routing-select" aria-label="Provider pour l'extraction mémoire en arrière-plan">
-                    <option value="same">↩ Même que le chat</option>
+                    <option value="same">↩ Même que le fil</option>
                     <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                     <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                     <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -342,7 +342,7 @@
 
                 <span class="routing-label">🏷️ Titre des conversations</span>
                 <select id="routing-titre" class="routing-select" aria-label="Provider pour la génération du titre des conversations">
-                    <option value="same">↩ Même que le chat</option>
+                    <option value="same">↩ Même que le fil</option>
                     <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                     <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                     <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -355,7 +355,7 @@
 
                 <span class="routing-label">📄 Synthèse</span>
                 <select id="routing-synthese" class="routing-select" aria-label="Provider pour la génération de synthèse">
-                    <option value="same">↩ Même que le chat</option>
+                    <option value="same">↩ Même que le fil</option>
                     <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                     <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                     <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -368,7 +368,7 @@
 
                 <span class="routing-label">🐸 CoaNIMM (génération de code)</span>
                 <select id="routing-coanimm" class="routing-select" aria-label="Provider pour CoaNIMM">
-                    <option value="same">↩ Même que le chat</option>
+                    <option value="same">↩ Même que le fil</option>
                     <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                     <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                     <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -1357,7 +1357,7 @@ Analyse les sentiments de : ..."
 
             <span class="routing-label">🧠 Mémoire</span>
             <select id="new-thread-routing-memory" class="routing-select" aria-label="Provider pour l'extraction mémoire de ce fil">
-                <option value="same">↩ Même que le chat</option>
+                <option value="same">↩ Même que le fil</option>
                 <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -1369,7 +1369,7 @@ Analyse les sentiments de : ..."
 
             <span class="routing-label">🏷️ Titre</span>
             <select id="new-thread-routing-titre" class="routing-select" aria-label="Provider pour le titre de ce fil">
-                <option value="same">↩ Même que le chat</option>
+                <option value="same">↩ Même que le fil</option>
                 <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -1381,7 +1381,7 @@ Analyse les sentiments de : ..."
 
             <span class="routing-label">📄 Synthèse</span>
             <select id="new-thread-routing-synthese" class="routing-select" aria-label="Provider pour la synthèse de ce fil">
-                <option value="same">↩ Même que le chat</option>
+                <option value="same">↩ Même que le fil</option>
                 <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -1409,7 +1409,7 @@ Analyse les sentiments de : ..."
 
             <span class="routing-label">🖼️ Vision</span>
             <select id="new-thread-routing-vision" class="routing-select" aria-label="Provider vision pour ce fil">
-                <option value="same">↩ Même que le chat</option>
+                <option value="same">↩ Même que le fil</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
                 <option value="gemini"     data-needs-key="gemini">🟡 Gemini</option>
@@ -1419,7 +1419,7 @@ Analyse les sentiments de : ..."
 
             <span class="routing-label">🖼️ Image</span>
             <select id="new-thread-routing-image" class="routing-select" aria-label="Provider image pour ce fil">
-                <option value="same">↩ Même que le chat</option>
+                <option value="same">↩ Même que le fil</option>
                 <option value="gemini"     data-needs-key="gemini">🟡 Gemini (Imagen)</option>
                 <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI (DALL–E)</option>
@@ -1428,7 +1428,7 @@ Analyse les sentiments de : ..."
 
             <span class="routing-label">🤖 CoaNIMM</span>
             <select id="new-thread-routing-coanimm" class="routing-select" aria-label="Provider CoaNIMM pour ce fil">
-                <option value="same">↩ Même que le chat</option>
+                <option value="same">↩ Même que le fil</option>
                 <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -1439,7 +1439,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;">
-                Ces paramètres s'appliquent globalement. “Même que le chat” conserve le réglage par défaut.
+                Ces paramètres s'appliquent globalement. “↙ Même que le fil” conserve le réglage par défaut.
             </div>
         </div>
         </details>

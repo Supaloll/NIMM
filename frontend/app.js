@@ -1415,7 +1415,7 @@ function renderSidebar() {
         div.className = 'thread-item' + (t.thread_id === currentThreadId ? ' active' : '');
         div.setAttribute('role', 'button');
         div.setAttribute('tabindex', '0');
-        div.setAttribute('aria-label', (t.name || 'Conversation') + (t.thread_id === currentThreadId ? ', conversation active' : ''));
+        div.setAttribute('aria-label', (t.name || 'Fil') + (t.thread_id === currentThreadId ? ', fil actif' : ''));
         const _ouvrir = () => { if (isMobile()) closeSidebar(); selectThread(t.thread_id); };
         div.addEventListener('click', (e) => {
             if (e.target.closest('.thread-menu-btn, .thread-dropdown')) return; // pas depuis le menu
@@ -5796,10 +5796,10 @@ async function _loadGhostMode(threadId) {
 (function setupGhostToggle() {
     const btn = document.createElement('button');
     btn.id        = 'ghost-toggle';
-    btn.title     = 'Mode fantôme — mémoire et carnet de bord désactivés pour ce fil (aucune trace)';
+    btn.title     = 'Mode fantôme';
     btn.className = 'topbar-icon-btn';
     btn.textContent = '👻';
-    btn.setAttribute('aria-label', 'Mode fantôme (mémoire et carnet désactivés pour ce fil)');
+    btn.setAttribute('aria-label', 'Mode fantôme');
     btn.setAttribute('aria-pressed', 'false');
     btn.addEventListener('click', async () => {
         if (!currentThreadId) return;
@@ -10037,7 +10037,7 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
 // ══════════════════════════════════════════
 (function () {
     var SHORTCUTS = {
-        'c': 'toggle-history',    // Conversations
+        'c': 'toggle-history',    // Fils
         'a': 'toggle-agenda',     // Agenda
         'm': 'toggle-memory',     // Mémoire
         'g': 'toggle-galerie',    // Galerie d'images
