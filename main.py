@@ -1263,7 +1263,7 @@ class CoanimmGenerateImageRequest(BaseModel):
 
 
 @app.post("/api/coanimm/mistral_code_interpreter")
-async def coanimm_mistral_code_interpreter(req: CoanimmGenerateCodeRequest):
+async def coanimm_mistral_code_interpreter(req: CoanimmGenerateRequest):
     """
     Mode cloud : envoie la consigne a Mistral avec l'outil code_interpreter.
     Retourne le code genere, la sortie d'execution et les fichiers produits.
