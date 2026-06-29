@@ -4291,24 +4291,20 @@ async function loadSettingsIntoUI() {
         // Surveiller l'état embeddings si activé
         _watchEmbeddingsStatus();
 
-        // Options Gemini TTS (modèle + style)
+        // Options Gemini TTS (modèle + style + voix par défaut)
         try {
-            const [gtm, gts] = await Promise.all([
+            const [gtm, gts, gtdv] = await Promise.all([
                 fetch('/api/settings/gemini-tts-model').then(r => r.json()),
                 fetch('/api/settings/gemini-tts-style').then(r => r.json()),
+                fetch('/api/settings/gemini-tts-default-voice').then(r => r.json()),
             ]);
             const modelSel = document.getElementById('gemini-tts-model-select');
             if (modelSel && gtm.model) modelSel.value = gtm.model;
             const styleInp = document.getElementById('gemini-tts-style');
             if (styleInp) styleInp.value = gts.style || '';
+            const dvSel = document.getElementById('gemini-tts-default-voice');
+            if (dvSel && gtdv.voice) dvSel.value = gtdv.voice;
             _updateGeminiTtsVisibility(!!keys.gemini);
-            // Voix Gemini par défaut si clé présente et aucune voix jamais choisie
-            if (keys.gemini && !localStorage.getItem('nimm-voice')) {
-                _selectedVoice = 'gemini:Kore';
-                localStorage.setItem('nimm-voice', _selectedVoice);
-                const voiceSel = document.getElementById('voice-select');
-                if (voiceSel) voiceSel.value = _selectedVoice;
-            }
         } catch(e) {}
 
     } catch(e) {
@@ -4456,6 +4452,16 @@ document.getElementById('gemini-tts-model-select')?.addEventListener('change', a
             body: JSON.stringify({ model: e.target.value })
         });
     } catch(err) { console.error('[TTS] Erreur sauvegarde modèle Gemini :', err); }
+});
+
+// Gestion de la voix Gemini par défaut
+document.getElementById('gemini-tts-default-voice')?.addEventListener('change', async (e) => {
+    try {
+        await fetch('/api/settings/gemini-tts-default-voice', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ voice: e.target.value })
+        });
+    } catch(err) { console.error('[TTS] Erreur sauvegarde voix Gemini par défaut :', err); }
 });
 
 // Gestion du champ de style Gemini TTS (sauvegarde au blur)
