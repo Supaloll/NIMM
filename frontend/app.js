@@ -1361,8 +1361,11 @@ function renderSidebar() {
 
     const newChatBtn = document.createElement('button');
     newChatBtn.className = 'thread-new-chat-btn';
-    newChatBtn.textContent = '💬 Nouveau chat';
-    newChatBtn.setAttribute('aria-label', 'Nouveau chat');
+    newChatBtn.id = 'new-thread-btn';
+    newChatBtn.textContent = '💬 Nouveau fil';
+    newChatBtn.setAttribute('aria-label', 'Nouveau fil');
+    newChatBtn.setAttribute('aria-keyshortcuts', 'Alt+N');
+    newChatBtn.title = 'Nouveau fil (Alt+N)';
     newChatBtn.addEventListener('click', async () => {
         const result = await promptNewThreadModal();
         if (result) {
@@ -1375,8 +1378,11 @@ function renderSidebar() {
     if (currentThreadId) {
         const newTabBtn = document.createElement('button');
         newTabBtn.className = 'thread-new-tab-btn';
+        newTabBtn.id = 'new-tab-btn';
         newTabBtn.textContent = '📑 Onglet';
         newTabBtn.setAttribute('aria-label', 'Nouvel onglet');
+        newTabBtn.setAttribute('aria-keyshortcuts', 'Alt+O');
+        newTabBtn.title = 'Nouvel onglet (Alt+O)';
         newTabBtn.addEventListener('click', async () => {
             const name = await promptModal("Nom de l'onglet");
             if (!name) return;
@@ -1565,10 +1571,22 @@ function renderSidebar() {
             }
         });
 
+        // Paramètres du fil
+        const paramItem = document.createElement('button');
+        paramItem.className = 'thread-dropdown-item';
+        paramItem.setAttribute('role', 'menuitem');
+        paramItem.textContent = '⚙️ Paramètres du fil';
+        paramItem.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            dropdown.classList.remove('open');
+            await promptThreadParamsModal();
+        });
+
         dropdown.appendChild(renItem);
         dropdown.appendChild(expItem);
         dropdown.appendChild(pinItem);
         dropdown.appendChild(tagItem);
+        dropdown.appendChild(paramItem);
         dropdown.appendChild(delItem);
 
         div.appendChild(name);
@@ -1684,10 +1702,28 @@ async function promptNewThreadModal() {
     const memSel        = document.getElementById('new-thread-routing-memory');
     const titreSel      = document.getElementById('new-thread-routing-titre');
     const syntheseSel   = document.getElementById('new-thread-routing-synthese');
+    const visionSel    = document.getElementById('new-thread-routing-vision');
+    const imageSel     = document.getElementById('new-thread-routing-image');
+    const coanimSel    = document.getElementById('new-thread-routing-coanimm');
+    const ttsSel       = document.getElementById('new-thread-tts-voice');
     const providerVal   = routing.chat || prov.provider || 'mistral';
     const memVal0       = routing.memoire?.provider  || 'same';
     const titreVal0     = routing.titre?.provider    || 'same';
     const syntheseVal0  = routing.synthese?.provider || 'same';
+    const visionVal0   = routing.vision?.provider  || 'same';
+    const imageVal0    = routing.image?.provider   || 'same';
+    const coanimVal0   = routing.coanimm?.provider || 'same';
+    // Charger les voix TTS dans le sélecteur
+    const currentVoice = localStorage.getItem('nimm-voice') || '';
+    fetch('/api/tts/voices').then(r=>r.json()).then(voices => {
+        if (!ttsSel) return;
+        const list = voices.voices || voices;
+        ttsSel.innerHTML = '<option value="">↩ Voix par défaut</option>' +
+            list.map(v => `<option value="${v.id}"${v.id===currentVoice?' selected':''}>${v.label}</option>`).join('');
+    }).catch(() => { if (ttsSel) ttsSel.innerHTML = '<option value="">↩ Voix par défaut</option>'; });
+    if (visionSel) visionSel.value = visionVal0;
+    if (imageSel)  imageSel.value  = imageVal0;
+    if (coanimSel) coanimSel.value = coanimVal0;
 
     providerSel.value = providerVal;
     memSel.value      = memVal0;
@@ -1758,10 +1794,106 @@ async function promptNewThreadModal() {
             if (syntheseSel.value !== syntheseVal0) {
                 await _saveRouting('synthese', syntheseSel.value === 'same' ? {} : { provider: syntheseSel.value });
             }
+            if (visionSel && visionSel.value !== visionVal0) {
+                await _saveRouting('vision', visionSel.value === 'same' ? {} : { provider: visionSel.value });
+            }
+            if (imageSel && imageSel.value !== imageVal0) {
+                await _saveRouting('image', imageSel.value === 'same' ? {} : { provider: imageSel.value });
+            }
+            if (coanimSel && coanimSel.value !== coanimVal0) {
+                await _saveRouting('coanimm', coanimSel.value === 'same' ? {} : { provider: coanimSel.value });
+            }
+            if (ttsSel && ttsSel.value && ttsSel.value !== currentVoice) {
+                localStorage.setItem('nimm-voice', ttsSel.value);
+                _selectedVoice = ttsSel.value;
+            }
 
             cleanup({ maskId, mode: selectedMode });
         };
         cancelBtn.onclick = () => cleanup(null);
+    });
+}
+
+// ======================================================
+// MODAL PARAMÈTRES DU FIL (modifier routage sur fil existant)
+// ======================================================
+async function promptThreadParamsModal() {
+    const [routing, prov] = await Promise.all([
+        fetch('/api/settings/routing').then(r => r.json()).catch(() => ({})),
+        fetch('/api/settings/provider').then(r => r.json()).catch(() => ({})),
+    ]);
+    const providerSel = document.getElementById('new-thread-provider-select');
+    const memSel      = document.getElementById('new-thread-routing-memory');
+    const titreSel    = document.getElementById('new-thread-routing-titre');
+    const syntheseSel = document.getElementById('new-thread-routing-synthese');
+    const visionSel   = document.getElementById('new-thread-routing-vision');
+    const imageSel    = document.getElementById('new-thread-routing-image');
+    const coanimSel   = document.getElementById('new-thread-routing-coanimm');
+    const ttsSel      = document.getElementById('new-thread-tts-voice');
+    const providerVal = routing.chat   || prov.provider || 'mistral';
+    const memVal0     = routing.memoire?.provider  || 'same';
+    const titreVal0   = routing.titre?.provider    || 'same';
+    const syntheseVal0= routing.synthese?.provider || 'same';
+    const visionVal0  = routing.vision?.provider   || 'same';
+    const imageVal0   = routing.image?.provider    || 'same';
+    const coanimVal0  = routing.coanimm?.provider  || 'same';
+    if (providerSel)  providerSel.value  = providerVal;
+    if (memSel)       memSel.value        = memVal0;
+    if (titreSel)     titreSel.value      = titreVal0;
+    if (syntheseSel)  syntheseSel.value   = syntheseVal0;
+    if (visionSel)    visionSel.value     = visionVal0;
+    if (imageSel)     imageSel.value      = imageVal0;
+    if (coanimSel)    coanimSel.value     = coanimVal0;
+    const currentVoice = localStorage.getItem('nimm-voice') || '';
+    fetch('/api/tts/voices').then(r=>r.json()).then(voices => {
+        if (!ttsSel) return;
+        const list = voices.voices || voices;
+        ttsSel.innerHTML = '<option value="">→ Voix par défaut</option>' +
+            list.map(v => `<option value="${v.id}"${v.id===currentVoice?' selected':''}>${v.label}</option>`).join('');
+    }).catch(() => {});
+
+    // Adapter le titre et masquer les lignes mode/masque
+    const modal     = document.getElementById('new-thread-modal');
+    const origTitle = modal.querySelector('h2, .modal-title, h3');
+    const modeRows  = modal.querySelectorAll('.new-thread-mode-row, #new-thread-mask-row, .new-thread-modes, [data-hide-in-params]');
+    const savedTitle = origTitle?.textContent || '';
+    if (origTitle) origTitle.textContent = '⚙️ Paramètres du fil';
+    modeRows.forEach(r => { r._savedDisplay = r.style.display; r.style.display = 'none'; });
+
+    const okBtn     = document.getElementById('new-thread-ok');
+    const cancelBtn = document.getElementById('new-thread-cancel');
+    const savedOkText = okBtn.textContent;
+    okBtn.textContent = 'Appliquer';
+
+    // Déplier toutes les sections
+    modal.querySelectorAll('details.settings-section-details').forEach(d => d.open = true);
+
+    return new Promise(resolve => {
+        const cleanup = () => {
+            modal.classList.add('hidden');
+            if (origTitle) origTitle.textContent = savedTitle;
+            modeRows.forEach(r => { r.style.display = r._savedDisplay !== undefined ? r._savedDisplay : ''; });
+            okBtn.textContent = savedOkText;
+            modal.querySelectorAll('details.settings-section-details').forEach(d => d.open = false);
+            resolve();
+        };
+        modal.classList.remove('hidden');
+        setTimeout(() => { (providerSel || modal.querySelector('select'))?.focus(); }, 50);
+        okBtn.onclick = async () => {
+            if (providerSel && providerSel.value !== providerVal) await _saveRouting('chat', providerSel.value);
+            if (memSel      && memSel.value !== memVal0)          await _saveRouting('memoire',  memSel.value === 'same' ? {} : { provider: memSel.value });
+            if (titreSel    && titreSel.value !== titreVal0)      await _saveRouting('titre',    titreSel.value === 'same' ? {} : { provider: titreSel.value });
+            if (syntheseSel && syntheseSel.value !== syntheseVal0)await _saveRouting('synthese', syntheseSel.value === 'same' ? {} : { provider: syntheseSel.value });
+            if (visionSel   && visionSel.value !== visionVal0)    await _saveRouting('vision',   visionSel.value === 'same' ? {} : { provider: visionSel.value });
+            if (imageSel    && imageSel.value !== imageVal0)      await _saveRouting('image',    imageSel.value === 'same' ? {} : { provider: imageSel.value });
+            if (coanimSel   && coanimSel.value !== coanimVal0)    await _saveRouting('coanimm',  coanimSel.value === 'same' ? {} : { provider: coanimSel.value });
+            if (ttsSel      && ttsSel.value && ttsSel.value !== currentVoice) {
+                localStorage.setItem('nimm-voice', ttsSel.value);
+                _selectedVoice = ttsSel.value;
+            }
+            cleanup();
+        };
+        cancelBtn.onclick = cleanup;
     });
 }
 
@@ -3942,6 +4074,11 @@ document.addEventListener('keydown', (e) => {
             case 'n': {   // Alt+N : nouveau fil
                 e.preventDefault();
                 document.getElementById('new-thread-btn')?.click();
+                break;
+            }
+            case 'o': {   // Alt+O : nouvel onglet
+                e.preventDefault();
+                document.getElementById('new-tab-btn')?.click();
                 break;
             }
         }
