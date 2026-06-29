@@ -4071,6 +4071,11 @@ function _updateGeminiTtsVisibility(hasGeminiKey) {
 }
 
 // ── Grisage options routing selon clés configurées ──
+function _updatePixtralModelVisibility(visionProvider) {
+    const row = document.getElementById('pixtral-model-row');
+    if (row) row.style.display = visionProvider === 'mistral' ? '' : 'none';
+}
+
 function _applyProviderConstraints(keys) {
     // 1. Désactiver les options sans clé
     document.querySelectorAll('.routing-select option[data-needs-key]').forEach(opt => {
@@ -4202,6 +4207,12 @@ async function loadSettingsIntoUI() {
         // Mettre à jour les sélecteurs de routing
         const visionSel = document.getElementById('routing-vision');
         if (visionSel && routing.vision) visionSel.value = routing.vision;
+        _updatePixtralModelVisibility(routing.vision || '');
+        try {
+            const _pm = await fetch('/api/settings/pixtral-model').then(r => r.json());
+            const pmSel = document.getElementById('pixtral-model-select');
+            if (pmSel && _pm.model) pmSel.value = _pm.model;
+        } catch(e) {}
 
         const imageSel = document.getElementById('routing-image');
         if (imageSel && routing.image) imageSel.value = routing.image;
@@ -4632,7 +4643,17 @@ document.getElementById('model-select')?.addEventListener('change', async (e) =>
 
 document.getElementById('routing-vision')?.addEventListener('change', async (e) => {
     await _saveRouting('vision', e.target.value);
+    _updatePixtralModelVisibility(e.target.value);
     _autoSaveFlash(e.target);
+});
+
+document.getElementById('pixtral-model-select')?.addEventListener('change', async (e) => {
+    try {
+        await fetch('/api/settings/pixtral-model', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: e.target.value })
+        });
+    } catch(err) { console.error('[Vision] Erreur sauvegarde modèle Pixtral :', err); }
 });
 
 document.getElementById('routing-image')?.addEventListener('change', async (e) => {
@@ -10312,3 +10333,113 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
 
 setupSettingsTabs();
 init();
+
+// ══════════════════════════════════════════
+// MISTRAL BATCH
+// ══════════════════════════════════════════
+(function () {
+    var _batchJobId = null;
+
+    function _batchSetStatus(msg) {
+        var el = document.getElementById('batch-status-out');
+        if (el) el.textContent = msg;
+    }
+    function _batchSetJobId(id) {
+        _batchJobId = id;
+        var el = document.getElementById('batch-job-id');
+        if (el) el.textContent = id ? 'Job ID : ' + id : '';
+        var s = document.getElementById('batch-status-btn');
+        var r = document.getElementById('batch-results-btn');
+        var c = document.getElementById('batch-cancel-btn');
+        if (s) s.disabled = !id;
+        if (r) r.disabled = !id;
+        if (c) c.disabled = !id;
+    }
+
+    document.getElementById('batch-submit-btn')?.addEventListener('click', async function () {
+        var raw = (document.getElementById('batch-prompts')?.value || '').trim();
+        if (!raw) { _batchSetStatus('Entrez au moins une requête.'); return; }
+        var prompts = raw.split('\n').map(l => l.trim()).filter(Boolean);
+        var model   = document.getElementById('batch-model-select')?.value || 'mistral-small-latest';
+        var maxTok  = parseInt(document.getElementById('batch-max-tokens')?.value || '1024', 10);
+        _batchSetStatus('Envoi du lot… (' + prompts.length + ' requêtes)');
+        try {
+            var resp = await fetch('/api/mistral/batch/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompts, model, max_tokens: maxTok })
+            });
+            if (!resp.ok) throw new Error(await resp.text());
+            var data = await resp.json();
+            _batchSetJobId(data.job_id);
+            _batchSetStatus('Lot soumis. Statut : ' + (data.status || '?'));
+        } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('batch-status-btn')?.addEventListener('click', async function () {
+        if (!_batchJobId) return;
+        _batchSetStatus('Vérification…');
+        try {
+            var resp = await fetch('/api/mistral/batch/status/' + _batchJobId);
+            if (!resp.ok) throw new Error(await resp.text());
+            var d = await resp.json();
+            _batchSetStatus('Statut : ' + d.status +
+                (d.total_requests ? ' | ' + (d.succeeded_requests || 0) + '/' + d.total_requests + ' OK' : ''));
+        } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('batch-results-btn')?.addEventListener('click', async function () {
+        if (!_batchJobId) return;
+        _batchSetStatus('Récupération des résultats…');
+        var out = document.getElementById('batch-results-out');
+        try {
+            var resp = await fetch('/api/mistral/batch/results/' + _batchJobId);
+            if (!resp.ok) throw new Error(await resp.text());
+            var d = await resp.json();
+            if (d.status !== 'SUCCESS') {
+                _batchSetStatus('Pas encore terminé (statut : ' + d.status + ').');
+                return;
+            }
+            _batchSetStatus(d.results.length + ' résultat(s) reçu(s).');
+            if (out) {
+                out.innerHTML = '';
+                d.results.forEach(function (r, i) {
+                    var wrap = document.createElement('details');
+                    wrap.style.cssText = 'margin-top:6px;border:1px solid var(--border);border-radius:4px;padding:4px 8px;';
+                    var sum = document.createElement('summary');
+                    sum.textContent = 'Résultat ' + (i + 1) + (r.error ? ' ⚠️ erreur' : '');
+                    sum.style.cursor = 'pointer';
+                    var pre = document.createElement('pre');
+                    pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;font-size:0.82rem;margin:6px 0 0;';
+                    pre.textContent = r.error ? '[Erreur] ' + JSON.stringify(r.error) : (r.text || '(vide)');
+                    var copyBtn = document.createElement('button');
+                    copyBtn.textContent = 'Copier';
+                    copyBtn.className = 'btn-secondary';
+                    copyBtn.style.cssText = 'font-size:0.75rem;margin-top:4px;';
+                    copyBtn.setAttribute('aria-label', 'Copier le résultat ' + (i + 1));
+                    copyBtn.addEventListener('click', function () {
+                        navigator.clipboard.writeText(pre.textContent).then(function () {
+                            copyBtn.textContent = 'Copié !';
+                            setTimeout(function () { copyBtn.textContent = 'Copier'; }, 1500);
+                        });
+                    });
+                    wrap.appendChild(sum);
+                    wrap.appendChild(pre);
+                    wrap.appendChild(copyBtn);
+                    out.appendChild(wrap);
+                });
+            }
+        } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('batch-cancel-btn')?.addEventListener('click', async function () {
+        if (!_batchJobId) return;
+        if (!confirm('Annuler ce job batch ?')) return;
+        try {
+            var resp = await fetch('/api/mistral/batch/' + _batchJobId, { method: 'DELETE' });
+            if (!resp.ok) throw new Error(await resp.text());
+            _batchSetStatus('Job annulé.');
+            _batchSetJobId(null);
+        } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
+    });
+})();
