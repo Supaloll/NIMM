@@ -4489,9 +4489,12 @@ const MODELS_BY_PROVIDER = {
         { value: 'gemini-3.1-pro-preview',    label: '💰💰💰 Gemini 3.1 Pro — le plus puissant' },
     ],
     mistral: [
-        { value: 'mistral-small-latest',   label: '💰 Mistral Small — leger, economique' },
-        { value: 'mistral-medium-latest',  label: '💰💰 Mistral Medium — equilibre' },
-        { value: 'mistral-large-latest',   label: '💰💰💰 Mistral Large — le plus puissant' },
+        { value: 'mistral-small-latest',        label: '💰 Mistral Small — léger, économique' },
+        { value: 'mistral-medium-latest',       label: '💰💰 Mistral Medium — équilibré' },
+        { value: 'mistral-large-latest',        label: '💰💰💰 Mistral Large — le plus puissant' },
+        { value: 'magistral-small-latest',      label: '🧠💰 Magistral Small — raisonnement rapide' },
+        { value: 'magistral-medium-latest',     label: '🧠💰💰 Magistral Medium — raisonnement approfondi' },
+        { value: 'mistral-small-creative-latest', label: '🎨💰 Mistral Small Creative — créatif' },
     ],
     openai: [
         { value: 'gpt-4o-mini',   label: '💰 GPT-4o Mini — rapide, economique' },
@@ -7391,27 +7394,41 @@ function setupUpload() {
     }
 
     // ── Traitement upload (commun bouton + drop) ──
+    const AUDIO_EXTS = ['mp3','wav','ogg','m4a','flac','webm','aac','oga','opus'];
     async function _processFile(file) {
         if (!file) return;
         btn.innerHTML = SVG_LOADING;
         btn.disabled = true;
         _buildChip(file);
 
+        const _ext = (file.name.split('.').pop() || '').toLowerCase();
+        const _isAudio = AUDIO_EXTS.includes(_ext);
+
         try {
             const fd = new FormData();
             fd.append('file', file);
-            const r    = await fetch('/api/upload', { method: 'POST', body: fd });
+            let _endpoint = '/api/upload';
+            if (_isAudio) {
+                fd.append('prompt', 'Transcris et analyse ce fichier audio. Fournis la transcription complete et un resume bref du contenu.');
+                _endpoint = '/api/mistral/audio_analyze';
+            }
+            const r    = await fetch(_endpoint, { method: 'POST', body: fd });
             const data = await r.json();
             if (data.text) {
-                _pendingFile = { text: data.text, name: file.name, b64: data.b64 || null, mime_type: data.mime_type || null };
+                const _label = _isAudio ? ('[Analyse audio Voxtral - ' + file.name + ']\n') : '';
+                _pendingFile = { text: _label + data.text, name: file.name, b64: data.b64 || null, mime_type: data.mime_type || null };
             } else {
                 _pendingFile       = null;
                 chip.style.display = 'none';
             }
         } catch(e) {
-            console.error('[NIMM] Erreur upload :', e);
-            _pendingFile       = null;
-            chip.style.display = 'none';
+            if (_isAudio) {
+                _pendingFile = { text: '[Fichier audio : ' + file.name + ' - analyse Voxtral indisponible]', name: file.name, b64: null, mime_type: null };
+            } else {
+                console.error('[NIMM] Erreur upload :', e);
+                _pendingFile       = null;
+                chip.style.display = 'none';
+            }
         } finally {
             btn.textContent = '+';
             btn.disabled    = false;
@@ -9956,6 +9973,68 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
     load();
 })();
 
+// ══════════════════════════════════════════
+// MODERATION MISTRAL
+// ══════════════════════════════════════════
+(function () {
+    var toggle   = document.getElementById('moderation-toggle');
+    var status   = document.getElementById('moderation-status');
+    var CATS     = ['sexual', 'hate', 'violence', 'jailbreak', 'selfharm', 'pii'];
+    var CAT_KEYS = {'sexual':'sexual','hate':'hate_and_discrimination','violence':'violence_and_threats','jailbreak':'jailbreak','selfharm':'self_harm','pii':'pii'};
+    if (!toggle) return;
+
+    function _getSliderValues() {
+        var cats = {};
+        CATS.forEach(function(c) {
+            var el = document.getElementById('mod-' + c);
+            if (el) cats[CAT_KEYS[c]] = parseFloat(el.value) / 100;
+        });
+        return cats;
+    }
+    function _setSliderValues(cats) {
+        CATS.forEach(function(c) {
+            var el = document.getElementById('mod-' + c);
+            var out = document.getElementById('mod-' + c + '-val');
+            var key = CAT_KEYS[c];
+            if (el && cats && cats[key] !== undefined) {
+                el.value = Math.round(cats[key] * 100);
+                if (out) out.textContent = cats[key].toFixed(2);
+            }
+        });
+    }
+    CATS.forEach(function(c) {
+        var el = document.getElementById('mod-' + c);
+        var out = document.getElementById('mod-' + c + '-val');
+        if (el && out) {
+            out.textContent = (parseFloat(el.value) / 100).toFixed(2);
+            el.addEventListener('input', function() { out.textContent = (parseFloat(el.value) / 100).toFixed(2); });
+            el.addEventListener('change', save);
+        }
+    });
+
+    async function load() {
+        try {
+            var d = await fetch('/api/settings/moderation').then(function(r){ return r.json(); });
+            toggle.checked = !!d.enabled;
+            _setSliderValues(d.categories || {});
+        } catch(e) {}
+    }
+    async function save() {
+        try {
+            await fetch('/api/settings/moderation', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ enabled: toggle.checked, categories: _getSliderValues() })
+            });
+            if (status) {
+                status.textContent = toggle.checked ? 'Filtre actif.' : '';
+            }
+        } catch(e) {}
+    }
+    toggle.addEventListener('change', save);
+    document.getElementById('toggle-settings')?.addEventListener('click', load);
+    load();
+})();
+
 // ── Genre de l'utilisateur (formulations genrées des relations) ──
 (function () {
     var sel = document.getElementById('user-genre-select');
@@ -10153,6 +10232,73 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
     });
     document.getElementById('toggle-settings')?.addEventListener('click', load);
     load();
+})();
+
+// ══════════════════════════════════════════
+// CODE INTERPRETER MISTRAL CLOUD (CoaNIMM)
+// ══════════════════════════════════════════
+(function () {
+    var btn    = document.getElementById('coanimm-cloud-ci-run');
+    var prompt = document.getElementById('coanimm-cloud-ci-prompt');
+    var status = document.getElementById('coanimm-cloud-ci-status');
+    var result = document.getElementById('coanimm-cloud-ci-result');
+    var codeEl = document.getElementById('coanimm-cloud-ci-code');
+    var outEl  = document.getElementById('coanimm-cloud-ci-output');
+    var filesEl = document.getElementById('coanimm-cloud-ci-files');
+    var inject  = document.getElementById('coanimm-cloud-ci-inject');
+    if (!btn) return;
+
+    var _lastResult = null;
+
+    btn.addEventListener('click', async function () {
+        var task = (prompt && prompt.value.trim()) || '';
+        if (!task) { if (status) status.textContent = 'Saisissez une consigne.'; return; }
+        btn.disabled = true;
+        if (status) status.textContent = 'Envoi a Mistral Code Interpreter...';
+        if (result) result.classList.add('hidden');
+        try {
+            var r = await fetch('/api/coanimm/mistral_code_interpreter', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ task: task, prompt: task })
+            });
+            var d = await r.json();
+            if (d.detail || d.error) throw new Error(d.detail || d.error);
+            _lastResult = d;
+            if (codeEl)  codeEl.value  = d.code   || '(aucun code retourne)';
+            if (outEl)   outEl.value   = d.output || d.text || '(aucune sortie)';
+            if (filesEl && d.files && d.files.length) {
+                filesEl.innerHTML = '<p style="font-size:0.82rem;font-weight:600;margin:0 0 4px;">Fichiers produits :</p>' +
+                    d.files.map(function(f) {
+                        if (f.url && f.url.startsWith('data:image')) {
+                            return '<img src="' + f.url + '" alt="Image produite" style="max-width:100%;border-radius:6px;margin-top:4px;">';
+                        }
+                        return '<a href="' + f.url + '" target="_blank" rel="noopener" style="font-size:0.82rem;">' + (f.name || 'fichier') + '</a>';
+                    }).join('<br>');
+            } else if (filesEl) {
+                filesEl.innerHTML = '';
+            }
+            if (result) result.classList.remove('hidden');
+            if (status) status.textContent = 'Execution terminee.';
+        } catch(e) {
+            if (status) status.textContent = 'Erreur : ' + (e.message || e);
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    if (inject) {
+        inject.addEventListener('click', function () {
+            if (!_lastResult) return;
+            var txt = '';
+            if (_lastResult.code)   txt += '```python\n' + _lastResult.code + '\n```\n\n';
+            if (_lastResult.output || _lastResult.text) txt += (_lastResult.output || _lastResult.text) + '\n';
+            var inp = document.getElementById('user-input');
+            if (inp) {
+                inp.value = (inp.value ? inp.value + '\n\n' : '') + txt.trim();
+                inp.focus();
+            }
+        });
+    }
 })();
 
 setupSettingsTabs();

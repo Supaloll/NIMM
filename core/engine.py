@@ -52,6 +52,7 @@ _MODEL_OWNER = {
     'claude': 'anthropic', 'deepseek': 'deepseek', 'gpt': 'openai',
     'o1': 'openai', 'o3': 'openai', 'o4': 'openai',
     'mistral': 'mistral', 'ministral': 'mistral', 'pixtral': 'mistral', 'codestral': 'mistral',
+    'magistral': 'mistral', 'voxtral': 'mistral', 'devstral': 'mistral',
     'gemini': 'gemini',
 }
 
@@ -1104,6 +1105,8 @@ async def generate_image(prompt: str, provider: str, api_keys: dict) -> dict:
 
     if provider == 'dall-e':
         return await _generate_dalle(prompt, api_keys)
+    elif provider == 'mistral':
+        return await _generate_mistral_image(prompt, api_keys)
     elif provider == 'stability-ai':
         return await _generate_stability(prompt, api_keys)
     elif provider == 'local':
@@ -1117,6 +1120,82 @@ async def generate_image(prompt: str, provider: str, api_keys: dict) -> dict:
             if api_keys.get('openai'):
                 return await _generate_dalle(prompt, api_keys)
             raise _gemini_err
+
+
+async def _generate_mistral_image(prompt: str, api_keys: dict) -> dict:
+    """
+    Generation d'image via l'API Agents Mistral (tool image_generation).
+    Retourne {'b64': str, 'provider': 'mistral'}.
+    """
+    import httpx as _hx, base64 as _b64, json as _j
+    _key = (api_keys.get('mistral') or '').strip()
+    if not _key:
+        raise ValueError("Cle API Mistral manquante pour la generation d'image.")
+
+    # 1. Creer un agent ephemere avec l'outil image_generation
+    async with _hx.AsyncClient(timeout=60) as _c:
+        _ar = await _c.post(
+            'https://api.mistral.ai/v1/beta/agents',
+            headers={'Authorization': f'Bearer {_key}', 'Content-Type': 'application/json'},
+            json={
+                'model': 'mistral-medium-latest',
+                'name': 'nimm-image-agent',
+                'description': 'Agent NIMM pour la generation d image',
+                'tools': [{'type': 'image_generation'}],
+                'instructions': 'Tu es un agent de generation d image. Genere toujours une image en reponse.'
+            }
+        )
+        _ar.raise_for_status()
+        _agent_id = _ar.json().get('id')
+        if not _agent_id:
+            raise ValueError(f"Erreur creation agent Mistral image: {_ar.text}")
+
+        # 2. Ouvrir une conversation et envoyer le prompt
+        _cr = await _c.post(
+            f'https://api.mistral.ai/v1/beta/conversations',
+            headers={'Authorization': f'Bearer {_key}', 'Content-Type': 'application/json'},
+            json={
+                'agent_id': _agent_id,
+                'inputs': prompt,
+                'stream': False
+            }
+        )
+        _cr.raise_for_status()
+        _conv = _cr.json()
+
+        # 3. Extraire les fichiers images de la reponse
+        _outputs = _conv.get('outputs', [])
+        _file_id = None
+        for _out in _outputs:
+            if _out.get('type') == 'image_url':
+                return {'url': _out.get('image_url', {}).get('url', ''), 'provider': 'mistral'}
+            if _out.get('type') == 'tool_result':
+                for _item in (_out.get('content') or []):
+                    if isinstance(_item, dict) and _item.get('type') == 'image_url':
+                        return {'url': _item.get('image_url', {}).get('url', ''), 'provider': 'mistral'}
+                    if isinstance(_item, dict) and _item.get('file_id'):
+                        _file_id = _item['file_id']
+
+        if not _file_id:
+            # chercher dans les messages
+            for _msg in (_conv.get('messages') or []):
+                for _item in (_msg.get('content') or []):
+                    if isinstance(_item, dict) and _item.get('type') == 'image_url':
+                        return {'url': _item.get('image_url', {}).get('url', ''), 'provider': 'mistral'}
+                    if isinstance(_item, dict) and _item.get('file_id'):
+                        _file_id = _item['file_id']
+
+        if not _file_id:
+            raise ValueError(f"Aucune image dans la reponse Mistral: {_j.dumps(_conv)[:300]}")
+
+        # 4. Telecharger le fichier
+        _fr = await _c.get(
+            f'https://api.mistral.ai/v1/files/{_file_id}/content',
+            headers={'Authorization': f'Bearer {_key}'}
+        )
+        _fr.raise_for_status()
+        _b64_str = _b64.b64encode(_fr.content).decode()
+        return {'b64': _b64_str, 'provider': 'mistral'}
 
 
 async def _generate_dalle(prompt: str, api_keys: dict) -> dict:
