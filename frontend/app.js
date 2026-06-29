@@ -1664,6 +1664,9 @@ async function selectThread(threadId) {
     await _loadGhostMode(threadId);
     await _loadAgentMode(threadId);
 
+    // Focus sur la zone de saisie après chargement du fil
+    document.getElementById('user-input')?.focus();
+
 }
 
 function _updateMaskIndicator(thread) {
