@@ -596,6 +596,12 @@ def init_db(user_id: str = None):
         print("[DB] Colonne tags (threads) ajoutée.")
     except Exception:
         pass  # Colonne déjà présente — normal au redémarrage
+    try:
+        c.execute("ALTER TABLE threads ADD COLUMN agent_mode TEXT DEFAULT ''")
+        conn.commit()
+        print("[DB] Colonne agent_mode (threads) ajoutée.")
+    except Exception:
+        pass
 
     # ── Messages ──
     c.execute('''
@@ -1409,6 +1415,20 @@ def update_thread_tags(thread_id: str, tags: str):
         'UPDATE threads SET tags = ? WHERE thread_id = ?',
         (tags or '', thread_id)
     )
+    conn.commit()
+    conn.close()
+
+def get_thread_agent_mode(thread_id: str) -> str:
+    """Retourne le mode agent du fil (vide, 'vibe', 'coanimm')."""
+    conn = get_conn()
+    row = conn.execute('SELECT agent_mode FROM threads WHERE thread_id = ?', (thread_id,)).fetchone()
+    conn.close()
+    return (row[0] or '') if row else ''
+
+def set_thread_agent_mode(thread_id: str, mode: str) -> None:
+    """Définit le mode agent du fil."""
+    conn = get_conn()
+    conn.execute('UPDATE threads SET agent_mode = ? WHERE thread_id = ?', (mode or '', thread_id))
     conn.commit()
     conn.close()
 
