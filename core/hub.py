@@ -253,6 +253,9 @@ def get_task_provider_model(task: str, settings: dict) -> tuple:
         return 'ollama', settings.get('model')
     routing = settings.get('provider_routing', {}) or {}
     entry = routing.get(task)
+    # Shortcut 'codestral' : alias Mistral avec modele force
+    if isinstance(entry, dict) and entry.get('provider') == 'codestral':
+        return 'mistral', 'codestral-latest'
     if isinstance(entry, dict) and entry.get('provider'):
         return entry['provider'], entry.get('model') or None
     return settings.get('provider', ''), settings.get('model')

@@ -52,7 +52,7 @@ _MODEL_OWNER = {
     'claude': 'anthropic', 'deepseek': 'deepseek', 'gpt': 'openai',
     'o1': 'openai', 'o3': 'openai', 'o4': 'openai',
     'mistral': 'mistral', 'ministral': 'mistral', 'pixtral': 'mistral', 'codestral': 'mistral',
-    'magistral': 'mistral', 'voxtral': 'mistral', 'devstral': 'mistral',
+    'magistral': 'mistral', 'voxtral': 'mistral', 'devstral': 'mistral', 'codestral': 'mistral',
     'gemini': 'gemini',
 }
 
