@@ -2378,8 +2378,9 @@ async def coanimm_describe_image(req: CoanimmDescribeImageReq):
         from core.hub import load_settings
         settings = load_settings(req.thread_id)
         vprov = settings.get("provider_routing", {}).get("vision", "gemini")
+        _pm = get_setting('pixtral_model', 'pixtral-12b-2409') if vprov == 'mistral' else None
         prompt = (req.prompt or "").strip() or "Décris cette image de façon précise et concise, comme un texte alternatif accessible, en français."
-        out = await call_vision(b64, media, prompt, vprov, settings.get("api_keys", {}))
+        out = await call_vision(b64, media, prompt, vprov, settings.get("api_keys", {}), vision_model=_pm)
     except Exception as e:
         return {"result": f"[Erreur description image : {e}]"}
     return {"result": (out or "")[:6000]}
@@ -2762,6 +2763,16 @@ async def get_gemini_tts_default_voice():
 async def set_gemini_tts_default_voice(req: dict):
     v = (req.get("voice") or "Kore").strip()
     set_setting("gemini_tts_default_voice", v)
+    return {"status": "ok"}
+
+@app.get("/api/settings/pixtral-model")
+async def get_pixtral_model():
+    return {"model": get_setting("pixtral_model", "pixtral-12b-2409")}
+
+@app.post("/api/settings/pixtral-model")
+async def set_pixtral_model(req: dict):
+    m = (req.get("model") or "pixtral-12b-2409").strip()
+    set_setting("pixtral_model", m)
     return {"status": "ok"}
 
 @app.get("/api/settings/gemini-tts-style")
@@ -4053,6 +4064,143 @@ async def mistral_ocr(file: UploadFile = File(...)):
 
     return {"text": _text[:8000], "name": file.filename, "method": "mistral_ocr"}
 
+# ── MISTRAL BATCH ───────────────────────────────────────────────────────────────────────────────
+
+class MistralBatchSubmitReq(BaseModel):
+    prompts: list
+    model: str = "mistral-small-latest"
+    max_tokens: int = 1024
+    temperature: float = 0.7
+
+@app.post("/api/mistral/batch/submit")
+async def mistral_batch_submit(req: MistralBatchSubmitReq):
+    """Soumet un lot de requêtes à l'API Mistral Batch (/v1/batch/jobs).
+    Chaque élément de `prompts` peut être une chaîne (user only) ou
+    un dict {system, user} pour contrôler le system prompt par requête.
+    Renvoie le job_id pour suivi.
+    """
+    import httpx, json as _json
+    from core.database import get_api_keys
+    api_key = (get_api_keys().get('mistral') or '').strip()
+    if not api_key:
+        raise HTTPException(400, "Clé Mistral non configurée")
+    lines = []
+    for i, p in enumerate(req.prompts):
+        if isinstance(p, str):
+            messages = [{"role": "user", "content": p}]
+        else:
+            messages = []
+            if p.get("system"):
+                messages.append({"role": "system", "content": p["system"]})
+            messages.append({"role": "user", "content": p.get("user", "")})
+        lines.append(_json.dumps({
+            "custom_id": f"req-{i}",
+            "body": {
+                "model": req.model,
+                "messages": messages,
+                "max_tokens": req.max_tokens,
+                "temperature": req.temperature,
+            }
+        }, ensure_ascii=False))
+    jsonl_content = ("\n".join(lines) + "\n").encode("utf-8")
+    async with httpx.AsyncClient(timeout=60) as client:
+        upload_r = await client.post(
+            "https://api.mistral.ai/v1/files",
+            headers={"Authorization": f"Bearer {api_key}"},
+            files={"file": ("batch.jsonl", jsonl_content, "application/octet-stream")},
+            data={"purpose": "batch"},
+        )
+        upload_r.raise_for_status()
+        file_id = upload_r.json()["id"]
+        job_r = await client.post(
+            "https://api.mistral.ai/v1/batch/jobs",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"input_files": [file_id], "model": req.model, "endpoint": "/v1/chat/completions"},
+        )
+        job_r.raise_for_status()
+        job = job_r.json()
+    return {"job_id": job["id"], "status": job.get("status"), "file_id": file_id}
+
+@app.get("/api/mistral/batch/status/{job_id}")
+async def mistral_batch_status(job_id: str):
+    """Statut d'un job batch Mistral."""
+    import httpx
+    from core.database import get_api_keys
+    api_key = (get_api_keys().get('mistral') or '').strip()
+    if not api_key:
+        raise HTTPException(400, "Clé Mistral non configurée")
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(
+            f"https://api.mistral.ai/v1/batch/jobs/{job_id}",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        r.raise_for_status()
+    data = r.json()
+    return {
+        "job_id": job_id,
+        "status": data.get("status"),
+        "total_requests": data.get("total_requests"),
+        "succeeded_requests": data.get("succeeded_requests"),
+        "failed_requests": data.get("failed_requests"),
+        "output_file": (data.get("output_files") or [None])[0],
+        "error_file": (data.get("error_files") or [None])[0],
+    }
+
+@app.get("/api/mistral/batch/results/{job_id}")
+async def mistral_batch_results(job_id: str):
+    """Récupère les résultats d'un job batch terminé."""
+    import httpx, json as _json
+    from core.database import get_api_keys
+    api_key = (get_api_keys().get('mistral') or '').strip()
+    if not api_key:
+        raise HTTPException(400, "Clé Mistral non configurée")
+    async with httpx.AsyncClient(timeout=60) as client:
+        status_r = await client.get(
+            f"https://api.mistral.ai/v1/batch/jobs/{job_id}",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        status_r.raise_for_status()
+        job = status_r.json()
+        if job.get("status") != "SUCCESS":
+            return {"status": job.get("status"), "results": []}
+        output_files = job.get("output_files") or []
+        if not output_files:
+            return {"status": "SUCCESS", "results": []}
+        dl = await client.get(
+            f"https://api.mistral.ai/v1/files/{output_files[0]}/content",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        dl.raise_for_status()
+    results = []
+    for line in dl.text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = _json.loads(line)
+            text = (obj.get("response", {}).get("body", {}).get("choices") or [{}])[0].get("message", {}).get("content", "")
+            results.append({"custom_id": obj.get("custom_id", ""), "text": text, "error": obj.get("error")})
+        except Exception:
+            pass
+    results.sort(key=lambda x: x["custom_id"])
+    return {"status": "SUCCESS", "results": results}
+
+@app.delete("/api/mistral/batch/{job_id}")
+async def mistral_batch_cancel(job_id: str):
+    """Annule un job batch en attente."""
+    import httpx
+    from core.database import get_api_keys
+    api_key = (get_api_keys().get('mistral') or '').strip()
+    if not api_key:
+        raise HTTPException(400, "Clé Mistral non configurée")
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.delete(
+            f"https://api.mistral.ai/v1/batch/jobs/{job_id}/cancel",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        r.raise_for_status()
+    return {"status": "cancelled"}
+
 @app.post("/api/mistral/audio_analyze")
 async def mistral_audio_analyze(file: UploadFile = File(...), prompt: str = Form(default="")):
     """
@@ -4126,12 +4274,14 @@ async def upload_file(file: UploadFile = File(...)):
         b64 = base64.b64encode(data).decode()
         mt  = file.content_type or 'image/jpeg'
         vision_provider = _load_provider_routing().get('vision', 'gemini')
+        _pixtral_model = get_setting('pixtral_model', 'pixtral-12b-2409') if vision_provider == 'mistral' else None
         try:
             desc = await call_vision(
                 b64, mt,
                 "Décris précisément le contenu de cette image en français.",
                 vision_provider,
-                api_keys
+                api_keys,
+                vision_model=_pixtral_model
             )
             # b64 conservé pour permettre la retouche via Gemini
             return {"type": "image", "text": f"[Image : {file.filename}]\n{desc}", "b64": b64, "mime_type": mt}

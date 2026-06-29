@@ -309,6 +309,13 @@
                     <option value="ollama">🟢 Ollama / LLava (local)</option>
                 </select>
                 <span class="routing-warning hidden" id="warn-vision" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                <div id="pixtral-model-row" style="display:none;margin-top:6px;">
+                    <label for="pixtral-model-select" style="font-size:0.82rem;">Modèle Pixtral</label>
+                    <select id="pixtral-model-select" aria-label="Modèle Pixtral utilisé pour la vision">
+                        <option value="pixtral-12b-2409">Pixtral 12B (rapide, économique)</option>
+                        <option value="pixtral-large-latest">Pixtral Large (puissant)</option>
+                    </select>
+                </div>
 
                 <span class="routing-label">🖼️ Génération image</span>
                 <select id="routing-image" class="routing-select" aria-label="Provider pour la génération d'image">
@@ -657,6 +664,54 @@
                 </div>
             </details>
             <div id="moderation-status" role="status" aria-live="polite" style="margin-top:6px;font-size:0.78rem;min-height:1.2em;"></div>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <!-- ── MISTRAL BATCH ── -->
+        <div class="setting-group" id="mistral-batch-section">
+            <details id="mistral-batch-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">🔵 Traitement par lots Mistral (Batch)</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Envoie un lot de requêtes en une fois — idéal pour résumés ou extractions en masse.
+                    Traitement asynchrone (minutes à heures selon le volume).
+                </p>
+                <div class="setting-group">
+                    <label for="batch-model-select">Modèle</label>
+                    <select id="batch-model-select" aria-label="Modèle Mistral pour le batch">
+                        <option value="mistral-small-latest">Mistral Small (rapide, économique)</option>
+                        <option value="mistral-medium-latest">Mistral Medium</option>
+                        <option value="mistral-large-latest">Mistral Large</option>
+                        <option value="magistral-small-latest">Magistral Small (raisonnement)</option>
+                        <option value="magistral-medium-latest">Magistral Medium (raisonnement)</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label for="batch-max-tokens">Tokens max par réponse</label>
+                    <input type="number" id="batch-max-tokens" value="1024" min="64" max="8192" step="64"
+                        aria-label="Nombre maximum de tokens par réponse" style="width:120px;">
+                </div>
+                <div class="setting-group">
+                    <label for="batch-prompts">Requêtes (une par ligne)</label>
+                    <textarea id="batch-prompts" rows="6" placeholder="Résume ce texte : ...
+Traduis en anglais : ...
+Analyse les sentiments de : ..."
+                        aria-label="Requêtes à traiter en lot, une par ligne"
+                        style="width:100%;box-sizing:border-box;font-family:monospace;font-size:0.82rem;"></textarea>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                        Chaque ligne = une requête indépendante. Le résultat est renvoyé dans le même ordre.
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="batch-submit-btn" class="btn-primary" aria-label="Soumettre le lot Mistral">Soumettre le lot</button>
+                    <button id="batch-status-btn" class="btn-secondary" aria-label="Vérifier le statut du dernier job" disabled>Vérifier le statut</button>
+                    <button id="batch-results-btn" class="btn-secondary" aria-label="Récupérer les résultats" disabled>Résultats</button>
+                    <button id="batch-cancel-btn" class="btn-secondary" aria-label="Annuler le job" disabled>Annuler</button>
+                </div>
+                <div id="batch-job-id" style="font-size:0.78rem;color:var(--text-muted);margin-top:6px;"></div>
+                <div id="batch-status-out" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:6px;min-height:1.2em;"></div>
+                <div id="batch-results-out" role="region" aria-label="Résultats du batch" style="margin-top:8px;"></div>
+            </details>
         </div>
 
 

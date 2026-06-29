@@ -630,10 +630,12 @@ async def call_gemini_vision(image_b64: str, media_type: str, prompt: str, api_k
 
 
 async def call_vision(image_b64: str, media_type: str, prompt: str,
-                      vision_provider: str, api_keys: dict) -> str:
+                      vision_provider: str, api_keys: dict,
+                      vision_model: str = None) -> str:
     """
     Analyse d'image — routage selon vision_provider.
     Gemini : API dédiée. Anthropic/OpenAI/Ollama : call_llm avec images.
+    vision_model : modèle spécifique (ex. pixtral-large-latest) ; None = défaut du provider.
     """
     provider = vision_provider.lower() if vision_provider else 'gemini'
 
@@ -655,11 +657,12 @@ async def call_vision(image_b64: str, media_type: str, prompt: str,
 
     elif provider == 'mistral':
         # Pixtral : modèle vision dédié (les modèles texte Mistral ne gèrent pas les images)
+        _pixtral_model = vision_model or 'pixtral-12b-2409'
         images = [{'data': image_b64, 'media_type': media_type}]
         return await call_llm(
             messages=[{'role': 'user', 'content': prompt}],
             provider='mistral',
-            model='pixtral-12b-2409',
+            model=_pixtral_model,
             system_prompt='Tu es un assistant qui décrit précisément des images en français.',
             max_tokens=1024,
             temperature=0.2,
