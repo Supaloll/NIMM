@@ -1946,6 +1946,7 @@ _COANIMM_TOOLS = [
     {"tool": "simplify", "label": "Simplifier (FALC)", "category": "Texte & langue"},
     {"tool": "anonymize", "label": "Anonymiser un texte", "category": "Texte & langue"},
     {"tool": "expurgate_doc", "label": "Expurger un document entier", "category": "Documents"},
+    {"tool": "codestral_fim", "label": "Compléter du code (Codestral FIM)", "category": "Code"},
     {"tool": "image", "label": "Génération d'image", "category": "Images"},
     {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
     {"tool": "describe_image", "label": "Décrire une image", "category": "Images"},
@@ -2624,6 +2625,23 @@ async def coanimm_expurgate_document(req: CoanimmExpurgateDocReq):
     result = await op_expurgate_doc(
         req.path, req.consigne, req.fmt, req.allow_cloud, req.thread_id
     )
+    return {"result": result}
+
+class CoanimmCodestralFimReq(BaseModel):
+    prefix: str = ""
+    suffix: str = ""
+    stop: list = []
+    temperature: float = 0.0
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/codestral_fim")
+async def coanimm_codestral_fim(req: CoanimmCodestralFimReq):
+    """Complétion de code FIM via Codestral (fill-in-the-middle)."""
+    import core.database as _db
+    if "codestral_fim" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil Codestral FIM désactivé dans les réglages CoaNIMM]"}
+    from modules.coanimm_ops import op_codestral_fim
+    result = await op_codestral_fim(req.prefix, req.suffix, req.stop or [], req.temperature, req.thread_id)
     return {"result": result}
 
 class CoanimmReadTableReq(BaseModel):

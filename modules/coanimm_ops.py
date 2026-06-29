@@ -426,6 +426,41 @@ ASYNC_OPS_TOOLS = [
 ]
 
 
+async def op_codestral_fim(prefix: str, suffix: str = '', stop: list = None,
+                           temperature: float = 0.0, thread_id: str = None) -> str:
+    """Complète du code via l'API Codestral FIM (/v1/fim/completions).
+    prefix : code avant le curseur.
+    suffix : code après le curseur (optionnel).
+    Renvoie le texte généré uniquement (sans prefix/suffix).
+    """
+    import httpx, core.database as _db
+    keys = _db.get_api_keys()
+    api_key = (keys.get('mistral') or '').strip()
+    if not api_key:
+        return '[Codestral FIM : clé Mistral non configurée]'
+    body = {
+        'model': 'codestral-latest',
+        'prompt': prefix,
+        'suffix': suffix or '',
+        'temperature': temperature,
+        'max_tokens': 1024,
+    }
+    if stop:
+        body['stop'] = stop
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                'https://codestral.mistral.ai/v1/fim/completions',
+                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                json=body,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data['choices'][0]['message']['content']
+    except Exception as e:
+        return f'[Codestral FIM erreur : {e}]'
+
+
 async def dispatch_async_op(name, args, thread_id=None):
     """Dispatch des opérations Documents asynchrones (appel LLM)."""
     args = args or {}

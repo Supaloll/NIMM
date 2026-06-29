@@ -4501,6 +4501,7 @@ const MODELS_BY_PROVIDER = {
         { value: 'magistral-small-latest',      label: '🧠💰 Magistral Small — raisonnement rapide' },
         { value: 'magistral-medium-latest',     label: '🧠💰💰 Magistral Medium — raisonnement approfondi' },
         { value: 'mistral-small-creative-latest', label: '🎨💰 Mistral Small Creative — créatif' },
+        { value: 'codestral-latest',            label: '💻💰 Codestral — code & FIM' },
     ],
     openai: [
         { value: 'gpt-4o-mini',   label: '💰 GPT-4o Mini — rapide, economique' },
