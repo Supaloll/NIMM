@@ -121,12 +121,17 @@ function _setWebSearch(active) {
     _webSearchActive = active;
     const btn = document.getElementById('search-web-btn');
     if (!btn) return;
+    const prov = document.getElementById('provider-select')?.value || '';
+    const isGemini = prov === 'gemini';
     if (active) {
         btn.classList.add('web-active');
-        btn.setAttribute('aria-label', 'Désactiver la recherche web');
+        const lbl = isGemini ? 'Google Search Grounding actif — désactiver' : 'Désactiver la recherche web';
+        btn.setAttribute('aria-label', lbl);
+        btn.title = isGemini ? 'Google Search Grounding (Gemini natif)' : 'Recherche Web';
     } else {
         btn.classList.remove('web-active');
         btn.setAttribute('aria-label', 'Activer la recherche web');
+        btn.title = isGemini ? 'Google Search (Gemini natif)' : 'Recherche Web';
     }
 }
 

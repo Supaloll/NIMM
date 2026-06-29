@@ -2486,10 +2486,14 @@ async def process_message(
     web_context = ''
     # Web search : natif Mistral si provider=mistral, sinon Brave/Tavily
     _mistral_ws_tools = None
-    if web_search and provider == 'mistral':
+    _gemini_gs_tools   = None
+    if web_search and provider == 'gemini':
+        _gemini_gs_tools = [{'google_search': {}}]
+        print('[HUB] 🔍 Google Search Grounding Gemini natif')
+    elif web_search and provider == 'mistral':
         _mistral_ws_tools = [{'type': 'web_search'}]
         print('[HUB] 🌐 Web search Mistral natif')
-    if web_search and provider != 'mistral':
+    elif web_search:
         try:
             from modules.websearch import search
             web_context = await search(user_message)
@@ -2527,7 +2531,8 @@ async def process_message(
             # Phase 1 : détection tool calls
             async for event in call_llm_stream_with_tools(
                 messages=messages,
-                tools=(_mistral_ws_tools + NIMM_TOOLS) if _mistral_ws_tools else NIMM_TOOLS,
+                tools=_gemini_gs_tools if _gemini_gs_tools else
+                      (_mistral_ws_tools + NIMM_TOOLS) if _mistral_ws_tools else NIMM_TOOLS,
                 provider=settings['provider'],
                 model=settings.get('model'),
                 system_prompt=system_prompt,
@@ -2792,10 +2797,15 @@ async def process_message_stream(
     # La recherche automatique est gérée par le tool calling (search_web).
     web_context = ''
     _mistral_ws_tools = None
-    if web_search and provider == 'mistral':
+    _gemini_gs_tools   = None
+    if web_search and provider == 'gemini':
+        _gemini_gs_tools = [{'google_search': {}}]
+        yield "data: [WEB_SEARCH_LOADING]\n\n"
+        print('[HUB] 🔍 Google Search Grounding Gemini natif (stream)')
+    elif web_search and provider == 'mistral':
         _mistral_ws_tools = [{'type': 'web_search'}]
         print('[HUB] 🌐 Web search Mistral natif (stream)')
-    if web_search and provider != 'mistral':
+    elif web_search:
         yield "data: [WEB_SEARCH_LOADING]\n\n"
         try:
             from modules.websearch import search
@@ -2861,7 +2871,8 @@ async def process_message_stream(
             # Phase 1 : stream avec détection tool calls
             async for event in call_llm_stream_with_tools(
                 messages=messages,
-                tools=(_mistral_ws_tools + NIMM_TOOLS) if _mistral_ws_tools else NIMM_TOOLS,
+                tools=_gemini_gs_tools if _gemini_gs_tools else
+                      (_mistral_ws_tools + NIMM_TOOLS) if _mistral_ws_tools else NIMM_TOOLS,
                 provider=settings['provider'],
                 model=settings.get('model'),
                 system_prompt=system_prompt,
