@@ -661,6 +661,27 @@ async def rename_thread(thread_id: str, req: ThreadRename):
 
 
 # ══════════════════════════════════════════
+# MODE AGENT PAR CONVERSATION
+# ══════════════════════════════════════════
+
+@app.get("/api/threads/{thread_id}/agent_mode")
+async def get_agent_mode(thread_id: str):
+    from core.database import get_thread_agent_mode
+    return {"agent_mode": get_thread_agent_mode(thread_id)}
+
+class AgentModeReq(BaseModel):
+    mode: str = ""
+
+@app.post("/api/threads/{thread_id}/agent_mode")
+async def set_agent_mode(thread_id: str, req: AgentModeReq):
+    from core.database import set_thread_agent_mode
+    allowed = {"", "vibe", "coanimm"}
+    if req.mode not in allowed:
+        raise HTTPException(400, f"Mode invalide : {req.mode}")
+    set_thread_agent_mode(thread_id, req.mode)
+    return {"status": "ok", "agent_mode": req.mode}
+
+# ══════════════════════════════════════════
 # MESSAGES
 # ══════════════════════════════════════════
 

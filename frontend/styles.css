@@ -3023,3 +3023,38 @@ body {
     opacity:    0.7;
     mix-blend-mode: screen;
 }
+
+/* Selecteur mode agent */
+.agent-mode-btn {
+    background: transparent;
+    border: none;
+    padding: 5px 8px;
+    cursor: pointer;
+    font-size: 1rem;
+    color: var(--text-muted);
+    transition: background 0.15s, color 0.15s;
+    line-height: 1;
+}
+.agent-mode-btn:hover {
+    background: var(--bg-secondary);
+    color: var(--text);
+}
+.agent-mode-btn.agent-mode-active {
+    color: var(--accent);
+    background: rgba(61, 214, 200, 0.12);
+    font-weight: bold;
+}
+#agent-btn-vibe.agent-mode-active {
+    color: #ff8c00;
+    background: rgba(255, 140, 0, 0.12);
+    animation: vibeAura 2s ease-in-out infinite;
+}
+@keyframes vibeAura {
+    0%   { box-shadow: 0 0 0   0   rgba(255, 140, 0, 0); }
+    50%  { box-shadow: 0 0 8px 3px rgba(255, 140, 0, 0.3); }
+    100% { box-shadow: 0 0 0   0   rgba(255, 140, 0, 0); }
+}
+#agent-btn-coanimm.agent-mode-active {
+    color: #4caf50;
+    background: rgba(76, 175, 80, 0.12);
+}

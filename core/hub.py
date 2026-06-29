@@ -2581,6 +2581,13 @@ async def process_message_stream(
     # 1. Settings + masque (avec verrouillage masque par fil)
     settings = load_settings(thread_id)
 
+    # ── Mode agent Vibe : override provider Mistral ──
+    from core.database import get_thread_agent_mode
+    _agent_mode = get_thread_agent_mode(thread_id)
+    if _agent_mode == 'vibe':
+        settings['provider'] = 'mistral'
+        web_search = True  # Vibe = web search natif Mistral toujours actif
+
     # ── Garde provider ──
     provider  = settings.get('provider', '')
     api_keys  = settings.get('api_keys', {})

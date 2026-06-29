@@ -134,6 +134,53 @@ document.getElementById('search-web-btn')?.addEventListener('click', () => {
     _setWebSearch(!_webSearchActive);
 });
 
+// SELECTEUR MODE AGENT
+// ══════════════════════════════════════════
+
+let _agentMode = '';
+
+function _setAgentMode(mode, save) {
+    if (save === undefined) save = true;
+    _agentMode = mode || '';
+    document.querySelectorAll('.agent-mode-btn').forEach(function(btn) {
+        var active = btn.dataset.mode === _agentMode;
+        btn.classList.toggle('agent-mode-active', active);
+        btn.setAttribute('aria-pressed', String(active));
+    });
+    if (mode === 'vibe') {
+        _setWebSearch(true);
+        var swb = document.getElementById('search-web-btn');
+        if (swb) swb.setAttribute('aria-disabled', 'true');
+    } else {
+        var swb2 = document.getElementById('search-web-btn');
+        if (swb2) swb2.removeAttribute('aria-disabled');
+        _setWebSearch(false);
+    }
+    if (mode === 'coanimm') {
+        var panel = document.getElementById('coanimm-panel');
+        if (panel && panel.hidden) { var tb = document.getElementById('toggle-coanimm'); if (tb) tb.click(); }
+    }
+    if (save && currentThreadId) {
+        fetch('/api/threads/' + currentThreadId + '/agent_mode', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mode: _agentMode})
+        }).catch(function() {});
+    }
+}
+
+async function _loadAgentMode(threadId) {
+    try {
+        var r = await fetch('/api/threads/' + threadId + '/agent_mode');
+        var d = await r.json();
+        _setAgentMode(d.agent_mode || '', false);
+    } catch (e) { _setAgentMode('', false); }
+}
+
+document.querySelectorAll('.agent-mode-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { _setAgentMode(btn.dataset.mode); });
+});
+
 function _splitSentences(text) {
     // 1. Convertir les \n littéraux en vrais sauts de ligne
     let t = text.replace(/\\n/g, '\n');
@@ -1596,6 +1643,7 @@ async function selectThread(threadId) {
     const thread = threads.find(t => t.thread_id === threadId);
     _updateMaskIndicator(thread);
     await _loadGhostMode(threadId);
+    await _loadAgentMode(threadId);
 
 }
 
