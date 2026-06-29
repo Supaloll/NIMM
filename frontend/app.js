@@ -1365,7 +1365,7 @@ function renderSidebar() {
     newChatBtn.textContent = '💬 Nouveau fil';
     newChatBtn.setAttribute('aria-label', 'Nouveau fil');
     newChatBtn.setAttribute('aria-keyshortcuts', 'Alt+N');
-    newChatBtn.title = 'Nouveau fil (Alt+N)';
+    newChatBtn.title = 'Alt+N';
     newChatBtn.addEventListener('click', async () => {
         const result = await promptNewThreadModal();
         if (result) {
@@ -1382,7 +1382,7 @@ function renderSidebar() {
         newTabBtn.textContent = '📑 Onglet';
         newTabBtn.setAttribute('aria-label', 'Nouvel onglet');
         newTabBtn.setAttribute('aria-keyshortcuts', 'Alt+O');
-        newTabBtn.title = 'Nouvel onglet (Alt+O)';
+        newTabBtn.title = 'Alt+O';
         newTabBtn.addEventListener('click', async () => {
             const name = await promptModal("Nom de l'onglet");
             if (!name) return;
@@ -1415,7 +1415,9 @@ function renderSidebar() {
         div.className = 'thread-item' + (t.thread_id === currentThreadId ? ' active' : '');
         div.setAttribute('role', 'button');
         div.setAttribute('tabindex', '0');
-        div.setAttribute('aria-label', (t.name || 'Fil') + (t.thread_id === currentThreadId ? ', fil actif' : ''));
+        div.removeAttribute('aria-label');
+        if (t.thread_id === currentThreadId) div.setAttribute('aria-current', 'true');
+        else div.removeAttribute('aria-current');
         const _ouvrir = () => { if (isMobile()) closeSidebar(); selectThread(t.thread_id); };
         div.addEventListener('click', (e) => {
             if (e.target.closest('.thread-menu-btn, .thread-dropdown')) return; // pas depuis le menu
@@ -1878,7 +1880,11 @@ async function promptThreadParamsModal() {
             resolve();
         };
         modal.classList.remove('hidden');
-        setTimeout(() => { (providerSel || modal.querySelector('select'))?.focus(); }, 50);
+        setTimeout(() => {
+            const title = document.getElementById('new-thread-modal-title');
+            if (title) { title.setAttribute('tabindex', '-1'); title.focus(); }
+            else (providerSel || modal.querySelector('select, button'))?.focus();
+        }, 80);
         okBtn.onclick = async () => {
             if (providerSel && providerSel.value !== providerVal) await _saveRouting('chat', providerSel.value);
             if (memSel      && memSel.value !== memVal0)          await _saveRouting('memoire',  memSel.value === 'same' ? {} : { provider: memSel.value });
@@ -4081,6 +4087,16 @@ document.addEventListener('keydown', (e) => {
                 document.getElementById('new-tab-btn')?.click();
                 break;
             }
+            case 'l': {   // Alt+L : lecture automatique
+                e.preventDefault();
+                document.getElementById('autotts-toggle')?.click();
+                break;
+            }
+            case 'f': {   // Alt+F : mode fantôme
+                e.preventDefault();
+                document.getElementById('ghost-toggle')?.click();
+                break;
+            }
         }
     }
 });
@@ -5359,13 +5375,17 @@ document.getElementById('presence-slider')?.addEventListener('input', (e) => {
 (function setupAutoTTSToggle() {
     const btn = document.createElement('button');
     btn.id        = 'autotts-toggle';
-    btn.title     = 'Lecture automatique';
+    btn.title     = 'Alt+L';
+    btn.setAttribute('aria-label', 'Lecture automatique');
+    btn.setAttribute('aria-keyshortcuts', 'Alt+L');
+    btn.setAttribute('aria-pressed', _autoTTS ? 'true' : 'false');
     btn.className = 'topbar-icon-btn' + (_autoTTS ? ' active' : '');
     btn.innerHTML = spk2;
     btn.addEventListener('click', () => {
         _autoTTS = !_autoTTS;
         localStorage.setItem('nimm-autotts', _autoTTS);
         btn.classList.toggle('active', _autoTTS);
+        btn.setAttribute('aria-pressed', _autoTTS ? 'true' : 'false');
     });
     // Insérer dans la topbar, avant les icônes droite
     const topRight = document.getElementById('top-right');
@@ -5796,10 +5816,11 @@ async function _loadGhostMode(threadId) {
 (function setupGhostToggle() {
     const btn = document.createElement('button');
     btn.id        = 'ghost-toggle';
-    btn.title     = 'Mode fantôme';
+    btn.title     = 'Alt+F';
     btn.className = 'topbar-icon-btn';
     btn.textContent = '👻';
     btn.setAttribute('aria-label', 'Mode fantôme');
+    btn.setAttribute('aria-keyshortcuts', 'Alt+F');
     btn.setAttribute('aria-pressed', 'false');
     btn.addEventListener('click', async () => {
         if (!currentThreadId) return;
