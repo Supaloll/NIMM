@@ -3058,3 +3058,40 @@ body {
     color: #4caf50;
     background: rgba(76, 175, 80, 0.12);
 }
+
+/* Zone citations Mistral web search */
+.citations-region {
+    margin: 6px 0 4px 0;
+    padding: 8px 12px;
+    border-left: 3px solid var(--accent, #3dd6c8);
+    background: var(--bg-secondary, rgba(0,0,0,0.06));
+    border-radius: 0 6px 6px 0;
+    font-size: 0.82rem;
+}
+.citations-title {
+    margin: 0 0 4px 0;
+    font-weight: 600;
+    color: var(--text-muted, #888);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.citations-list {
+    margin: 0;
+    padding-left: 18px;
+}
+.citations-list li {
+    margin-bottom: 3px;
+}
+.citations-list a {
+    color: var(--accent, #3dd6c8);
+    text-decoration: underline;
+    word-break: break-all;
+}
+.citations-list a:hover {
+    opacity: 0.8;
+}
+.citations-snippet {
+    color: var(--text-muted, #888);
+    font-size: 0.78rem;
+}

@@ -147,6 +147,10 @@ function _setAgentMode(mode, save) {
         btn.classList.toggle('agent-mode-active', active);
         btn.setAttribute('aria-pressed', String(active));
     });
+    // Afficher/masquer option Document Vibe dans le menu +
+    var _vdb = document.getElementById('plus-vibe-doc');
+    if (_vdb) _vdb.hidden = (mode !== 'vibe');
+
     if (mode === 'vibe') {
         _setWebSearch(true);
         var swb = document.getElementById('search-web-btn');
@@ -2741,6 +2745,58 @@ function _startBretzelAnim(svg, loader) {
 }
 
 // ── Annonce lecteur d'écran (zone live discrète, hors flux affiché) ──
+/**
+ * _renderCitations : affiche les sources Mistral web search
+ * sous la bulle assistante, dans une region accessible.
+ * @param {HTMLElement} msgDiv - le div .message.assistant
+ * @param {Array} citations   - tableau {url, title, snippet}
+ */
+function _renderCitations(msgDiv, citations) {
+    if (!msgDiv || !citations || !citations.length) return;
+    // Supprimer une eventuelle zone precedente (ne pas dupliquer)
+    var old = msgDiv.querySelector('.citations-region');
+    if (old) old.remove();
+
+    var region = document.createElement('div');
+    region.className = 'citations-region';
+    region.setAttribute('role', 'region');
+    region.setAttribute('aria-label', 'Sources web');
+
+    var title = document.createElement('p');
+    title.className = 'citations-title';
+    title.textContent = 'Sources :';
+    region.appendChild(title);
+
+    var ol = document.createElement('ol');
+    ol.className = 'citations-list';
+    citations.forEach(function(c, i) {
+        var li = document.createElement('li');
+        var a = document.createElement('a');
+        a.href = c.url || '#';
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = c.title || c.url || ('Source ' + (i + 1));
+        if (c.snippet) {
+            var sm = document.createElement('span');
+            sm.className = 'citations-snippet';
+            sm.textContent = ' — ' + c.snippet.slice(0, 120) + (c.snippet.length > 120 ? '…' : '');
+            sm.setAttribute('aria-hidden', 'true');
+            a.appendChild(sm);
+        }
+        li.appendChild(a);
+        ol.appendChild(li);
+    });
+    region.appendChild(ol);
+
+    // Inserer apres la bulle
+    var bubble = msgDiv.querySelector('.message-bubble');
+    if (bubble && bubble.nextSibling) {
+        msgDiv.insertBefore(region, bubble.nextSibling);
+    } else {
+        msgDiv.appendChild(region);
+    }
+}
+
 function _srAnnounce(text) {
     const el = document.getElementById('sr-stream-status');
     if (!el) return;
@@ -3163,6 +3219,16 @@ async function _triggerStream(content, conversationId, images = null) {
                         messagesDiv.scrollTop = messagesDiv.scrollHeight;
                         _srAnnounce('Recherche sur le web en cours…');
                     }
+                    continue;
+                }
+
+                if (data.startsWith('[CITATIONS]')) {
+                    try {
+                        const cits = JSON.parse(data.slice(12));
+                        if (Array.isArray(cits) && cits.length) {
+                            _renderCitations(assistantDiv, cits);
+                        }
+                    } catch(e) {}
                     continue;
                 }
 
@@ -7365,6 +7431,51 @@ function setupUpload() {
         inp.focus();
         inp.setSelectionRange(inp.value.length, inp.value.length);
     });
+
+
+    // Option 3 : Document Vibe (OCR Mistral)
+    var _vibeDocBtn   = document.getElementById('plus-vibe-doc');
+    var _vibeDocInput = document.getElementById('vibe-doc-input');
+    if (_vibeDocBtn) {
+        _vibeDocBtn.addEventListener('click', function() {
+            menu.classList.add('hidden');
+            if (_vibeDocInput) _vibeDocInput.click();
+        });
+    }
+    if (_vibeDocInput) {
+        _vibeDocInput.addEventListener('change', async function() {
+            var file = _vibeDocInput.files[0];
+            _vibeDocInput.value = '';
+            if (!file) return;
+            btn.innerHTML = SVG_LOADING;
+            btn.disabled = true;
+            _buildChip(file);
+            _srAnnounce('Analyse du document en cours…');
+            try {
+                var fd = new FormData();
+                fd.append('file', file);
+                var r = await fetch('/api/mistral/ocr', { method: 'POST', body: fd });
+                if (!r.ok) throw new Error(await r.text());
+                var d = await r.json();
+                if (d.text) {
+                    _pendingFile = { text: d.text, name: file.name, b64: null, mime_type: null };
+                    _srAnnounce('Document analysé : ' + file.name);
+                } else {
+                    _pendingFile = null;
+                    chip.style.display = 'none';
+                    _srAnnounce('Erreur : document non analysé.');
+                }
+            } catch(e) {
+                console.error('[NIMM] Erreur OCR Vibe :', e);
+                _pendingFile = null;
+                chip.style.display = 'none';
+                _srAnnounce("Erreur lors de l'analyse OCR.");
+            } finally {
+                btn.textContent = '+';
+                btn.disabled = false;
+            }
+        });
+    }
 
     // Sélection via input file
     input.addEventListener('change', async () => {

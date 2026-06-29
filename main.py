@@ -3840,6 +3840,65 @@ async def coanimm_mistral_list_agents():
 # ══════════════════════════════════════════
 # UPLOAD — Image / PDF
 # ══════════════════════════════════════════
+@app.post("/api/mistral/ocr")
+async def mistral_ocr(file: UploadFile = File(...)):
+    """OCR/extraction de document via Mistral (mode Vibe). Supporte PDF et images."""
+    import base64 as _b64
+    import httpx as _httpx
+    data = await file.read()
+    filename = (file.filename or '').lower()
+    try:
+        from core.database import get_api_keys as _gak
+        _mkey = (_gak().get('mistral') or '').strip()
+        if not _mkey:
+            from core.database import _load_users, set_user_context
+            _us = _load_users()
+            if _us:
+                set_user_context(_us[0]['id'])
+            _mkey = (_gak().get('mistral') or '').strip()
+    except Exception:
+        _mkey = ''
+    if not _mkey:
+        raise HTTPException(400, "Clé API Mistral non configurée.")
+
+    # Choix du type de document
+    _is_pdf = filename.endswith('.pdf')
+    _is_img = filename.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif'))
+    if not (_is_pdf or _is_img):
+        # Fichiers texte : retour direct
+        try:
+            txt = data.decode('utf-8', errors='replace')
+        except Exception:
+            txt = data.decode('latin-1', errors='replace')
+        return {"text": txt[:8000], "name": file.filename, "method": "text"}
+
+    _b64_str = _b64.b64encode(data).decode()
+    _mime = file.content_type or ('application/pdf' if _is_pdf else 'image/jpeg')
+    _doc_url = f"data:{_mime};base64,{_b64_str}"
+    if _is_pdf:
+        _payload = {"model": "mistral-ocr-latest", "document": {"type": "document_url", "document_url": _doc_url}}
+    else:
+        _payload = {"model": "mistral-ocr-latest", "document": {"type": "image_url", "image_url": _doc_url}}
+
+    async with _httpx.AsyncClient(timeout=60) as client:
+        _r = await client.post(
+            "https://api.mistral.ai/v1/ocr",
+            headers={"Authorization": f"Bearer {_mkey}", "Content-Type": "application/json"},
+            json=_payload
+        )
+        if _r.status_code != 200:
+            raise HTTPException(_r.status_code, f"Erreur OCR Mistral : {_r.text[:200]}")
+        _res = _r.json()
+
+    # Extraire le texte des pages
+    _pages = _res.get("pages") or []
+    if _pages:
+        _text = "\n\n".join(p.get("markdown") or p.get("text") or '' for p in _pages)
+    else:
+        _text = _res.get("text") or _res.get("markdown") or ""
+
+    return {"text": _text[:8000], "name": file.filename, "method": "mistral_ocr"}
+
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
     data     = await file.read()
