@@ -170,6 +170,8 @@ GENERATE_SYSTEM_PROMPT = (
     "  Assemble une liste d'images en un PDF (une image par page) et retourne le chemin du PDF.\n"
     "  nimm_read_table(path: str) -> str\n"
     "  Lit un fichier CSV/TSV et le renvoie en tableau Markdown lisible.\n"
+    "  nimm_ocr_document(path: str = '', url: str = '') -> str\n"
+    "  Extrait le texte d'un PDF ou d'une image via Mistral OCR (mistral-ocr-latest) en préservant la structure (titres, tableaux, formules). Retourne le texte en Markdown.\n"
     "  nimm_audio_overview(content: str, voice1: str = '', voice2: str = '') -> str\n"
     "  Crée un RÉSUMÉ AUDIO façon podcast : génère un dialogue à 2 voix sur le contenu puis le synthétise (Gemini TTS). Retourne le chemin du fichier audio.\n"
     "  nimm_list_voices() -> list\n"
@@ -187,7 +189,7 @@ GENERATE_SYSTEM_PROMPT = (
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
     "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
-    "nimm_make_daisy, nimm_list_voices) : "
+    "nimm_make_daisy, nimm_list_voices, nimm_ocr_document) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -583,6 +585,37 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
     parts.append(fim if "codestral_fim" not in _disabled else _stub("nimm_codestral_fim", "completer du code (FIM)"))
+    ocr = (
+        "def nimm_ocr_document(path='', url='', _tid='%s'):\n"
+        "    import urllib.request as _ur_ocr, json as _j_ocr, os as _os_ocr, base64 as _b64_ocr\n"
+        "    if not path and not url:\n"
+        "        raise ValueError('nimm_ocr_document: fournir path ou url')\n"
+        "    if path:\n"
+        "        _raw = open(path, 'rb').read()\n"
+        "        _ext = _os_ocr.path.splitext(path)[1].lower().lstrip('.')\n"
+        "        _mime = 'application/pdf' if _ext == 'pdf' else f'image/{_ext or \"octet-stream\"}'\n"
+        "        _bname = _os_ocr.path.basename(path)\n"
+        "        _b64s = _b64_ocr.b64encode(_raw).decode()\n"
+        "        boundary = b'----NimmOcrBnd'\n"
+        "        _body = (b'--' + boundary + b'\r\n'\n"
+        "            + f'Content-Disposition: form-data; name=\"file\"; filename=\"{_bname}\"\r\n'.encode()\n"
+        "            + f'Content-Type: {_mime}\r\n\r\n'.encode()\n"
+        "            + _raw + b'\r\n' + b'--' + boundary + b'--\r\n')\n"
+        "        _req_ocr = _ur_ocr.Request(\n"
+        "            'http://localhost:8080/api/mistral/ocr',\n"
+        "            data=_body,\n"
+        "            headers={'Content-Type': f'multipart/form-data; boundary={boundary.decode()}'},\n"
+        "        )\n"
+        "        with _ur_ocr.urlopen(_req_ocr, timeout=120) as _rr:\n"
+        "            return _j_ocr.loads(_rr.read()).get('text', '')\n"
+        "    else:\n"
+        "        _d2 = f'url={_ur_ocr.quote(url)}&thread_id={_tid}'.encode()\n"
+        "        _rq2 = _ur_ocr.Request('http://localhost:8080/api/mistral/ocr',\n"
+        "            data=_d2, headers={'Content-Type': 'application/x-www-form-urlencoded'})\n"
+        "        with _ur_ocr.urlopen(_rq2, timeout=120) as _rr2:\n"
+        "            return _j_ocr.loads(_rr2.read()).get('text', '')\n"
+    ) % tid
+    parts.append(ocr if "ocr_document" not in _disabled else _stub("nimm_ocr_document", "OCR Mistral (PDF/image)"))
     ao = (
         "def nimm_audio_overview(content, voice1='', voice2='', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"content\": content, \"voice1\": voice1, \"voice2\": voice2, \"thread_id\": _tid}).encode()\n"
