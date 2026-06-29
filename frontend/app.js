@@ -4502,6 +4502,8 @@ const MODELS_BY_PROVIDER = {
         { value: 'magistral-medium-latest',     label: '🧠💰💰 Magistral Medium — raisonnement approfondi' },
         { value: 'mistral-small-creative-latest', label: '🎨💰 Mistral Small Creative — créatif' },
         { value: 'codestral-latest',            label: '💻💰 Codestral — code & FIM' },
+        { value: 'pixtral-12b-2409',            label: '🖼️💰 Pixtral 12B — vision' },
+        { value: 'pixtral-large-latest',        label: '🖼️💰💰 Pixtral Large — vision puissant' },
     ],
     openai: [
         { value: 'gpt-4o-mini',   label: '💰 GPT-4o Mini — rapide, economique' },

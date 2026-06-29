@@ -51,7 +51,7 @@ _PROVIDER_DEFAULT_MODEL = {
 _MODEL_OWNER = {
     'claude': 'anthropic', 'deepseek': 'deepseek', 'gpt': 'openai',
     'o1': 'openai', 'o3': 'openai', 'o4': 'openai',
-    'mistral': 'mistral', 'ministral': 'mistral', 'pixtral': 'mistral', 'codestral': 'mistral',
+    'mistral': 'mistral', 'ministral': 'mistral', 'pixtral': 'mistral', 'codestral': 'mistral', 'pixtral': 'mistral',
     'magistral': 'mistral', 'voxtral': 'mistral', 'devstral': 'mistral', 'codestral': 'mistral',
     'gemini': 'gemini',
 }
@@ -640,12 +640,26 @@ async def call_vision(image_b64: str, media_type: str, prompt: str,
     if provider in ('gemini', 'auto', ''):
         return await call_gemini_vision(image_b64, media_type, prompt, api_keys)
 
-    elif provider in ('anthropic', 'openai', 'ollama', 'mistral'):
+    elif provider in ('anthropic', 'openai', 'ollama'):
         images = [{'data': image_b64, 'media_type': media_type}]
         return await call_llm(
             messages=[{'role': 'user', 'content': prompt}],
             provider=provider,
             model=None,
+            system_prompt='Tu es un assistant qui décrit précisément des images en français.',
+            max_tokens=1024,
+            temperature=0.2,
+            api_keys=api_keys,
+            images=images,
+        )
+
+    elif provider == 'mistral':
+        # Pixtral : modèle vision dédié (les modèles texte Mistral ne gèrent pas les images)
+        images = [{'data': image_b64, 'media_type': media_type}]
+        return await call_llm(
+            messages=[{'role': 'user', 'content': prompt}],
+            provider='mistral',
+            model='pixtral-12b-2409',
             system_prompt='Tu es un assistant qui décrit précisément des images en français.',
             max_tokens=1024,
             temperature=0.2,
