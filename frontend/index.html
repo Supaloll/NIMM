@@ -314,6 +314,7 @@
                 <select id="routing-image" class="routing-select" aria-label="Provider pour la génération d'image">
                     <option value="dall-e"       data-needs-key="openai">🔴 OpenAI (gpt-image-1)</option>
                     <option value="gemini"       data-needs-key="gemini">🟠 Gemini (≈ 0,067 $/image, plus de quota gratuit)</option>
+                    <option value="mistral"      data-needs-key="mistral">🟠 Mistral (Agents image_generation)</option>
                     <option value="stability-ai" data-needs-key="stability-ai">🟠 Stability AI</option>
                     <option value="local">🟢 Local (ComfyUI)</option>
                 </select>
@@ -612,6 +613,35 @@
             </div>
             <div id="local-mode-msg" role="status" aria-live="polite" style="margin-top:6px;font-size:0.78rem;min-height:1.2em;"></div>
         </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="setting-group" id="moderation-section">
+            <label>🛡️ Modération (Mistral)</label>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="moderation-toggle" aria-label="Activer le filtre de modération Mistral" aria-describedby="moderation-desc">
+                    <span class="toggle-slider"></span>
+                </label>
+                <span id="moderation-desc" style="font-size:0.78rem;color:var(--text-muted);">
+                    Filtre les messages entrants via <code>mistral-moderation-latest</code>.<br>
+                    <em>Nécessite une clé API Mistral. Les messages bloqués ne sont pas envoyés au LLM.</em>
+                </span>
+            </div>
+            <details style="margin-top:10px;" id="moderation-categories-details">
+                <summary style="cursor:pointer;font-size:0.82rem;color:var(--text-muted);">Catégories de filtrage (seuils)</summary>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:8px;font-size:0.8rem;">
+                    <label>Contenu sexuel <input type="range" id="mod-sexual" min="0" max="100" value="80" aria-label="Seuil contenu sexuel (0=bloquer tout, 100=ne jamais bloquer)"> <output for="mod-sexual" id="mod-sexual-val">0.8</output></label>
+                    <label>Haine/Discrimination <input type="range" id="mod-hate" min="0" max="100" value="70" aria-label="Seuil haine et discrimination"> <output for="mod-hate" id="mod-hate-val">0.7</output></label>
+                    <label>Violence <input type="range" id="mod-violence" min="0" max="100" value="80" aria-label="Seuil violence"> <output for="mod-violence" id="mod-violence-val">0.8</output></label>
+                    <label>Jailbreak <input type="range" id="mod-jailbreak" min="0" max="100" value="50" aria-label="Seuil détection jailbreak"> <output for="mod-jailbreak" id="mod-jailbreak-val">0.5</output></label>
+                    <label>Automutilation <input type="range" id="mod-selfharm" min="0" max="100" value="60" aria-label="Seuil automutilation"> <output for="mod-selfharm" id="mod-selfharm-val">0.6</output></label>
+                    <label>Données personnelles <input type="range" id="mod-pii" min="0" max="100" value="90" aria-label="Seuil données personnelles"> <output for="mod-pii" id="mod-pii-val">0.9</output></label>
+                </div>
+            </details>
+            <div id="moderation-status" role="status" aria-live="polite" style="margin-top:6px;font-size:0.78rem;min-height:1.2em;"></div>
+        </div>
+
 
         <div class="settings-divider"></div>
 
@@ -1127,6 +1157,38 @@
                 </div>
                 <p id="coanimm-save-feedback" style="font-size:0.82rem;margin:6px 0 0;" aria-live="polite"></p>
             </div>
+
+            <!-- Code Interpreter Mistral cloud -->
+            <details id="coanimm-cloud-ci-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">☁️ Code Interpreter Mistral (cloud)</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
+                    Envoie une consigne à Mistral avec l’outil <code>code_interpreter</code> cloud.
+                    Le code est généré et exécuté côté Mistral ; le résultat est renvoyé ici.
+                    <em>Nécessite une clé API Mistral. Pas de sandbox locale.</em>
+                </p>
+                <label for="coanimm-cloud-ci-prompt" class="sr-only">Consigne pour le Code Interpreter Mistral</label>
+                <textarea id="coanimm-cloud-ci-prompt" rows="3"
+                    placeholder="Ex. : Analyse ce tableau de données et trace un histogramme par catégorie."
+                    style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.85rem;margin-bottom:8px;resize:vertical;"></textarea>
+                <button type="button" id="coanimm-cloud-ci-run"
+                    style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:7px 18px;color:#fff;font-size:0.88rem;cursor:pointer;font-weight:600;">
+                    Exécuter via Mistral
+                </button>
+                <div id="coanimm-cloud-ci-status" role="status" aria-live="polite" style="margin-top:8px;font-size:0.82rem;min-height:1em;"></div>
+                <div id="coanimm-cloud-ci-result" class="hidden" style="margin-top:10px;">
+                    <p style="font-size:0.82rem;font-weight:600;margin:0 0 4px;">Code généré :</p>
+                    <textarea id="coanimm-cloud-ci-code" readonly rows="6"
+                        style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;box-sizing:border-box;"></textarea>
+                    <p style="font-size:0.82rem;font-weight:600;margin:8px 0 4px;">Sortie / Réponse :</p>
+                    <textarea id="coanimm-cloud-ci-output" readonly rows="5"
+                        style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;box-sizing:border-box;"></textarea>
+                    <div id="coanimm-cloud-ci-files" style="margin-top:6px;"></div>
+                    <button type="button" id="coanimm-cloud-ci-inject"
+                        style="margin-top:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.82rem;cursor:pointer;">
+                        Injecter le résultat dans le fil de discussion
+                    </button>
+                </div>
+            </details>
         </div>
     </div>
 </div>

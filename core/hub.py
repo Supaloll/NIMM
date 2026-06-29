@@ -1561,6 +1561,32 @@ from modules.coanimm_ops import (OPS_TOOLS as _COANIMM_OPS_TOOLS,
 NIMM_TOOLS = NIMM_TOOLS + _COANIMM_OPS_TOOLS + _COANIMM_ASYNC_TOOLS
 
 
+async def _check_moderation(text: str, api_keys: dict) -> dict:
+    """
+    Appelle l'API de moderation Mistral sur le texte.
+    Retourne {'blocked': bool, 'categories': dict, 'violated': list}
+    """
+    import json as _j, httpx as _hx
+    _mkey = (api_keys.get('mistral') or '').strip()
+    if not _mkey:
+        return {'blocked': False, 'categories': {}, 'violated': []}
+    try:
+        async with _hx.AsyncClient(timeout=10) as _c:
+            _r = await _c.post(
+                'https://api.mistral.ai/v1/moderations',
+                headers={'Authorization': f'Bearer {_mkey}', 'Content-Type': 'application/json'},
+                json={'model': 'mistral-moderation-latest', 'inputs': [text]}
+            )
+            _r.raise_for_status()
+            _data = _r.json()
+        _result = (_data.get('results') or [{}])[0]
+        _cats = _result.get('category_scores', {})
+        _violated = [k for k, v in _result.get('categories', {}).items() if v]
+        return {'blocked': bool(_violated), 'categories': _cats, 'violated': _violated}
+    except Exception as _e:
+        print(f'[HUB] Moderation check failed: {_e}')
+        return {'blocked': False, 'categories': {}, 'violated': []}
+
 async def _search_via_mistral(query: str, api_keys: dict) -> str:
     """
     Recherche web via l'outil natif Mistral web_search.
@@ -2636,6 +2662,31 @@ async def process_message_stream(
     Version streaming de process_message.
     Yield les tokens un par un, puis envoie les métadonnées à la fin.
     """
+    # 0. Moderation Mistral (optionnelle)
+    try:
+        import json as _jmod
+        _mod_cfg_raw = get_setting('moderation_config', '{}')
+        _mod_cfg = _jmod.loads(_mod_cfg_raw)
+    except Exception:
+        _mod_cfg = {}
+    if _mod_cfg.get('enabled') and user_message:
+        _mod_keys = {}
+        try:
+            from core.database import get_api_keys as _gak_mod
+            _mod_keys = _gak_mod()
+        except Exception:
+            pass
+        _mod_result = await _check_moderation(user_message, _mod_keys)
+        if _mod_result['blocked']:
+            _cats_txt = ', '.join(_mod_result['violated'])
+            _block_msg = f"Message bloqu\xe9 par le filtre de mod\xe9ration ({_cats_txt})."
+            add_message(thread_id, 'user', user_message)
+            add_message(thread_id, 'assistant', _block_msg)
+            yield f"data: {_block_msg}\n\n"
+            yield 'data: [META]{"dominant":"neutre"}\n\n'
+            yield "data: [DONE]\n\n"
+            return
+
     from core.engine import call_llm_stream
 
     # 1. Settings + masque (avec verrouillage masque par fil)

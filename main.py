@@ -1051,6 +1051,30 @@ async def save_routing(req: RoutingSetting):
     if 'image'  in updates: set_setting('image_provider',  updates['image'])
     return {"status": "ok", "routing": current}
 
+
+# ─────────── MODERATION ───────────
+
+class ModerationSettingReq(BaseModel):
+    enabled: bool = False
+    categories: dict = {}
+
+@app.get("/api/settings/moderation")
+async def get_moderation_setting():
+    import json as _j
+    raw_cfg = get_setting('moderation_config', '{}')
+    try:
+        cfg = _j.loads(raw_cfg)
+    except Exception:
+        cfg = {}
+    return {'enabled': cfg.get('enabled', False), 'categories': cfg.get('categories', {})}
+
+@app.post("/api/settings/moderation")
+async def save_moderation_setting(req: ModerationSettingReq):
+    import json as _j
+    cfg = {'enabled': req.enabled, 'categories': req.categories}
+    set_setting('moderation_config', _j.dumps(cfg))
+    return {'status': 'ok'}
+
 class PresetSaveRequest(BaseModel):
     name: str
 
@@ -1236,6 +1260,87 @@ async def coanimm_run_code_direct(req: CoanimmRunCodeDirectRequest):
 class CoanimmGenerateImageRequest(BaseModel):
     prompt: str
     thread_id: Optional[str] = None
+
+
+@app.post("/api/coanimm/mistral_code_interpreter")
+async def coanimm_mistral_code_interpreter(req: CoanimmGenerateCodeRequest):
+    """
+    Mode cloud : envoie la consigne a Mistral avec l'outil code_interpreter.
+    Retourne le code genere, la sortie d'execution et les fichiers produits.
+    """
+    import httpx as _hx, json as _j, base64 as _b64
+    try:
+        from core.database import get_api_keys as _gak
+        _mkey = (_gak().get('mistral') or '').strip()
+    except Exception:
+        _mkey = ''
+    if not _mkey:
+        raise HTTPException(400, "Cle API Mistral non configuree.")
+
+    _system = (
+        "Tu es un assistant expert en Python et en analyse de donnees. "
+        "Utilise l'outil code_interpreter pour executer du code Python directement. "
+        "Renvoie toujours le code que tu executes, le resultat et toute visualisation produite."
+    )
+    _payload = {
+        "model": "mistral-medium-latest",
+        "messages": [
+            {"role": "system", "content": _system},
+            {"role": "user",   "content": req.task or req.prompt or ''}
+        ],
+        "tools": [{"type": "code_interpreter"}],
+        "tool_choice": "auto"
+    }
+    async with _hx.AsyncClient(timeout=120) as client:
+        _r = await client.post(
+            "https://api.mistral.ai/v1/agents/completions",
+            headers={"Authorization": f"Bearer {_mkey}", "Content-Type": "application/json"},
+            json=_payload
+        )
+        if _r.status_code != 200:
+            # Fallback : /v1/chat/completions (si agents non dispo)
+            _r2 = await client.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {_mkey}", "Content-Type": "application/json"},
+                json=_payload
+            )
+            if _r2.status_code != 200:
+                raise HTTPException(_r2.status_code, f"Erreur Mistral Code Interpreter : {_r2.text[:300]}")
+            _res = _r2.json()
+        else:
+            _res = _r.json()
+
+    _msg     = (_res.get('choices') or [{}])[0].get('message', {})
+    _content = _msg.get('content') or ''
+    _code_blocks = []
+    _outputs     = []
+    _files       = []
+
+    for _item in (_msg.get('tool_calls') or []):
+        if _item.get('type') == 'function' and _item.get('function', {}).get('name') == 'code_interpreter':
+            try:
+                _args = _j.loads(_item['function']['arguments'])
+                _code_blocks.append(_args.get('code', ''))
+            except Exception:
+                pass
+
+    for _tc in (_res.get('choices') or [{}])[0:]:
+        for _msg2 in (_res.get('messages') or []):
+            for _part in (_msg2.get('content') or []):
+                if isinstance(_part, dict):
+                    if _part.get('type') == 'tool_result':
+                        _outputs.append(_part.get('content') or '')
+                    if _part.get('type') == 'image_url':
+                        _files.append({'type': 'image', 'url': _part.get('image_url', {}).get('url', '')})
+
+    return {
+        "text":   _content,
+        "code":   '\n\n'.join(_code_blocks),
+        "output": '\n'.join(str(o) for o in _outputs),
+        "files":  _files,
+        "model":  "mistral-medium-latest",
+        "provider": "mistral_cloud"
+    }
 
 
 @app.get("/api/coanimm/test_stream")
@@ -3898,6 +4003,54 @@ async def mistral_ocr(file: UploadFile = File(...)):
         _text = _res.get("text") or _res.get("markdown") or ""
 
     return {"text": _text[:8000], "name": file.filename, "method": "mistral_ocr"}
+
+@app.post("/api/mistral/audio_analyze")
+async def mistral_audio_analyze(file: UploadFile = File(...), prompt: str = Form(default="")):
+    """
+    Analyse un fichier audio via Voxtral Small (mistral-small-latest avec audio nativement).
+    Retourne la transcription et/ou l'analyse selon le prompt.
+    """
+    import base64 as _b64, httpx as _httpx
+    data = await file.read()
+    filename = (file.filename or '').lower()
+    if not filename.endswith(('.mp3', '.wav', '.ogg', '.m4a', '.flac', '.webm', '.aac')):
+        raise HTTPException(400, "Format audio non supporte. Utilisez mp3, wav, ogg, m4a, flac, webm ou aac.")
+    try:
+        from core.database import get_api_keys as _gak
+        _mkey = (_gak().get('mistral') or '').strip()
+    except Exception:
+        _mkey = ''
+    if not _mkey:
+        raise HTTPException(400, "Cle API Mistral non configuree.")
+
+    _b64_str = _b64.b64encode(data).decode()
+    _mime = file.content_type or 'audio/mpeg'
+    _audio_url = f"data:{_mime};base64,{_b64_str}"
+    _user_prompt = prompt.strip() if prompt.strip() else "Transcris et analyse ce fichier audio."
+    _payload = {
+        "model": "voxtral-small-latest",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "audio_url", "audio_url": {"url": _audio_url}},
+                    {"type": "text", "text": _user_prompt}
+                ]
+            }
+        ]
+    }
+    async with _httpx.AsyncClient(timeout=120) as client:
+        _r = await client.post(
+            "https://api.mistral.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {_mkey}", "Content-Type": "application/json"},
+            json=_payload
+        )
+        if _r.status_code != 200:
+            raise HTTPException(_r.status_code, f"Erreur Voxtral : {_r.text[:300]}")
+        _res = _r.json()
+    _text = ((_res.get('choices') or [{}])[0].get('message', {}).get('content') or '').strip()
+    return {"text": _text, "name": file.filename, "model": "voxtral-small-latest"}
+
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
