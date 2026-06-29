@@ -1448,7 +1448,6 @@ function renderSidebar() {
         const menuBtn = document.createElement('button');
         menuBtn.className = 'thread-menu-btn';
         menuBtn.textContent = '...';
-        menuBtn.title = 'Options';
         menuBtn.setAttribute('aria-label', 'Options : ' + (t.name || 'fil'));
         menuBtn.addEventListener('click', (e) => {
             e.stopPropagation();
