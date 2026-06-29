@@ -493,6 +493,7 @@ def synthesize_gemini_multi(transcript, speakers, style=''):
 def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '', api_key: str = '') -> tuple[Optional[bytes], str]:
     """
     Point d'entrée unique. Retourne (bytes, media_type).
+    Si voice est vide et qu'une clé Gemini est disponible, utilise une voix Gemini par défaut.
     Voix préfixée 'piper:'  → Piper  (audio/wav)
     Voix préfixée 'edge:'   → Edge   (audio/mpeg)
     Voix préfixée 'gemini:' → Gemini TTS (audio/wav) — style optionnel

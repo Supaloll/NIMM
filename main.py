@@ -1945,6 +1945,7 @@ _COANIMM_TOOLS = [
     {"tool": "expurgate", "label": "Expurger / adapter pour enfants", "category": "Texte & langue"},
     {"tool": "simplify", "label": "Simplifier (FALC)", "category": "Texte & langue"},
     {"tool": "anonymize", "label": "Anonymiser un texte", "category": "Texte & langue"},
+    {"tool": "expurgate_doc", "label": "Expurger un document entier", "category": "Documents"},
     {"tool": "image", "label": "Génération d'image", "category": "Images"},
     {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
     {"tool": "describe_image", "label": "Décrire une image", "category": "Images"},
@@ -2605,6 +2606,26 @@ async def coanimm_pdf_from_images(req: CoanimmPdfFromImagesReq):
         return {"status": "error", "message": f"Erreur création PDF : {e}"}
     return {"status": "ok", "filepath": filepath, "filename": filename, "count": len(paths)}
 
+class CoanimmExpurgateDocReq(BaseModel):
+    path: str = ""
+    consigne: str = ""
+    fmt: str = "docx"
+    allow_cloud: bool = False
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/expurgate_document")
+async def coanimm_expurgate_document(req: CoanimmExpurgateDocReq):
+    """Expurge un document entier : extraction du texte puis version adaptee tous publics,
+    produite comme fichier accessible (docx/pdf/epub/html)."""
+    import core.database as _db
+    if "expurgate_doc" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil expurgation de document desactive dans les reglages CoaNIMM]"}
+    from modules.coanimm_ops import op_expurgate_doc
+    result = await op_expurgate_doc(
+        req.path, req.consigne, req.fmt, req.allow_cloud, req.thread_id
+    )
+    return {"result": result}
+
 class CoanimmReadTableReq(BaseModel):
     path: str = ""
     thread_id: Optional[str] = None
@@ -2714,6 +2735,16 @@ async def set_gemini_tts_model(req: dict):
     m = (req.get("model") or "").strip() or "gemini-2.5-flash-preview-tts"
     set_setting("gemini_tts_model", m)
     return {"status": "ok", "model": m}
+
+@app.get("/api/settings/gemini-tts-default-voice")
+async def get_gemini_tts_default_voice():
+    return {"voice": get_setting("gemini_tts_default_voice", "Kore")}
+
+@app.post("/api/settings/gemini-tts-default-voice")
+async def set_gemini_tts_default_voice(req: dict):
+    v = (req.get("voice") or "Kore").strip()
+    set_setting("gemini_tts_default_voice", v)
+    return {"status": "ok"}
 
 @app.get("/api/settings/gemini-tts-style")
 async def get_gemini_tts_style():

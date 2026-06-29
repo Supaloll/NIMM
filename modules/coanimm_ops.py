@@ -322,7 +322,86 @@ async def op_summarize(path, allow_cloud=False, thread_id=None):
     return f"Résumé de {os.path.basename(p)} ({lieu}) :\n\n" + (summary or '').strip()
 
 
-ASYNC_OPS_NAMES = {'summarize_document'}
+
+async def op_expurgate_doc(path, consigne='', fmt='docx', allow_cloud=False, thread_id=None):
+    """Extrait le texte d'un document, l'expurge (violence/sexualite/grossierete),
+    puis produit un nouveau document dans le meme format. Politique cloud sur confirmation."""
+    import os as _os
+    p = _os.path.abspath(_os.path.expanduser((path or '').strip()))
+    if not _os.path.isfile(p):
+        return f"[Erreur] Fichier introuvable : {p}"
+    try:
+        import core.hub as hub
+        settings = hub.load_settings(thread_id)
+    except Exception as e:
+        return f"[Erreur] Configuration indisponible : {e}"
+    local_mode = bool(settings.get('local_mode'))
+    import modules.enrichissement as enr
+    mistral_key = enr.mistral_key_from_settings(settings)
+
+    # 1. Extraction
+    try:
+        res = enr.extract_any(p, _os.path.basename(p), mistral_key=mistral_key, allow_cloud=bool(allow_cloud))
+    except Exception as e:
+        return f"[Erreur] Extraction impossible : {e}"
+    if res.get('status') == 'confirmation_required':
+        return ("[Confirmation requise] " + res.get('reason', '') +
+                " Pour l'OCR cloud, rappelle expurgate_document avec allow_cloud=true apres accord.")
+    if res.get('status') == 'error':
+        return "[Erreur] " + res.get('message', '')
+    text = (res.get('text') or '').strip()
+    if not text:
+        return f"Aucun texte a extraire de {_os.path.basename(p)}."
+
+    # 2. LLM cloud confirm
+    try:
+        provider, model = hub.get_task_provider_model('synthese', settings)
+    except Exception:
+        provider = settings.get('provider') or 'anthropic'
+        model = None
+    if _needs_cloud_confirm(provider, local_mode, allow_cloud):
+        return ("[Confirmation requise] Pour expurger ce document, son texte serait envoye a « "
+                + str(provider) + " » (cloud). Demande l'accord explicite de l'utilisateur puis rappelle "
+                "expurgate_document avec allow_cloud=true. En mode local, le contenu reste sur la machine.")
+
+    # 3. Expurgation LLM
+    system_exp = ("Tu es un filtre editorial. Ton seul travail : rendre la version du texte adaptee"
+                  " a tous les publics, en retirant ou adoucissant les contenus violents, sexuels, "
+                  "horribles ou grossiers. Preserve au maximum la trame narrative. "
+                  "Renvoie UNIQUEMENT le texte expurge, sans commentaire.")
+    user_prompt = text[:14000]
+    if consigne:
+        system_exp += "\n\nConsigne supplementaire : " + consigne
+    try:
+        import core.engine as engine
+        expurgated = await engine.call_llm(
+            messages=[{'role': 'user', 'content': user_prompt}],
+            provider=provider, model=model,
+            system_prompt=system_exp,
+            max_tokens=4096, temperature=0.3,
+            api_keys=settings.get('api_keys') or {},
+        )
+    except Exception as e:
+        return f"[Erreur] Expurgation impossible : {e}"
+
+    # 4. Document produit
+    import re, modules.accessible_doc as adoc
+    base = re.sub(r'[^\w\s-]', '', _os.path.splitext(_os.path.basename(p))[0]).strip() or 'expurge'
+    title = f"Version expurgee — {_os.path.basename(p)}"
+    sections = [{"heading": "Texte expurge", "body": expurgated or ''}]
+    try:
+        out_path = adoc.build_document(title, sections, fmt=fmt, lang='fr')
+        # Deplacer dans le workspace
+        import shutil, time
+        ws = _os.path.join(_os.getcwd(), 'workspace')
+        _os.makedirs(ws, exist_ok=True)
+        dest = _os.path.join(ws, f"{base}_expurge_{int(time.time())}.{fmt}")
+        shutil.move(out_path, dest)
+        return f"Document expurge produit : {dest}"
+    except Exception as e:
+        return f"[Erreur] Impossible de produire le document : {e}"
+
+ASYNC_OPS_NAMES = {'summarize_document', 'expurgate_document'}
 
 ASYNC_OPS_TOOLS = [
     _tool("summarize_document",
@@ -334,6 +413,16 @@ ASYNC_OPS_TOOLS = [
           {"path": {"type": "string", "description": "Chemin complet du document à résumer."},
            "allow_cloud": {"type": "boolean", "description": "true uniquement si l'utilisateur a explicitement accepté l'envoi du contenu au cloud. false par défaut."}},
           ["path"]),
+    _tool("expurgate_document",
+          "Extrait le texte d'un document (PDF, Word, ODT, EPUB, image scannée) et produit une "
+          "version expurgée (violence, sexualité, grossièretés retirées ou adoucies), "
+          "enregistrée dans le workspace. Politique cloud sur confirmation : "
+          "mettre allow_cloud=true uniquement après accord explicite.",
+          {"path": {"type": "string", "description": "Chemin complet du document à expurger."},
+           "consigne": {"type": "string", "description": "Consigne supplémentaire (optionnelle)."},
+           "fmt": {"type": "string", "description": "Format de sortie : docx (défaut), pdf, epub, html."},
+           "allow_cloud": {"type": "boolean", "description": "true uniquement si l'utilisateur a explicitement accepté l'envoi cloud."}},
+          ["path"]),
 ]
 
 
@@ -342,4 +431,6 @@ async def dispatch_async_op(name, args, thread_id=None):
     args = args or {}
     if name == 'summarize_document':
         return await op_summarize(args.get('path', ''), args.get('allow_cloud', False), thread_id)
+    if name == 'expurgate_document':
+        return await op_expurgate_doc(args.get('path',''), args.get('consigne',''), args.get('fmt','docx'), args.get('allow_cloud',False), thread_id)
     return f"[Opération asynchrone inconnue : {name}]"

@@ -563,6 +563,16 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
     parts.append(rt if "read_table" not in _disabled else _stub("nimm_read_table", "lire un tableau"))
+    ed = (
+        "def nimm_expurgate_doc(path, consigne='', fmt='docx', allow_cloud=False, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"path\": path, \"consigne\": consigne, \"fmt\": fmt, \"allow_cloud\": allow_cloud, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/expurgate_document\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    parts.append(ed if "expurgate_doc" not in _disabled else _stub("nimm_expurgate_doc", "expurger un document"))
     ao = (
         "def nimm_audio_overview(content, voice1='', voice2='', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"content\": content, \"voice1\": voice1, \"voice2\": voice2, \"thread_id\": _tid}).encode()\n"

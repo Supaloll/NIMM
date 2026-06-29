@@ -471,6 +471,22 @@
                 </select>
             </div>
             <div class="setting-group">
+                <label for="gemini-tts-default-voice">Voix Gemini par défaut</label>
+                <select id="gemini-tts-default-voice" aria-label="Voix Gemini utilisée quand aucune voix n'est spécifiée">
+                    <option value="Kore">Kore (voix féminine, défaut)</option>
+                    <option value="Charon">Charon (voix masculine)</option>
+                    <option value="Aoede">Aoede (voix féminine douce)</option>
+                    <option value="Puck">Puck (voix masculine enjouée)</option>
+                    <option value="Fenrir">Fenrir (voix masculine grave)</option>
+                    <option value="Leda">Leda (voix féminine claire)</option>
+                    <option value="Orus">Orus (voix masculine posée)</option>
+                    <option value="Zephyr">Zephyr (voix lumineuse)</option>
+                </select>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                    Activée automatiquement quand aucune voix n'est choisie et que la clé Gemini est configurée.
+                </div>
+            </div>
+            <div class="setting-group">
                 <label for="gemini-tts-style">Style de lecture Gemini</label>
                 <input type="text" id="gemini-tts-style"
                     placeholder="Ex : Parle doucement, avec enthousiasme"
