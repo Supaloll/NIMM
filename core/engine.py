@@ -425,20 +425,28 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
 
 async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
     """Phase 1 Gemini : un appel avec outils. Émet soit un événement tool_calls,
-    soit le texte en tokens."""
+    soit le texte en tokens.
+    Si tools contient {'google_search': {}}, active le grounding natif Google Search."""
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
         raise ValueError("Clé API Gemini manquante.")
     model = model or 'gemini-3.5-flash'
 
+    # Détecter si on demande le grounding Google Search
+    _grounding = any(isinstance(t, dict) and 'google_search' in t for t in (tools or []))
+
     payload = {
         'contents': _oai_msgs_to_gemini(messages),
-        'tools':    _oai_tools_to_gemini(tools),
         'generationConfig': {
             'maxOutputTokens': max_tokens,
             'temperature':     temperature,
         }
     }
+    if _grounding:
+        # Google Search Grounding : incompatible avec functionDeclarations
+        payload['tools'] = [{'google_search': {}}]
+    else:
+        payload['tools'] = _oai_tools_to_gemini(tools)
     if system_prompt:
         payload['systemInstruction'] = {'parts': [{'text': system_prompt}]}
 
@@ -448,11 +456,33 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
             json=payload
         )
         r.raise_for_status()
-        data = r.json()
+        resp = r.json()
 
-    meta = data.get('usageMetadata', {})
+    meta = resp.get('usageMetadata', {})
     _log('gemini', model, meta.get('promptTokenCount', 0), meta.get('candidatesTokenCount', 0))
-    parts  = (data.get('candidates') or [{}])[0].get('content', {}).get('parts', []) or []
+    candidate = (resp.get('candidates') or [{}])[0]
+    parts  = candidate.get('content', {}).get('parts', []) or []
+    text   = ''.join(p.get('text', '') for p in parts if 'text' in p)
+
+    if _grounding:
+        # Extraire les sources depuis groundingMetadata
+        grounding_meta = candidate.get('groundingMetadata', {})
+        chunks = grounding_meta.get('groundingChunks', [])
+        queries = grounding_meta.get('webSearchQueries', [])
+        citations = [
+            {
+                'url':     c.get('web', {}).get('uri', ''),
+                'title':   c.get('web', {}).get('title', ''),
+                'snippet': '',
+                'query':   queries[0] if queries else '',
+            }
+            for c in chunks if c.get('web', {}).get('uri')
+        ]
+        if citations:
+            yield {'type': 'citations', 'citations': citations}
+        yield {'type': 'token', 'text': text}
+        return
+
     fcalls = [p['functionCall'] for p in parts if 'functionCall' in p]
     if fcalls:
         calls, oai_tcs = [], []
@@ -465,11 +495,9 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
                 'id': cid, 'type': 'function',
                 'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)}
             })
-        text = ''.join(p.get('text', '') for p in parts if 'text' in p)
         assistant_msg = {'role': 'assistant', 'content': text, 'tool_calls': oai_tcs}
         yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
     else:
-        text = ''.join(p.get('text', '') for p in parts if 'text' in p)
         yield {'type': 'token', 'text': text}
 
 
