@@ -989,6 +989,13 @@ async def call_llm_stream_with_tools(
                             if clean:
                                 yield {"type": "token", "text": clean}
 
+                    # ── Citations Mistral web search ──
+                    _cits = (data.get('citations') or
+                             choice.get('delta', {}).get('citations') or
+                             choice.get('message', {}).get('citations') or [])
+                    if _cits:
+                        yield {"type": "citations", "citations": _cits}
+
                     # ── Accumulation des tool_calls fragmentés ──
                     for tc in delta.get('tool_calls', []):
                         idx = tc.get('index', 0)

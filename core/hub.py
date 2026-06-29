@@ -2761,6 +2761,10 @@ async def process_message_stream(
                     for chunk in _flush_buf():
                         yield f"data: {chunk}\n\n"
 
+                elif event['type'] == 'citations':
+                    import json as _json_cit
+                    yield f"data: [CITATIONS]{_json_cit.dumps(event['citations'], ensure_ascii=False)}\n\n"
+
                 elif event['type'] == 'tool_calls':
                     # ── Exécution des outils demandés par le LLM ──
                     messages.append(event['assistant_msg'])
