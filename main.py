@@ -1947,6 +1947,7 @@ _COANIMM_TOOLS = [
     {"tool": "anonymize", "label": "Anonymiser un texte", "category": "Texte & langue"},
     {"tool": "expurgate_doc", "label": "Expurger un document entier", "category": "Documents"},
     {"tool": "ocr_document", "label": "OCR Mistral (PDF/image → texte structuré)", "category": "Documents"},
+    {"tool": "mistral_speak", "label": "Synthèse vocale Mistral (voix preset ou clonage)", "category": "Audio & voix"},
     {"tool": "codestral_fim", "label": "Compléter du code (Codestral FIM)", "category": "Code"},
     {"tool": "image", "label": "Génération d'image", "category": "Images"},
     {"tool": "coloring", "label": "Coloriage (enfants)", "category": "Images"},
@@ -4201,6 +4202,80 @@ async def mistral_batch_cancel(job_id: str):
         )
         r.raise_for_status()
     return {"status": "cancelled"}
+
+@app.get("/api/mistral/audio/voices")
+async def mistral_audio_voices():
+    """
+    Liste les voix préréglées Mistral Audio Speech (GET /v1/audio/voices).
+    """
+    import httpx as _httpx
+    from core.database import get_api_keys as _gak
+    _mkey = (_gak().get("mistral") or "").strip()
+    if not _mkey:
+        raise HTTPException(400, "Clé API Mistral non configurée.")
+    async with _httpx.AsyncClient(timeout=15) as _c:
+        _r = await _c.get(
+            "https://api.mistral.ai/v1/audio/voices",
+            headers={"Authorization": f"Bearer {_mkey}"}
+        )
+        if _r.status_code != 200:
+            raise HTTPException(_r.status_code, f"Mistral Voices : {_r.text[:200]}")
+    return _r.json()
+
+
+class MistralSpeakReq(BaseModel):
+    text: str
+    voice_id: str = ""
+    fmt: str = "mp3"
+    thread_id: str = ""
+
+@app.post("/api/mistral/audio/speak")
+async def mistral_audio_speak(
+    text: str = Form(...),
+    voice_id: str = Form(default=""),
+    fmt: str = Form(default="mp3"),
+    thread_id: str = Form(default=""),
+    ref_audio: UploadFile = File(None),
+):
+    """
+    TTS Mistral Audio Speech.
+    - Avec voice_id : utilise une voix préréglée Mistral.
+    - Avec ref_audio : clonage zero-shot (audio de référence encodé en base64).
+    Retourne le fichier audio (mp3 par défaut).
+    """
+    import base64 as _b64
+    from modules.tts import synthesize_mistral_speech
+    from core.database import get_api_keys as _gak2
+    _mkey2 = (_gak2().get("mistral") or "").strip()
+    if not _mkey2:
+        raise HTTPException(400, "Clé API Mistral non configurée.")
+    _ref_b64 = ""
+    if ref_audio and ref_audio.filename:
+        _ref_bytes = await ref_audio.read()
+        _ref_b64 = _b64.b64encode(_ref_bytes).decode()
+    import asyncio as _aio
+    try:
+        _audio = await _aio.get_event_loop().run_in_executor(
+            None,
+            lambda: synthesize_mistral_speech(
+                text, voice_id=voice_id, ref_audio_b64=_ref_b64,
+                fmt=fmt, api_key=_mkey2
+            )
+        )
+    except Exception as _e:
+        raise HTTPException(500, f"Erreur TTS Mistral : {_e}")
+    if not _audio:
+        raise HTTPException(500, "Pas de données audio.")
+    _mime = "audio/mpeg" if fmt in ("mp3", "opus") else f"audio/{fmt}"
+    _ext = fmt if fmt in ("mp3", "wav", "flac", "opus", "pcm") else "mp3"
+    _fname = f"mistral_speech.{_ext}"
+    from fastapi.responses import Response as _Resp
+    return _Resp(
+        content=_audio,
+        media_type=_mime,
+        headers={"Content-Disposition": f'attachment; filename="{_fname}"'},
+    )
+
 
 @app.post("/api/mistral/audio_analyze")
 async def mistral_audio_analyze(file: UploadFile = File(...), prompt: str = Form(default="")):

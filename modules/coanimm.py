@@ -172,6 +172,8 @@ GENERATE_SYSTEM_PROMPT = (
     "  Lit un fichier CSV/TSV et le renvoie en tableau Markdown lisible.\n"
     "  nimm_ocr_document(path: str = '', url: str = '') -> str\n"
     "  Extrait le texte d'un PDF ou d'une image via Mistral OCR (mistral-ocr-latest) en préservant la structure (titres, tableaux, formules). Retourne le texte en Markdown.\n"
+    "  nimm_mistral_speak(text: str, voice_id: str = '', ref_audio_path: str = '') -> str\n"
+    "  Synthèse vocale Mistral : voix préréglée (voice_id) ou clonage zero-shot (ref_audio_path = chemin d'un fichier audio). Retourne le chemin du fichier audio produit.\n"
     "  nimm_audio_overview(content: str, voice1: str = '', voice2: str = '') -> str\n"
     "  Crée un RÉSUMÉ AUDIO façon podcast : génère un dialogue à 2 voix sur le contenu puis le synthétise (Gemini TTS). Retourne le chemin du fichier audio.\n"
     "  nimm_list_voices() -> list\n"
@@ -189,7 +191,7 @@ GENERATE_SYSTEM_PROMPT = (
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
     "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
-    "nimm_make_daisy, nimm_list_voices, nimm_ocr_document) : "
+    "nimm_make_daisy, nimm_list_voices, nimm_ocr_document, nimm_mistral_speak) : "
     "ils sont déjà présents dans l'environnement."
 )
 
@@ -616,6 +618,38 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "            return _j_ocr.loads(_rr2.read()).get('text', '')\n"
     ) % tid
     parts.append(ocr if "ocr_document" not in _disabled else _stub("nimm_ocr_document", "OCR Mistral (PDF/image)"))
+    mspk = (
+        "def nimm_mistral_speak(text, voice_id='', ref_audio_path='', _tid='%s'):\n"
+        "    import urllib.request as _ur_ms, urllib.parse as _up_ms, json as _j_ms, os as _os_ms\n"
+        "    _fields = [('text', text), ('voice_id', voice_id), ('fmt', 'mp3'), ('thread_id', _tid)]\n"
+        "    if ref_audio_path and _os_ms.path.isfile(ref_audio_path):\n"
+        "        import base64 as _b64_ms\n"
+        "        _ref = _b64_ms.b64encode(open(ref_audio_path, 'rb').read()).decode()\n"
+        "        boundary = b'----NimmMsSpeakBnd'\n"
+        "        _bname = _os_ms.path.basename(ref_audio_path)\n"
+        "        _ext_ms = _os_ms.path.splitext(ref_audio_path)[1].lower().lstrip('.') or 'wav'\n"
+        "        _mime_ms = f'audio/{_ext_ms}'\n"
+        "        _raw_ref = open(ref_audio_path, 'rb').read()\n"
+        "        _body_ms = (b'--' + boundary + b'\r\n'\n"
+        "            + f'Content-Disposition: form-data; name=\"text\"\r\n\r\n'.encode() + text.encode() + b'\r\n'\n"
+        "            + b'--' + boundary + b'\r\n'\n"
+        "            + f'Content-Disposition: form-data; name=\"ref_audio\"; filename=\"{_bname}\"\r\n'.encode()\n"
+        "            + f'Content-Type: {_mime_ms}\r\n\r\n'.encode() + _raw_ref + b'\r\n'\n"
+        "            + b'--' + boundary + b'--\r\n')\n"
+        "        _req_ms = _ur_ms.Request('http://localhost:8080/api/mistral/audio/speak',\n"
+        "            data=_body_ms, headers={'Content-Type': f'multipart/form-data; boundary={boundary.decode()}'])\n"
+        "    else:\n"
+        "        _data_ms = _up_ms.urlencode(dict(_fields)).encode()\n"
+        "        _req_ms = _ur_ms.Request('http://localhost:8080/api/mistral/audio/speak',\n"
+        "            data=_data_ms, headers={'Content-Type': 'application/x-www-form-urlencoded'})\n"
+        "    with _ur_ms.urlopen(_req_ms, timeout=60) as _rms:\n"
+        "        _audio_ms = _rms.read()\n"
+        "    import tempfile as _tf_ms\n"
+        "    _out_ms = _tf_ms.NamedTemporaryFile(suffix='.mp3', delete=False)\n"
+        "    _out_ms.write(_audio_ms); _out_ms.close()\n"
+        "    return _out_ms.name\n"
+    ) % tid
+    parts.append(mspk if "mistral_speak" not in _disabled else _stub("nimm_mistral_speak", "synthese vocale Mistral"))
     ao = (
         "def nimm_audio_overview(content, voice1='', voice2='', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"content\": content, \"voice1\": voice1, \"voice2\": voice2, \"thread_id\": _tid}).encode()\n"

@@ -127,7 +127,7 @@ _CAP_IMPORTS = {
 _CAP_HELPER_CALLS = {
     'nimm_web_search': 'recherche', 'nimm_github_search': 'recherche',
     'nimm_search_documents': 'recherche', 'nimm_read_url': 'recherche',
-    'nimm_ask_llm': 'recherche', 'nimm_translate': 'recherche', 'nimm_expurgate': 'recherche', 'nimm_expurgate_doc': 'recherche', 'nimm_codestral_fim': 'recherche', 'nimm_ocr_document': 'recherche',
+    'nimm_ask_llm': 'recherche', 'nimm_translate': 'recherche', 'nimm_expurgate': 'recherche', 'nimm_expurgate_doc': 'recherche', 'nimm_codestral_fim': 'recherche', 'nimm_ocr_document': 'recherche', 'nimm_mistral_speak': 'recherche',
     'nimm_describe_image': 'recherche', 'nimm_simplify': 'recherche', 'nimm_anonymize': 'recherche',
     'nimm_audio_overview': 'recherche',
     'nimm_generate_image': 'image', 'nimm_coloring_page': 'image',
