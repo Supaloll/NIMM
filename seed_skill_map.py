@@ -31,7 +31,7 @@ SKILL_LABEL = "Plan de trajet pédestre sur fond OpenStreetMap"
 
 SKILL_TEXT = """Quand utiliser ce skill : quand l'utilisateur décrit un trajet à pied et veut
 un plan cartographique — avec des tracés colorés, les vrais noms de rue, ses annotations
-personnelles (quel trottoir emprunter, où traverser, quels repères). Exportable en PDF.
+personnelles (quel trottoir emprunter, où traverser, quels repères). Exportable en HTML interactif (Leaflet/OpenStreetMap) ou PDF statique.
 
 Méthode :
 
@@ -63,11 +63,11 @@ Méthode :
        city="Paris, France",
        waypoints=waypoints,
        route_segments=route_segments,
-       output_format="pdf",
+       output_format="html",  # html = carte interactive Leaflet + texte accessible
    )
 
 5. Présenter le résultat :
-   - Lire le retour de nimm_generate_map et rapporter le chemin du PDF généré.
+   - Lire le retour de nimm_generate_map et rapporter le chemin du fichier HTML généré.
    - Lire la liste des waypoints géocodés pour confirmer que chaque adresse a bien
      été trouvée dans OpenStreetMap.
    - Si une adresse n'a pas été trouvée, le signaler clairement et proposer des
@@ -91,7 +91,7 @@ Règles importantes :
 SKILL_META = {
     "description": (
         "Générer un plan de trajet pédestre sur fond OpenStreetMap réel, "
-        "avec tracés colorés, annotations personnelles et export PDF."
+        "avec tracés colorés, annotations personnelles et export HTML interactif (ou PDF)."
     ),
     "mots_cles": [
         "plan", "carte", "trajet", "pied", "piéton", "itinéraire", "chemin",

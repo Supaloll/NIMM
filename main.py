@@ -1853,7 +1853,7 @@ class CoanimmMapRequest(BaseModel):
     city: str = "Paris, France"
     waypoints: list  # [{address, lat, lon, annotation, color, symbol}]
     route_segments: list = []  # [{from_idx, to_idx, color, label}]
-    output_format: str = "pdf"  # pdf ou html
+    output_format: str = "html"  # html (interactif) ou pdf (statique)
 
 @app.post("/api/coanimm/generate_map")
 async def coanimm_generate_map(req: CoanimmMapRequest):
@@ -1863,18 +1863,12 @@ async def coanimm_generate_map(req: CoanimmMapRequest):
     import tempfile, os, math
     try:
         import osmnx as ox
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
-        import contextily as ctx
+        import networkx as nx
+        import folium
         from geopy.geocoders import Nominatim
         from geopy.exc import GeocoderTimedOut
-        import geopandas as gpd
-        from shapely.geometry import LineString, Point
-        import networkx as nx
     except ImportError as e:
-        return {"status": "error", "result": f"Dépendance manquante : {e}. Installez : pip install osmnx folium contextily geopandas matplotlib geopy --break-system-packages"}
+        return {"status": "error", "result": f"Dépendance manquante : {e}. Installez : pip install osmnx folium geopy --break-system-packages"}
 
     geocoder = Nominatim(user_agent="nimm-map/1.0")
     waypoints = req.waypoints or []
@@ -1934,93 +1928,159 @@ async def coanimm_generate_map(req: CoanimmMapRequest):
         except nx.NetworkXNoPath:
             route_edges.append(None)
 
-    # ── 4. Rendu matplotlib ──
-    fig, ax = plt.subplots(figsize=(12, 10))
-    fig.patch.set_facecolor("white")
-
-    # Réseau de fond (gris clair)
-    ox.plot_graph(G, ax=ax, show=False, close=False,
-                  node_size=0, edge_color="#cccccc", edge_linewidth=0.5, bgcolor="white")
-
-    # Segments de trajet
+    # ── 4. Rendu ──
     COLORS = ["#e74c3c", "#2980b9", "#27ae60", "#8e44ad", "#e67e22"]
     seg_defs = req.route_segments or [{"from_idx": i, "to_idx": i+1,
                                         "color": COLORS[i % len(COLORS)], "label": f"Segment {i+1}"}
                                        for i in range(len(resolved)-1)]
-    legend_patches = []
-    for seg in seg_defs:
-        fi = seg.get("from_idx", 0)
-        ti = seg.get("to_idx", fi + 1)
-        color = seg.get("color", "#e74c3c")
-        label = seg.get("label", f"Segment {fi+1}→{ti+1}")
-        if fi < len(route_edges) and route_edges[fi]:
-            path = route_edges[fi]
-            xs = [G.nodes[n]["x"] for n in path]
-            ys = [G.nodes[n]["y"] for n in path]
-            ax.plot(xs, ys, color=color, linewidth=3.5, zorder=4, solid_capstyle="round")
-            legend_patches.append(mpatches.Patch(color=color, label=label))
 
-    # Fond de carte OSM
-    try:
-        ctx.add_basemap(ax, crs="EPSG:4326", source=ctx.providers.OpenStreetMap.Mapnik, zoom="auto")
-    except Exception:
-        pass  # Fond de carte optionnel (pas de connexion → carte sans fond)
-
-    # Marqueurs waypoints
-    SYMBOLS = ["●", "▲", "■", "★", "◆"]
-    for i, wp in enumerate(resolved):
-        sym = wp.get("symbol", SYMBOLS[i % len(SYMBOLS)])
-        ann = wp.get("annotation", wp.get("address", f"Point {i+1}"))
-        color = wp.get("color", "#2c3e50")
-        ax.plot(wp["lon"], wp["lat"], "o", color=color, markersize=10, zorder=6, markeredgecolor="white", markeredgewidth=1.5)
-        ax.annotate(f"{i+1}. {ann}",
-                    xy=(wp["lon"], wp["lat"]),
-                    xytext=(8, 8), textcoords="offset points",
-                    fontsize=8, color="#1a1a1a",
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85, edgecolor="#cccccc"),
-                    zorder=7)
-
-    # Titre et légende
-    ax.set_title(req.title, fontsize=14, fontweight="bold", pad=12)
-    ax.set_xlabel("Longitude", fontsize=8, color="#666666")
-    ax.set_ylabel("Latitude", fontsize=8, color="#666666")
-    if legend_patches:
-        ax.legend(handles=legend_patches, loc="lower right", fontsize=9,
-                  framealpha=0.9, edgecolor="#cccccc")
-
-    # Note de bas de page
-    fig.text(0.01, 0.01,
-             "Fond de carte © OpenStreetMap contributors — réseau pédestre OSM",
-             fontsize=7, color="#888888")
-
-    # ── 5. Export ──
     out_dir = "/tmp/nimm_maps"
     os.makedirs(out_dir, exist_ok=True)
     import time, hashlib
     slug = hashlib.md5(req.title.encode()).hexdigest()[:8]
     fname = f"trajet_{slug}_{int(time.time())}"
-    pdf_path = f"{out_dir}/{fname}.pdf"
-    png_path = f"{out_dir}/{fname}.png"
 
-    plt.tight_layout()
-    plt.savefig(pdf_path, format="pdf", dpi=150, bbox_inches="tight")
-    plt.savefig(png_path, format="png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-    # Résumé textuel (accessible)
-    lines = [f"Plan généré : {req.title}", f"Ville : {req.city}", ""]
-    lines.append("Waypoints :")
+    # ── 5. Export HTML (folium — Leaflet interactif) ──
+    # Résumé textuel accessible (commun aux deux formats)
+    text_lines = [f"Plan généré : {req.title}", f"Ville : {req.city}", ""]
+    text_lines.append("Étapes :")
     for i, wp in enumerate(resolved):
-        lines.append(f"  {i+1}. {wp.get('address','?')} ({wp['lat']:.5f}, {wp['lon']:.5f})")
+        text_lines.append(f"  {i+1}. {wp.get('address','?')}")
         if wp.get("annotation"):
-            lines.append(f"     → {wp['annotation']}")
+            text_lines.append(f"     → {wp['annotation']}")
     if any(e is None for e in route_edges):
-        lines.append("")
-        lines.append("⚠ Certains segments n'ont pas pu être tracés sur le réseau pédestre (réseau OSM incomplet dans cette zone).")
-    lines.append(f"")
-    lines.append(f"Fichier PDF : {pdf_path}")
-    lines.append(f"Fichier PNG : {png_path}")
-    return {"status": "ok", "result": "\n".join(lines), "pdf_path": pdf_path, "png_path": png_path}
+        text_lines.append("")
+        text_lines.append("Attention : certains segments n'ont pas pu être tracés sur le réseau pédestre (réseau OSM incomplet dans cette zone).")
+
+    if req.output_format == "pdf":
+        # Rendu PDF avec matplotlib (fallback)
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as mpatches
+            import contextily as ctx
+        except ImportError as e:
+            return {"status": "error", "result": f"Dépendance matplotlib manquante pour le PDF : {e}"}
+
+        fig, ax = plt.subplots(figsize=(12, 10))
+        fig.patch.set_facecolor("white")
+        ox.plot_graph(G, ax=ax, show=False, close=False,
+                      node_size=0, edge_color="#cccccc", edge_linewidth=0.5, bgcolor="white")
+        legend_patches = []
+        for seg in seg_defs:
+            fi = seg.get("from_idx", 0)
+            color = seg.get("color", "#e74c3c")
+            label = seg.get("label", f"Segment {fi+1}")
+            if fi < len(route_edges) and route_edges[fi]:
+                path_nodes = route_edges[fi]
+                xs = [G.nodes[n]["x"] for n in path_nodes]
+                ys = [G.nodes[n]["y"] for n in path_nodes]
+                ax.plot(xs, ys, color=color, linewidth=3.5, zorder=4, solid_capstyle="round")
+                legend_patches.append(mpatches.Patch(color=color, label=label))
+        try:
+            ctx.add_basemap(ax, crs="EPSG:4326", source=ctx.providers.OpenStreetMap.Mapnik, zoom="auto")
+        except Exception:
+            pass
+        for i, wp in enumerate(resolved):
+            ann = wp.get("annotation", wp.get("address", f"Point {i+1}"))
+            color = wp.get("color", "#2c3e50")
+            ax.plot(wp["lon"], wp["lat"], "o", color=color, markersize=10, zorder=6,
+                    markeredgecolor="white", markeredgewidth=1.5)
+            ax.annotate(f"{i+1}. {ann}", xy=(wp["lon"], wp["lat"]),
+                        xytext=(8, 8), textcoords="offset points", fontsize=8, color="#1a1a1a",
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85, edgecolor="#cccccc"),
+                        zorder=7)
+        ax.set_title(req.title, fontsize=14, fontweight="bold", pad=12)
+        if legend_patches:
+            ax.legend(handles=legend_patches, loc="lower right", fontsize=9, framealpha=0.9)
+        fig.text(0.01, 0.01, "Fond de carte © OpenStreetMap contributors", fontsize=7, color="#888888")
+        pdf_path = f"{out_dir}/{fname}.pdf"
+        plt.tight_layout()
+        plt.savefig(pdf_path, format="pdf", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        text_lines.append(f"\nFichier PDF : {pdf_path}")
+        return {"status": "ok", "result": "\n".join(text_lines), "pdf_path": pdf_path}
+
+    else:
+        # Rendu HTML interactif avec folium + Leaflet
+        m = folium.Map(location=[center[0], center[1]], zoom_start=16, tiles="OpenStreetMap")
+
+        # Tracé des segments
+        for seg in seg_defs:
+            fi = seg.get("from_idx", 0)
+            color = seg.get("color", "#e74c3c")
+            label = seg.get("label", f"Segment {fi+1}")
+            if fi < len(route_edges) and route_edges[fi]:
+                path_nodes = route_edges[fi]
+                coords = [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in path_nodes]
+                folium.PolyLine(
+                    coords, color=color, weight=6, opacity=0.85,
+                    tooltip=label
+                ).add_to(m)
+
+        # Marqueurs waypoints
+        MARKER_COLORS = ["red", "blue", "green", "purple", "orange", "darkred", "darkblue"]
+        for i, wp in enumerate(resolved):
+            ann = wp.get("annotation", "")
+            addr = wp.get("address", f"Point {i+1}")
+            popup_html = f"<b>{i+1}. {addr}</b>"
+            if ann:
+                popup_html += f"<br><i>{ann}</i>"
+            marker_color = MARKER_COLORS[i % len(MARKER_COLORS)]
+            if i == 0:
+                marker_color = "green"
+            elif i == len(resolved) - 1:
+                marker_color = "red"
+            folium.Marker(
+                location=[wp["lat"], wp["lon"]],
+                popup=folium.Popup(popup_html, max_width=280),
+                tooltip=f"{i+1}. {ann or addr}",
+                icon=folium.Icon(color=marker_color, icon="circle", prefix="fa")
+            ).add_to(m)
+
+        # Section texte accessible injectée dans l'HTML
+        accessible_section = """
+<div id="accessible-summary" style="font-family:Arial,sans-serif;max-width:800px;margin:20px auto;padding:16px;border:1px solid #ccc;border-radius:6px;background:#f9f9f9;">
+  <h2 style="font-size:1.1rem;margin-top:0;">{title}</h2>
+  <p style="color:#555;font-size:0.9rem;">Carte interactive OpenStreetMap. Les étapes ci-dessous sont lisibles par un lecteur d'écran.</p>
+  <ol style="font-size:0.95rem;line-height:1.8;">
+{items}
+  </ol>
+  <p style="font-size:0.8rem;color:#888;margin-bottom:0;">Fond de carte © OpenStreetMap contributors. Réseau pédestre réel.</p>
+</div>""".format(
+            title=req.title,
+            items="\n".join(
+                f'    <li><strong>{wp.get("address","?")}</strong>'
+                + (f' — {wp["annotation"]}' if wp.get("annotation") else "")
+                + "</li>"
+                for wp in resolved
+            )
+        )
+
+        html_path = f"{out_dir}/{fname}.html"
+        map_html = m._repr_html_()
+        full_html = f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{req.title}</title>
+</head>
+<body>
+{accessible_section}
+<div style="margin:0 auto;max-width:1000px;">
+{map_html}
+</div>
+</body>
+</html>"""
+        with open(html_path, "w", encoding="utf-8") as fh:
+            fh.write(full_html)
+
+        text_lines.append(f"\nFichier HTML : {html_path}")
+        text_lines.append("Ouvrez ce fichier dans un navigateur pour voir la carte interactive.")
+        text_lines.append("La section texte en haut du fichier liste toutes les étapes pour votre lecteur d'écran.")
+        return {"status": "ok", "result": "\n".join(text_lines), "html_path": html_path}
 
 class CoanimmPathRequest(BaseModel):
     path: str
