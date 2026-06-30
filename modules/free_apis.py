@@ -402,3 +402,285 @@ async def search_commune(query: str) -> str:
             f"  {c.get('nom','?')} ({cp}) — dép. {c.get('codeDepartement','?')} — {pop_str} hab."
         )
     return '\n'.join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9. ACCESSIBILITÉ DES LIEUX — Acceslibre (beta.gouv.fr)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_ACCESLIBRE_BOOL = {
+    True:  'oui',
+    False: 'non',
+    None:  'non renseigné',
+}
+
+def _fmt_bool(val):
+    return _ACCESLIBRE_BOOL.get(val, 'non renseigné' if val is None else str(val))
+
+
+async def search_acceslibre(name: str = '', city: str = '', activity: str = '') -> str:
+    """Recherche l'accessibilité d'un lieu (ERP) via Acceslibre."""
+    params = {'limit': 8, 'page_size': 8}
+    if name:     params['nom']      = name
+    if city:     params['commune']  = city
+    if activity: params['activite'] = activity
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS) as client:
+        r = await client.get('https://acceslibre.beta.gouv.fr/api/erps/', params=params)
+        r.raise_for_status()
+        data = r.json()
+
+    results = data.get('results', [])
+    count   = data.get('count', 0)
+    if not results:
+        return f"Aucun établissement trouvé (nom={name!r}, ville={city!r}, activité={activity!r})."
+
+    lines = [f"Accessibilité — {count} résultat(s) (affichage des {len(results)} premiers) :"]
+    for e in results:
+        acc  = e.get('accessibilite', {}) or {}
+        nom  = e.get('nom', '?')
+        adr  = ', '.join(filter(None, [
+            e.get('adresse', ''),
+            e.get('code_postal', ''),
+            e.get('commune', ''),
+        ]))
+        act  = e.get('activite', {})
+        act_nom = act.get('nom', '') if isinstance(act, dict) else str(act)
+
+        # Entrée
+        entree = acc.get('entree', {}) or {}
+        plain_pied   = _fmt_bool(entree.get('plain_pied'))
+        largeur_mini = entree.get('largeur_mini')
+        rampe        = _fmt_bool(entree.get('rampe'))
+        audio        = _fmt_bool(entree.get('dispositif_appel_type') or entree.get('interphone'))
+
+        # Stationnement
+        stat = acc.get('stationnement', {}) or {}
+        pmr_parking = _fmt_bool(stat.get('stationnement_pmr') or stat.get('presence'))
+
+        # Cheminement intérieur
+        chemin = acc.get('cheminement_ext', {}) or {}
+        guidage = _fmt_bool(chemin.get('bande_guidage'))
+
+        # Personnel
+        perso = acc.get('personnel', {}) or {}
+        formation = _fmt_bool(perso.get('personnels_formes'))
+
+        lines += [
+            f"\n  {nom} ({act_nom})",
+            f"  {adr}",
+            f"  Entrée plain-pied : {plain_pied}"
+            + (f"  •  Largeur min. : {largeur_mini} cm" if largeur_mini else ''),
+            f"  Rampe : {rampe}  •  Interphone/appel : {audio}",
+            f"  Parking PMR : {pmr_parking}  •  Bande de guidage : {guidage}",
+            f"  Personnel formé accessibilité : {formation}",
+        ]
+        url_slug = e.get('slug') or e.get('uuid') or ''
+        if url_slug:
+            lines.append(f"  Fiche complète : https://acceslibre.beta.gouv.fr/app/{url_slug}/")
+
+    return '\n'.join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 10. PRODUIT ALIMENTAIRE — OpenFoodFacts
+# ══════════════════════════════════════════════════════════════════════════════
+
+_NUTRISCORE_LABEL = {'a': 'A (excellent)', 'b': 'B (bon)', 'c': 'C (moyen)',
+                     'd': 'D (médiocre)', 'e': 'E (mauvais)'}
+_NOVA_LABEL = {1: '1 — aliments non transformés', 2: '2 — ingrédients culinaires',
+               3: '3 — aliments transformés', 4: '4 — ultra-transformés'}
+
+
+async def search_food_product(query: str) -> str:
+    """Recherche un produit alimentaire par nom ou code-barres (OpenFoodFacts)."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT, headers={
+        **_HEADERS, 'User-Agent': 'NIMM-assistant/1.0 (contact: nimm@local) - OpenFoodFacts'
+    }) as client:
+        # Détection code-barres (8 à 14 chiffres)
+        barcode = query.strip().replace(' ', '')
+        if barcode.isdigit() and 8 <= len(barcode) <= 14:
+            r = await client.get(
+                f'https://world.openfoodfacts.org/api/v2/product/{barcode}.json',
+                params={'fields': 'product_name,brands,quantity,nutriscore_grade,nova_group,nutriments,allergens_tags,ingredients_text,categories_tags,labels_tags,stores_tags'},
+            )
+            r.raise_for_status()
+            data = r.json()
+            if data.get('status') == 0:
+                return f"Produit introuvable pour le code-barres {barcode}."
+            return _format_food_product(data.get('product', {}), barcode)
+
+        # Recherche par nom
+        r = await client.get(
+            'https://world.openfoodfacts.org/cgi/search.pl',
+            params={
+                'search_terms': query, 'json': 1, 'page_size': 5,
+                'fields': 'product_name,brands,quantity,nutriscore_grade,nova_group,nutriments,allergens_tags,code',
+                'sort_by': 'unique_scans_n',
+            },
+        )
+        r.raise_for_status()
+        products = r.json().get('products', [])
+
+    if not products:
+        return f"Aucun produit trouvé pour : {query}"
+
+    lines = [f"Produits alimentaires pour « {query} » :"]
+    for p in products[:5]:
+        ns  = _NUTRISCORE_LABEL.get((p.get('nutriscore_grade') or '').lower(), '?')
+        nova = _NOVA_LABEL.get(p.get('nova_group'), '?')
+        lines.append(
+            f"\n  {p.get('product_name', '?')} — {p.get('brands', '?')} ({p.get('quantity', '?')})"
+            f"\n  Nutri-Score : {ns}  •  NOVA : {nova}"
+            f"\n  Code-barres : {p.get('code', '?')}"
+        )
+    return '\n'.join(lines)
+
+
+def _format_food_product(p: dict, barcode: str = '') -> str:
+    """Formate les détails d'un produit OpenFoodFacts."""
+    name   = p.get('product_name') or '?'
+    brand  = p.get('brands', '?')
+    qty    = p.get('quantity', '?')
+    ns     = _NUTRISCORE_LABEL.get((p.get('nutriscore_grade') or '').lower(), 'non renseigné')
+    nova   = _NOVA_LABEL.get(p.get('nova_group'), 'non renseigné')
+    ingr   = (p.get('ingredients_text') or '').strip()
+    allergens = ', '.join(
+        a.replace('en:', '').replace('fr:', '') for a in (p.get('allergens_tags') or [])
+    ) or 'non renseignés'
+    labels = ', '.join(
+        lb.replace('en:', '').replace('fr:', '') for lb in (p.get('labels_tags') or [])[:6]
+    ) or ''
+
+    nut = p.get('nutriments', {}) or {}
+    lines = [
+        f"{name} — {brand} ({qty})",
+        f"  Code-barres : {barcode}" if barcode else '',
+        f"  Nutri-Score : {ns}",
+        f"  Groupe NOVA : {nova}",
+        f"  Allergènes : {allergens}",
+    ]
+    if labels:
+        lines.append(f"  Labels : {labels}")
+    if ingr:
+        lines.append(f"  Ingrédients : {ingr[:500]}{'…' if len(ingr) > 500 else ''}")
+
+    # Valeurs nutritionnelles pour 100 g
+    n100 = [
+        ('Énergie', f"{nut.get('energy-kcal_100g', '?')} kcal"),
+        ('Graisses', f"{nut.get('fat_100g', '?')} g"),
+        ('  dont saturées', f"{nut.get('saturated-fat_100g', '?')} g"),
+        ('Glucides', f"{nut.get('carbohydrates_100g', '?')} g"),
+        ('  dont sucres', f"{nut.get('sugars_100g', '?')} g"),
+        ('Fibres', f"{nut.get('fiber_100g', '?')} g"),
+        ('Protéines', f"{nut.get('proteins_100g', '?')} g"),
+        ('Sel', f"{nut.get('salt_100g', '?')} g"),
+    ]
+    lines.append("  Valeurs nutritionnelles (pour 100 g) :")
+    for label, val in n100:
+        if val != '? g' and val != '? kcal':
+            lines.append(f"    {label} : {val}")
+    return '\n'.join(l for l in lines if l)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 11. RECETTES — TheMealDB (free tier, no key)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_MEALDB_BASE = 'https://www.themealdb.com/api/json/v1/1'
+
+
+async def search_recipe(query: str = '', ingredient: str = '',
+                        category: str = '', area: str = '',
+                        random: bool = False) -> str:
+    """Recherche une recette de cuisine (TheMealDB)."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS) as client:
+        if random:
+            r = await client.get(f'{_MEALDB_BASE}/random.php')
+            r.raise_for_status()
+            meals = r.json().get('meals') or []
+            if not meals:
+                return 'Aucune recette trouvée.'
+            return _format_meal(meals[0])
+
+        if ingredient:
+            r = await client.get(f'{_MEALDB_BASE}/filter.php', params={'i': ingredient})
+            r.raise_for_status()
+            meals = r.json().get('meals') or []
+            if not meals:
+                return f"Aucune recette avec l'ingrédient : {ingredient}"
+            lines = [f"Recettes avec « {ingredient} » ({len(meals)} résultat(s)) :"]
+            for m in meals[:8]:
+                lines.append(f"  • {m.get('strMeal', '?')} (id: {m.get('idMeal', '?')})")
+            lines.append("\nDemande les détails d'une recette par son nom pour voir la recette complète.")
+            return '\n'.join(lines)
+
+        if category:
+            r = await client.get(f'{_MEALDB_BASE}/filter.php', params={'c': category})
+            r.raise_for_status()
+            meals = r.json().get('meals') or []
+            if not meals:
+                return f"Aucune recette dans la catégorie : {category}"
+            lines = [f"Recettes — catégorie « {category} » ({len(meals)} résultat(s)) :"]
+            for m in meals[:8]:
+                lines.append(f"  • {m.get('strMeal', '?')}")
+            return '\n'.join(lines)
+
+        if area:
+            r = await client.get(f'{_MEALDB_BASE}/filter.php', params={'a': area})
+            r.raise_for_status()
+            meals = r.json().get('meals') or []
+            if not meals:
+                return f"Aucune recette de cuisine {area}"
+            lines = [f"Recettes — cuisine « {area} » ({len(meals)} résultat(s)) :"]
+            for m in meals[:8]:
+                lines.append(f"  • {m.get('strMeal', '?')}")
+            return '\n'.join(lines)
+
+        # Recherche par nom (défaut)
+        r = await client.get(f'{_MEALDB_BASE}/search.php', params={'s': query or ''})
+        r.raise_for_status()
+        meals = r.json().get('meals') or []
+        if not meals:
+            return f"Aucune recette trouvée pour : {query}"
+        if len(meals) == 1:
+            return _format_meal(meals[0])
+        lines = [f"Recettes pour « {query} » ({len(meals)} résultat(s)) :"]
+        for m in meals[:6]:
+            lines.append(f"  • {m.get('strMeal', '?')} ({m.get('strArea', '?')} — {m.get('strCategory', '?')})")
+        lines.append("\nDemande la recette complète par son nom exact pour voir les détails.")
+        return '\n'.join(lines)
+
+
+def _format_meal(m: dict) -> str:
+    """Formate une recette TheMealDB de façon accessible."""
+    name     = m.get('strMeal', '?')
+    category = m.get('strCategory', '?')
+    area     = m.get('strArea', '?')
+    instructions = (m.get('strInstructions') or '').strip()
+    youtube  = m.get('strYoutube', '')
+    source   = m.get('strSource', '')
+
+    # Ingrédients + mesures (jusqu'à 20)
+    ingredients = []
+    for i in range(1, 21):
+        ing = (m.get(f'strIngredient{i}') or '').strip()
+        msr = (m.get(f'strMeasure{i}') or '').strip()
+        if ing:
+            ingredients.append(f"{msr} {ing}".strip() if msr else ing)
+
+    lines = [
+        f"Recette : {name}",
+        f"  Catégorie : {category}  •  Cuisine : {area}",
+        "",
+        "Ingrédients :",
+    ] + [f"  • {ing}" for ing in ingredients] + [
+        "",
+        "Préparation :",
+        instructions[:3000] + ('…' if len(instructions) > 3000 else ''),
+    ]
+    if youtube:
+        lines += ["", f"Vidéo YouTube : {youtube}"]
+    if source:
+        lines += [f"Source : {source}"]
+    return '\n'.join(lines)

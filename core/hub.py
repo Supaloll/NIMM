@@ -1513,6 +1513,73 @@ NIMM_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_acceslibre",
+            "description": (
+                "Recherche l'accessibilite d'un lieu public (ERP : magasin, mairie, medecin, "
+                "restaurant, musee...) via Acceslibre. Retourne : plain-pied, rampe, "
+                "largeur de porte, interphone, parking PMR, bande de guidage, personnel forme. "
+                "Utilise cet outil quand l'utilisateur demande si un lieu est accessible, "
+                "adapte aux personnes handicapees, ou cherche un etablissement accessible."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name":     {"type": "string", "description": "Nom de l'etablissement (ex. Mairie de Lyon, Leclerc)"},
+                    "city":     {"type": "string", "description": "Ville ou commune"},
+                    "activity": {"type": "string", "description": "Type d'activite (ex. restaurant, medecin, pharmacie, mairie)"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_food_product",
+            "description": (
+                "Recherche les informations nutritionnelles d'un produit alimentaire "
+                "par son nom ou son code-barres (EAN/UPC). "
+                "Retourne : Nutri-Score, groupe NOVA, allergenes, ingredients, "
+                "valeurs nutritionnelles pour 100 g (calories, graisses, glucides, proteines, sel). "
+                "Utilise cet outil quand l'utilisateur pose une question sur un aliment, "
+                "un produit de supermarche, ou veut connaitre la composition d'un produit."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Nom du produit (ex. Nutella, yaourt nature Danone) ou code-barres EAN (ex. 3017620422003)"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_recipe",
+            "description": (
+                "Recherche une recette de cuisine. "
+                "Peut chercher par nom de plat, par ingredient principal, par categorie "
+                "(Beef, Chicken, Seafood, Pasta, Dessert...) ou par cuisine (French, Italian, "
+                "Japanese, Moroccan...). Peut aussi retourner une recette aleatoire. "
+                "Retourne : ingredients, mesures, etapes de preparation detaillees."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query":      {"type": "string",  "description": "Nom du plat a rechercher (ex. poulet roti, tarte tatin, pasta carbonara)"},
+                    "ingredient": {"type": "string",  "description": "Ingredient principal (ex. poulet, saumon, tomate)"},
+                    "category":   {"type": "string",  "description": "Categorie : Beef, Chicken, Dessert, Lamb, Miscellaneous, Pasta, Pork, Seafood, Side, Starter, Vegan, Vegetarian, Breakfast, Goat"},
+                    "area":       {"type": "string",  "description": "Cuisine : American, British, Canadian, Chinese, Dutch, Egyptian, French, Greek, Indian, Irish, Italian, Jamaican, Japanese, Kenyan, Malaysian, Mexican, Moroccan, Polish, Portuguese, Russian, Spanish, Thai, Tunisian, Turkish, Vietnamese"},
+                    "random":     {"type": "boolean", "description": "True pour obtenir une recette aleatoire"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_weather",
             "description": (
                 "Donne la meteo actuelle et les previsions sur 3 jours pour une ville. "
@@ -1945,6 +2012,52 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             return '[Erreur lors de la recherche de skills]'
 
     # ── Services libres (free_apis.py) ──
+
+    elif name == 'search_acceslibre':
+        e_name     = args.get('name', '').strip()
+        e_city     = args.get('city', '').strip()
+        e_activity = args.get('activity', '').strip()
+        if not (e_name or e_city or e_activity):
+            e_name = query  # fallback : query contient le nom
+        try:
+            from modules.free_apis import search_acceslibre as _acceslibre
+            result = await _acceslibre(name=e_name, city=e_city, activity=e_activity)
+            print(f"[HUB] ♿ Tool search_acceslibre(name={e_name!r}, city={e_city!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur search_acceslibre : {e}")
+            return f'[Erreur Acceslibre : {e}]'
+
+    elif name == 'search_food_product':
+        fquery = args.get('query', query).strip()
+        if not fquery:
+            return '[search_food_product] Nom ou code-barres manquant.'
+        try:
+            from modules.free_apis import search_food_product as _search_food
+            result = await _search_food(fquery)
+            print(f"[HUB] 🥗 Tool search_food_product({fquery!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur search_food_product : {e}")
+            return f'[Erreur OpenFoodFacts : {e}]'
+
+    elif name == 'search_recipe':
+        rquery     = args.get('query', '').strip()
+        ingredient = args.get('ingredient', '').strip()
+        category   = args.get('category', '').strip()
+        area       = args.get('area', '').strip()
+        rand       = bool(args.get('random', False))
+        if not any([rquery, ingredient, category, area, rand]):
+            rquery = query  # fallback
+        try:
+            from modules.free_apis import search_recipe as _search_recipe
+            result = await _search_recipe(query=rquery, ingredient=ingredient,
+                                          category=category, area=area, random=rand)
+            print(f"[HUB] 🍽️ Tool search_recipe(query={rquery!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur search_recipe : {e}")
+            return f'[Erreur TheMealDB : {e}]'
 
     elif name == 'get_weather':
         city = args.get('city', query).strip()
