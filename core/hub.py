@@ -2905,7 +2905,7 @@ async def process_message(
             async for event in call_llm_stream_with_tools(
                 messages=messages,
                 tools=_gemini_gs_tools if _gemini_gs_tools else
-                      (_mistral_ws_tools + NIMM_TOOLS) if _mistral_ws_tools else NIMM_TOOLS,
+                      _mistral_ws_tools if _mistral_ws_tools else NIMM_TOOLS,
                 provider=settings['provider'],
                 model=settings.get('model'),
                 system_prompt=system_prompt,

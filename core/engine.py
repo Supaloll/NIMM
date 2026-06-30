@@ -1029,13 +1029,17 @@ async def call_llm_stream_with_tools(
         headers['HTTP-Referer'] = 'https://nimm.local'
         headers['X-Title']      = 'NIMM'
 
+    # Les built-in tools Mistral (web_search) ne supportent pas tool_choice
+    _only_builtins = tools and all(
+        t.get('type') != 'function' for t in tools
+    )
     payload = {
         'model':       _model,
         'messages':    oai_messages,
         'max_tokens':  max_tokens,
         'temperature': temperature,
         'tools':       tools,
-        'tool_choice': 'auto',
+        **({} if _only_builtins else {'tool_choice': 'auto'}),
         'stream':      True,
     }
 
