@@ -3073,23 +3073,6 @@ async def process_message_stream(
     # 1. Settings + masque (avec verrouillage masque par fil)
     settings = load_settings(thread_id)
 
-    # ── Mode agent Vibe : override provider Mistral ──
-    from core.database import get_thread_agent_mode
-    _agent_mode = get_thread_agent_mode(thread_id)
-    if _agent_mode == 'vibe':
-        settings['provider'] = 'mistral'
-        web_search = True  # Vibe = web search natif Mistral toujours actif
-        # S'assurer que le modèle est un modèle Mistral valide
-        _cur_model = settings.get('model') or ''
-        _MISTRAL_MODELS = {
-            'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest',
-            'mistral-saba-latest', 'open-mistral-nemo', 'open-mixtral-8x22b',
-            'pixtral-12b-2409', 'pixtral-large-latest',
-        }
-        if not _cur_model or not any(_cur_model.startswith(m.split('-')[0]) for m in _MISTRAL_MODELS):
-            # Modèle non-Mistral (ex: deepseek-chat) → forcer un modèle Mistral par défaut
-            settings['model'] = 'mistral-small-latest'
-
     # ── Garde provider ──
     provider  = settings.get('provider', '')
     api_keys  = settings.get('api_keys', {})
@@ -3185,17 +3168,14 @@ async def process_message_stream(
         _gemini_gs_tools = [{'google_search': {}}]
         yield "data: [WEB_SEARCH_LOADING]\n\n"
         print('[HUB] 🔍 Google Search Grounding Gemini natif (stream)')
-    elif web_search and provider == 'mistral':
-        _mistral_ws_tools = [{'type': 'web_search'}]
-        print('[HUB] 🌐 Web search Mistral natif (stream)')
     elif web_search:
-        yield "data: [WEB_SEARCH_LOADING]\n\n"
-        try:
-            from modules.websearch import search
-            web_context = await search(user_message)
-            print(f"[HUB] 🌐 Web search (forcé) : {user_message[:60]}")
-        except Exception as e:
-            print(f"[HUB] Erreur web search : {e}")
+        # Pour tous les autres providers : recherche web via Mistral natif
+        if provider != 'mistral':
+            settings['provider'] = 'mistral'
+            provider = 'mistral'
+            settings['model'] = _resolve_model('mistral', settings.get('model'))
+        _mistral_ws_tools = [{'type': 'web_search'}]
+        print(f'[HUB] 🌐 Web search Mistral natif (stream, provider original={settings.get("provider", "?")})')
 
     final_user_msg = user_message
     if web_context:

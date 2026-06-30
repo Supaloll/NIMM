@@ -125,13 +125,13 @@ function _setWebSearch(active) {
     const isGemini = prov === 'gemini';
     if (active) {
         btn.classList.add('web-active');
-        const lbl = isGemini ? 'Google Search Grounding actif — désactiver' : 'Désactiver la recherche web';
+        const lbl = isGemini ? 'Google Search Grounding actif — désactiver' : 'Recherche web via Mistral active — désactiver';
         btn.setAttribute('aria-label', lbl);
-        btn.title = isGemini ? 'Google Search Grounding (Gemini natif)' : 'Recherche Web';
+        btn.title = isGemini ? 'Google Search Grounding (Gemini natif)' : 'Recherche Web (Mistral natif)';
     } else {
         btn.classList.remove('web-active');
         btn.setAttribute('aria-label', 'Activer la recherche web');
-        btn.title = isGemini ? 'Google Search (Gemini natif)' : 'Recherche Web';
+        btn.title = isGemini ? 'Google Search (Gemini natif)' : 'Recherche Web (Mistral natif)';
     }
 }
 
@@ -144,24 +144,6 @@ document.getElementById('search-web-btn')?.addEventListener('click', () => {
 
 let _agentMode = '';
 
-// Vibe n'est disponible que pour Mistral — masquer le bouton si le fil utilise un autre fournisseur
-async function _updateVibeBtn() {
-    const vibeBtn = document.getElementById('agent-btn-vibe');
-    if (!vibeBtn) return;
-    try {
-        const routing = await fetch('/api/settings/routing').then(r => r.json()).catch(() => ({}));
-        const prov    = await fetch('/api/settings/provider').then(r => r.json()).catch(() => ({}));
-        const chatProvider = (routing.chat || prov.provider || '').toLowerCase();
-        const isMistral = chatProvider === 'mistral';
-        vibeBtn.hidden = !isMistral;
-        vibeBtn.setAttribute('aria-hidden', String(!isMistral));
-        // Si le mode actif est Vibe mais que le provider n'est plus Mistral → repasser en standard
-        if (!isMistral && _agentMode === 'vibe') {
-            _setAgentMode('', true);
-        }
-    } catch(e) { /* silencieux */ }
-}
-
 function _setAgentMode(mode, save) {
     if (save === undefined) save = true;
     _agentMode = mode || '';
@@ -172,16 +154,11 @@ function _setAgentMode(mode, save) {
     });
     // Afficher/masquer option Document Vibe dans le menu +
     var _vdb = document.getElementById('plus-vibe-doc');
-    if (_vdb) _vdb.hidden = (mode !== 'vibe');
+    if (_vdb) _vdb.hidden = true;
 
-    if (mode === 'vibe') {
-        _setWebSearch(true);
-        var swb = document.getElementById('search-web-btn');
-        if (swb) swb.setAttribute('aria-disabled', 'true');
-    } else {
-        var swb2 = document.getElementById('search-web-btn');
-        if (swb2) swb2.removeAttribute('aria-disabled');
-        _setWebSearch(false);
+    if (mode !== 'vibe') {
+        // Réinitialiser la recherche web seulement si on quitte CoaNIMM ou autre mode
+        if (mode !== _agentMode) _setWebSearch(false);
     }
     if (mode === 'coanimm') {
         var panel = document.getElementById('coanimm-panel');
@@ -1685,7 +1662,6 @@ async function selectThread(threadId) {
     _updateMaskIndicator(thread);
     await _loadGhostMode(threadId);
     await _loadAgentMode(threadId);
-    await _updateVibeBtn();
 
     // Focus sur la zone de saisie après chargement du fil
     document.getElementById('user-input')?.focus();
