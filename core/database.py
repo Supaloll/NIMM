@@ -632,6 +632,19 @@ def init_db(user_id: str = None):
     except Exception:
         pass  # Colonne déjà présente — normal au redémarrage
 
+    # Migration douce — suivi tokens/coût par message
+    for _col_def in [
+        ('tokens_in',  'INTEGER DEFAULT 0'),
+        ('tokens_out', 'INTEGER DEFAULT 0'),
+        ('cost_eur',   'REAL DEFAULT 0.0'),
+    ]:
+        try:
+            c.execute(f'ALTER TABLE messages ADD COLUMN {_col_def[0]} {_col_def[1]}')
+            conn.commit()
+            print(f"[DB] Colonne {_col_def[0]} (messages) ajoutée.")
+        except Exception:
+            pass  # Colonne déjà présente
+
     # ── Résumé OS (Operating Summary) — table conservée pour rétrocompat, plus écrite ──
     c.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
@@ -1456,10 +1469,25 @@ def add_message(thread_id: str, role: str, content: str):
     conn.close()
     touch_thread(thread_id)
 
+def update_last_message_usage(thread_id: str, tokens_in: int, tokens_out: int, cost_eur: float):
+    """Met à jour tokens_in/out et cost_eur du dernier message assistant d'un fil."""
+    conn = get_conn()
+    conn.execute(
+        '''UPDATE messages SET tokens_in = ?, tokens_out = ?, cost_eur = ?
+           WHERE id = (
+               SELECT id FROM messages
+               WHERE thread_id = ? AND role = 'assistant'
+               ORDER BY id DESC LIMIT 1
+           )''',
+        (tokens_in, tokens_out, cost_eur, thread_id)
+    )
+    conn.commit()
+    conn.close()
+
 def get_messages(thread_id: str, limit: int = 200):
     conn = get_conn()
     rows = conn.execute(
-        'SELECT role, content, created_at FROM messages '
+        'SELECT role, content, created_at, tokens_in, tokens_out, cost_eur FROM messages '
         'WHERE thread_id = ? ORDER BY id ASC LIMIT ?',
         (thread_id, limit)
     ).fetchall()

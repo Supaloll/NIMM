@@ -19,6 +19,7 @@ from core.database import (
     close_rappel, marquer_rappel_emis, perimer_rappels_depasses,
     get_thread, set_thread_mask,
     add_carnet_note, get_carnet_notes, count_carnet_notes, get_carnet_notes_actives,
+    update_last_message_usage,
 )
 from core.engine import call_llm
 from modules.memory import extract_all_tags
@@ -3197,6 +3198,7 @@ async def process_message_stream(
 
     # 6. Stream des tokens — les tags %%...%% sont filtrés avant le yield
     full_reply  = ''
+    _last_usage = None   # stocké quand l'engine émet {'type': 'usage', ...}
     _yield_buf  = ''
 
     def _flush_buf() -> list:
@@ -3257,6 +3259,9 @@ async def process_message_stream(
                     _yield_buf += event['text']
                     for chunk in _flush_buf():
                         yield f"data: {chunk}\n\n"
+
+                elif event['type'] == 'usage':
+                    _last_usage = event
 
                 elif event['type'] == 'citations':
                     import json as _json_cit
@@ -3367,6 +3372,31 @@ async def process_message_stream(
         reply = (reply or "") + _doc_footer
         yield f"data: {_doc_footer}\n\n"
     add_message(thread_id, 'assistant', reply)
+
+    # Stocker les tokens/coût et émettre [USAGE] vers le frontend
+    if _last_usage:
+        try:
+            import core.database as _db_u
+            _rates = _db_u.get_conn().execute(
+                'SELECT rate_in, rate_out FROM cost_wallets WHERE provider = ?',
+                (_last_usage.get('provider', ''),)
+            ).fetchone()
+            _cost_eur = 0.0
+            if _rates:
+                _cost_eur = (
+                    _last_usage['tokens_in'] * _rates[0] +
+                    _last_usage['tokens_out'] * _rates[1]
+                ) / 1_000_000 * 0.92
+            update_last_message_usage(
+                thread_id,
+                _last_usage['tokens_in'],
+                _last_usage['tokens_out'],
+                round(_cost_eur, 6),
+            )
+            import json as _j_usage
+            yield f"data: [USAGE]{_j_usage.dumps({'tokens_in': _last_usage['tokens_in'], 'tokens_out': _last_usage['tokens_out'], 'cost_eur': round(_cost_eur, 6), 'estimated': _last_usage.get('estimated', True)}, ensure_ascii=False)}\n\n"
+        except Exception as _eu:
+            print(f"[HUB] Erreur stockage usage : {_eu}")
 
     # Mood — stocker le dominant pour le prochain tour
     if dominant:
