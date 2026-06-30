@@ -1169,6 +1169,7 @@ class CoanimmPlanRequest(BaseModel):
     consigne: str
     thread_id: Optional[str] = None
     override_provider: Optional[str] = None
+    selected_bond_id: Optional[str] = None
 
 @app.post("/api/coanimm/plan")
 async def coanimm_plan(req: CoanimmPlanRequest):
@@ -1178,7 +1179,8 @@ async def coanimm_plan(req: CoanimmPlanRequest):
         return {'status': 'error', 'message': 'La consigne est vide.'}
     try:
         result = await generate_plan(req.consigne, req.thread_id,
-                                     provider_override=req.override_provider)
+                                     provider_override=req.override_provider,
+                                     selected_bond_id=req.selected_bond_id)
         return {'status': 'ok', 'plan': result['plan'], 'needs_explore': result['needs_explore']}
     except Exception as e:
         detail = str(e) or type(e).__name__
@@ -1201,6 +1203,7 @@ class CoanimmGenerateRequest(BaseModel):
     consigne: str
     thread_id: Optional[str] = None
     confirm_scope: Optional[str] = None
+    selected_bond_id: Optional[str] = None
 
 @app.post("/api/coanimm/generate_and_run")
 async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
@@ -1208,7 +1211,8 @@ async def coanimm_generate_and_run(req: CoanimmGenerateRequest):
     from modules.coanimm import run_generated
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide.")
-    return await run_generated(req.consigne, req.thread_id, _ephemeral_scope(req.confirm_scope))
+    return await run_generated(req.consigne, req.thread_id, _ephemeral_scope(req.confirm_scope),
+                               selected_bond_id=req.selected_bond_id)
 
 class CoanimmGenerateOnlyRequest(BaseModel):
     consigne: str
@@ -1223,6 +1227,17 @@ async def coanimm_generate(req: CoanimmGenerateOnlyRequest):
     consigne = req.consigne
     if req.explore_stdout:
         consigne = f"{req.consigne}\n\n[Résultat d'exploration]\n{req.explore_stdout}"
+    # Injection du bond sélectionné explicitement
+    if req.selected_bond_id:
+        from core.database import list_prompts
+        from modules.coanimm import _skill_to_text
+        _all = list_prompts('skill')
+        _sk = (_all or {}).get(req.selected_bond_id)
+        if _sk:
+            consigne = (
+                f"[BOND SÉLECTIONNÉ PAR L'UTILISATEUR — applique impérativement cette méthode]\n"
+                f"{_skill_to_text(_sk)}\n\n[CONSIGNE]\n{consigne}"
+            )
     try:
         code = await generate_code(consigne, req.thread_id,
                                   provider_override=req.override_provider)
