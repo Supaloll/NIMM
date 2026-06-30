@@ -652,7 +652,7 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "            + f'Content-Type: {_mime_ms}\\r\\n\\r\\n'.encode() + _raw_ref + b'\\r\\n'\n"
         "            + b'--' + boundary + b'--\\r\\n')\n"
         "        _req_ms = _ur_ms.Request('http://localhost:8080/api/mistral/audio/speak',\n"
-        "            data=_body_ms, headers={'Content-Type': f'multipart/form-data; boundary={boundary.decode()}'])\n"
+        "            data=_body_ms, headers={'Content-Type': f'multipart/form-data; boundary={boundary.decode()}'})\n"
         "    else:\n"
         "        _data_ms = _up_ms.urlencode(dict(_fields)).encode()\n"
         "        _req_ms = _ur_ms.Request('http://localhost:8080/api/mistral/audio/speak',\n"
