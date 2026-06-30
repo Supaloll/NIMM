@@ -72,6 +72,7 @@ SKILL_META = {
     ],
     "helper": "nimm_axe_audit(url: str) -> str",
     "valide": True,
+    "valide_par_laurent": True,
     "version": 1,
 }
 
