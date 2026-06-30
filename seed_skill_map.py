@@ -101,6 +101,7 @@ SKILL_META = {
     ],
     "helper": "nimm_generate_map(title, city, waypoints, route_segments, output_format)",
     "valide": True,
+    "valide_par_laurent": True,
     "version": 1,
 }
 
