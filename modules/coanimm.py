@@ -471,12 +471,13 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
     parts.append(tx if "transcribe" not in _disabled else _stub("nimm_transcribe", "transcrire un audio"))
-    sp = (
+    lv = (
         "def nimm_list_voices(_tid='%s'):\n"
         "    import requests\n"
         "    _res = requests.get('http://localhost:8080/api/coanimm/list_voices', timeout=10).json()\n"
         "    return _res.get('voices', [])\n"
-        % tid,
+    ) % tid
+    sp = (
         "def nimm_speak(text, voice='', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"text\": text, \"voice\": voice, \"thread_id\": _tid}).encode()\n"
         "    _req = _nimm_ur.Request(\n"
@@ -613,10 +614,10 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        _bname = _os_ocr.path.basename(path)\n"
         "        _b64s = _b64_ocr.b64encode(_raw).decode()\n"
         "        boundary = b'----NimmOcrBnd'\n"
-        "        _body = (b'--' + boundary + b'\r\n'\n"
-        "            + f'Content-Disposition: form-data; name=\"file\"; filename=\"{_bname}\"\r\n'.encode()\n"
-        "            + f'Content-Type: {_mime}\r\n\r\n'.encode()\n"
-        "            + _raw + b'\r\n' + b'--' + boundary + b'--\r\n')\n"
+        "        _body = (b'--' + boundary + b'\\r\\n'\n"
+        "            + f'Content-Disposition: form-data; name=\"file\"; filename=\"{_bname}\\r\\n'.encode()\n"
+        "            + f'Content-Type: {_mime}\\r\\n\\r\\n'.encode()\n"
+        "            + _raw + b'\\r\\n' + b'--' + boundary + b'--\\r\\n')\n"
         "        _req_ocr = _ur_ocr.Request(\n"
         "            'http://localhost:8080/api/mistral/ocr',\n"
         "            data=_body,\n"
@@ -644,12 +645,12 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "        _ext_ms = _os_ms.path.splitext(ref_audio_path)[1].lower().lstrip('.') or 'wav'\n"
         "        _mime_ms = f'audio/{_ext_ms}'\n"
         "        _raw_ref = open(ref_audio_path, 'rb').read()\n"
-        "        _body_ms = (b'--' + boundary + b'\r\n'\n"
-        "            + f'Content-Disposition: form-data; name=\"text\"\r\n\r\n'.encode() + text.encode() + b'\r\n'\n"
-        "            + b'--' + boundary + b'\r\n'\n"
-        "            + f'Content-Disposition: form-data; name=\"ref_audio\"; filename=\"{_bname}\"\r\n'.encode()\n"
-        "            + f'Content-Type: {_mime_ms}\r\n\r\n'.encode() + _raw_ref + b'\r\n'\n"
-        "            + b'--' + boundary + b'--\r\n')\n"
+        "        _body_ms = (b'--' + boundary + b'\\r\\n'\n"
+        "            + f'Content-Disposition: form-data; name=\"text\\r\\n\\r\\n'.encode() + text.encode() + b'\\r\\n'\n"
+        "            + b'--' + boundary + b'\\r\\n'\n"
+        "            + f'Content-Disposition: form-data; name=\"ref_audio\"; filename=\"{_bname}\\r\\n'.encode()\n"
+        "            + f'Content-Type: {_mime_ms}\\r\\n\\r\\n'.encode() + _raw_ref + b'\\r\\n'\n"
+        "            + b'--' + boundary + b'--\\r\\n')\n"
         "        _req_ms = _ur_ms.Request('http://localhost:8080/api/mistral/audio/speak',\n"
         "            data=_body_ms, headers={'Content-Type': f'multipart/form-data; boundary={boundary.decode()}'])\n"
         "    else:\n"
@@ -1278,12 +1279,22 @@ async def audit_against_skill(code: str, fiche_text: str, consigne: str = '',
 
 
 async def generate_plan(consigne: str, thread_id: str = None,
-                         provider_override: str = None) -> dict:
+                         provider_override: str = None,
+                         selected_bond_id: str = None) -> dict:
     """Demande au LLM de décrire ce qu'il va faire (sans coder).
     Retourne {'plan': str, 'needs_explore': bool}."""
     import core.engine as engine
     import core.hub as hub
 
+    if selected_bond_id:
+        _all_sk = db.list_prompts('skill')
+        _sk = (_all_sk or {}).get(selected_bond_id)
+        if _sk:
+            _bond_text = _skill_to_text(_sk)
+            consigne = (
+                "[BOND SÉLECTIONNÉ PAR L'UTILISATEUR — applique impérativement cette méthode]\n"
+                + _bond_text + "\n\n[CONSIGNE]\n" + consigne
+            )
     settings = hub.load_settings(thread_id)
     provider, model = hub.get_task_provider_model('coanimm', settings)
     if provider_override:
@@ -1443,12 +1454,24 @@ def execute_code(code: str, thread_id: str = None) -> dict:
 
 
 async def run_generated(consigne: str, thread_id: str = None,
-                        confirm_scope: str = None) -> dict:
+                        confirm_scope: str = None,
+                        selected_bond_id: str = None) -> dict:
     """Génère un script Python à partir de `consigne` puis l'exécute.
 
     Gère automatiquement la permission exec_generated_code et relance
     une fois si le code généré est syntaxiquement invalide (tronqué).
     """
+    _forced_bond = None
+    if selected_bond_id:
+        _all_sk = db.list_prompts('skill')
+        _forced_bond = (_all_sk or {}).get(selected_bond_id)
+        if _forced_bond:
+            _bond_text = _skill_to_text(_forced_bond)
+            consigne = (
+                "[BOND SÉLECTIONNÉ PAR L'UTILISATEUR — tu DOIS appliquer impérativement "
+                "la méthode décrite ci-dessous, en utilisant les fonctions nimm_* indiquées]\n"
+                + _bond_text + "\n\n[CONSIGNE DE L'UTILISATEUR]\n" + consigne
+            )
     if not consigne or not consigne.strip():
         return {'status': 'error', 'message': 'La consigne est vide.'}
 
@@ -1504,7 +1527,7 @@ async def run_generated(consigne: str, thread_id: str = None,
             }
 
     # Auto-audit à la lumière d'un skill validé (Étape C) — inerte si aucune fiche ne correspond.
-    _fiche = _find_relevant_skill(consigne)
+    _fiche = _forced_bond if _forced_bond else _find_relevant_skill(consigne)
     if _fiche:
         try:
             _audited = await audit_against_skill(code, _skill_to_text(_fiche), consigne, thread_id)
@@ -1526,4 +1549,4 @@ async def run_generated(consigne: str, thread_id: str = None,
 
 # ══════════════════════════════════════════════════════════════════════
 # WORKFLOWS — Étape 3 : séquences de skills rejouables
-# ════════════════════════════════════════════════════════�
+# ════════════════════════════════════════════════════════�

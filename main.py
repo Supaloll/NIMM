@@ -1219,6 +1219,7 @@ class CoanimmGenerateOnlyRequest(BaseModel):
     thread_id: Optional[str] = None
     explore_stdout: Optional[str] = None   # résultat d'exploration éventuel
     override_provider: Optional[str] = None
+    selected_bond_id: Optional[str] = None
 
 @app.post("/api/coanimm/generate")
 async def coanimm_generate(req: CoanimmGenerateOnlyRequest):

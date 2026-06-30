@@ -9081,7 +9081,13 @@ function _renderCoanimmSkills(prompts) {
         del.setAttribute('aria-label', 'Supprimer le bond ' + (sk.label || ''));
         del.style.cssText = 'font-size:0.8rem;padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
         del.addEventListener('click', () => _coanimmDeleteSkill(id, sk.label || ''));
-        actions.appendChild(edit); actions.appendChild(del);
+        const run = document.createElement('button');
+        run.type = 'button';
+        run.textContent = '▶ Exécuter';
+        run.setAttribute('aria-label', 'Exécuter le bond ' + (sk.label || '') + ' dans CoaNIMM');
+        run.style.cssText = 'font-size:0.8rem;padding:3px 10px;border:none;border-radius:6px;background:var(--accent,#2e7d32);color:#fff;cursor:pointer;font-weight:600;';
+        run.addEventListener('click', () => _coanimmRunBondDialog(id, sk));
+        actions.appendChild(edit); actions.appendChild(del); actions.appendChild(run);
         li.appendChild(actions);
         ul.appendChild(li);
     });
@@ -9141,6 +9147,87 @@ async function _coanimmDeleteSkill(id, label) {
         _coanimmAnnounce('Bond supprimé.');
     } catch (e) { if (status) status.textContent = 'Erreur réseau.'; }
 }
+// ── Exécuter un bond depuis la liste ──
+function _coanimmRunBondDialog(id, sk) {
+    document.getElementById('coanimm-run-bond-dialog')?.remove();
+    const meta = sk.meta || {};
+    const overlay = document.createElement('div');
+    overlay.id = 'coanimm-run-bond-dialog';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'crbd-title');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2000;display:flex;align-items:center;justify-content:center;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--bg-panel,#fff);border-radius:10px;padding:20px;max-width:500px;width:92%;display:flex;flex-direction:column;gap:10px;border:1px solid var(--border);';
+    const title = document.createElement('h3');
+    title.id = 'crbd-title';
+    title.style.cssText = 'margin:0;font-size:1rem;';
+    title.textContent = '▶ Exécuter : ' + (sk.label || id);
+    box.appendChild(title);
+    if (meta.description) {
+        const desc = document.createElement('p');
+        desc.style.cssText = 'margin:0;font-size:0.82rem;color:var(--text-muted);';
+        desc.textContent = meta.description;
+        box.appendChild(desc);
+    }
+    const lbl = document.createElement('label');
+    lbl.setAttribute('for', 'crbd-consigne');
+    lbl.style.cssText = 'font-size:0.85rem;font-weight:600;';
+    lbl.textContent = 'Vos instructions pour ce bond :';
+    box.appendChild(lbl);
+    const textarea = document.createElement('textarea');
+    textarea.id = 'crbd-consigne';
+    textarea.rows = 4;
+    textarea.placeholder = 'Décrivez votre demande spécifique…';
+    textarea.style.cssText = 'width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.9rem;resize:vertical;box-sizing:border-box;';
+    box.appendChild(textarea);
+    const hint = document.createElement('p');
+    hint.style.cssText = 'margin:0;font-size:0.78rem;color:var(--text-muted);';
+    hint.textContent = 'Ctrl+Entrée pour lancer · Échap pour annuler';
+    box.appendChild(hint);
+    const btns = document.createElement('div');
+    btns.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:4px;';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Annuler';
+    cancel.style.cssText = 'padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+    cancel.addEventListener('click', () => overlay.remove());
+    const launch = document.createElement('button');
+    launch.type = 'button';
+    launch.textContent = '🐸 Lancer CoaNIMM';
+    launch.style.cssText = 'padding:6px 16px;border:none;border-radius:6px;background:var(--accent,#2e7d32);color:#fff;cursor:pointer;font-weight:600;';
+    launch.addEventListener('click', () => {
+        const consigne = textarea.value.trim();
+        if (!consigne) { textarea.focus(); return; }
+        overlay.remove();
+        _coanimmLaunchWithBond(id, sk, consigne);
+    });
+    textarea.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); launch.click(); }
+        if (e.key === 'Escape') { e.preventDefault(); overlay.remove(); }
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    btns.appendChild(cancel); btns.appendChild(launch);
+    box.appendChild(btns);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    setTimeout(() => textarea.focus(), 50);
+}
+
+function _coanimmLaunchWithBond(id, sk, consigne) {
+    _coanimmSelectedBond = { id, label: sk.label || id, description: (sk.meta || {}).description || '' };
+    _updateCoanimmBondSelectedTag();
+    const modal = document.getElementById('coanimm-modal');
+    if (modal && modal.classList.contains('hidden')) {
+        document.getElementById('toggle-coanimm')?.click();
+    }
+    setTimeout(() => {
+        const input = document.getElementById('coanimm-consigne');
+        if (input) { input.value = consigne; input.focus(); }
+        _coanimmAnnounce('Bond « ' + (sk.label || id) + ' » sélectionné. Consigne pré-remplie. Appuyez sur Ctrl+Entrée pour lancer.');
+    }, 150);
+}
+
 document.getElementById('coanimm-skill-edit-save')?.addEventListener('click', _coanimmSaveSkillEdit);
 document.getElementById('coanimm-skill-edit-cancel')?.addEventListener('click', () => {
     document.getElementById('coanimm-skill-edit')?.classList.add('hidden');
