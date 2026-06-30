@@ -728,6 +728,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
         headers['X-Title']      = 'NIMM'
     _stream_acc  = ''
     _dsml_stream = False
+    _usage_tokens = None  # {'tokens_in': N, 'tokens_out': M} si l'API retourne l'usage réel
 
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
@@ -740,6 +741,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                 'max_tokens':  max_tokens,
                 'temperature': temperature,
                 'stream':      True,
+                'stream_options': {'include_usage': True},
                 **({'tools': tools} if tools else {}),
             }
         ) as r:
@@ -753,7 +755,22 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                 try:
                     import json as _json
                     data = _json.loads(chunk)
-                    token = data['choices'][0]['delta'].get('content', '')
+                    # Chunk de fin avec usage réel (stream_options: include_usage)
+                    if data.get('usage') and not data.get('choices'):
+                        u = data['usage']
+                        _usage_tokens = {
+                            'tokens_in':  u.get('prompt_tokens', 0),
+                            'tokens_out': u.get('completion_tokens', 0),
+                        }
+                        continue
+                    token = data['choices'][0]['delta'].get('content', '') if data.get('choices') else ''
+                    # Certaines APIs incluent usage dans le dernier chunk avec choices
+                    if data.get('usage') and data.get('choices'):
+                        u = data['usage']
+                        _usage_tokens = {
+                            'tokens_in':  u.get('prompt_tokens', 0),
+                            'tokens_out': u.get('completion_tokens', 0),
+                        }
                     if token:
                         _stream_acc += token
                         if not _dsml_stream and '\uff5c\uff5cDSML\uff5c\uff5c' in _stream_acc:
@@ -761,7 +778,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                         if not _dsml_stream:
                             yield token
                     _cits = (data.get('citations') or
-                             data['choices'][0].get('message', {}).get('citations') or [])
+                             (data['choices'][0].get('message', {}).get('citations') if data.get('choices') else None) or [])
                     if _cits:
                         _f = '\n\n---\n**Sources**\n'
                         for _i, _c in enumerate(_cits, 1):
@@ -771,6 +788,9 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                         yield _f
                 except Exception:
                     continue
+    # Émettre le sentinel d'usage (tokens réels si disponibles)
+    if _usage_tokens and (_usage_tokens['tokens_in'] or _usage_tokens['tokens_out']):
+        yield {'__usage__': True, **_usage_tokens}
 
 async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None):
     """Stream tokens via API Anthropic."""
@@ -816,6 +836,8 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
             json=payload
         ) as r:
             r.raise_for_status()
+            _ant_tokens_in  = 0
+            _ant_tokens_out = 0
             async for line in r.aiter_lines():
                 if not line.startswith('data:'):
                     continue
@@ -823,12 +845,22 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                 try:
                     import json as _json
                     data = _json.loads(chunk)
-                    if data.get('type') == 'content_block_delta':
+                    evt = data.get('type', '')
+                    if evt == 'message_start':
+                        u = data.get('message', {}).get('usage', {})
+                        _ant_tokens_in = u.get('input_tokens', 0)
+                    elif evt == 'message_delta':
+                        u = data.get('usage', {})
+                        _ant_tokens_out = u.get('output_tokens', 0)
+                    elif evt == 'content_block_delta':
                         token = data.get('delta', {}).get('text', '')
                         if token:
                             yield token
                 except Exception:
                     continue
+    # Émettre sentinel usage Anthropic
+    if _ant_tokens_in or _ant_tokens_out:
+        yield {'__usage__': True, 'tokens_in': _ant_tokens_in, 'tokens_out': _ant_tokens_out}
 
 async def call_llm_stream(
     messages: list,
@@ -847,11 +879,16 @@ async def call_llm_stream(
     model = _resolve_model(provider, model)
     _accumulated = []
 
+    _real_usage = None  # Rempli si l'API retourne l'usage exact
+
     try:
         if provider == 'anthropic':
             async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools):
-                _accumulated.append(token)
-                yield token
+                if isinstance(token, dict) and token.get('__usage__'):
+                    _real_usage = token
+                else:
+                    _accumulated.append(token)
+                    yield token
         elif provider in ('deepseek', 'openai', 'openrouter', 'mistral'):
             urls = {
                 'deepseek':   'https://api.deepseek.com/v1',
@@ -869,8 +906,11 @@ async def call_llm_stream(
                 messages, model or models[provider], system_prompt,
                 max_tokens, temperature, api_keys, provider, urls[provider], tools=tools
             ):
-                _accumulated.append(token)
-                yield token
+                if isinstance(token, dict) and token.get('__usage__'):
+                    _real_usage = token
+                else:
+                    _accumulated.append(token)
+                    yield token
         else:
             # Fallback : appel normal (déjà loggé dans call_llm)
             result = await call_llm(messages, provider, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools)
@@ -878,13 +918,21 @@ async def call_llm_stream(
             yield result
             return  # call_llm a déjà loggé — on sort avant le _log stream
     finally:
-        # Estimation tokens pour les streams (pas de comptage exact disponible côté API)
-        if _accumulated and provider in ('anthropic', 'deepseek', 'openai', 'openrouter', 'mistral', 'gemini'):
-            in_text  = (system_prompt or '') + ' '.join(str(m.get('content', '')) for m in messages)
-            out_text = ''.join(_accumulated)
-            est_in   = max(1, len(in_text) // 4)
-            est_out  = max(1, len(out_text) // 4)
-            _log(provider, model or '', est_in, est_out, pipeline)
+        # Usage réel si disponible, sinon estimation caractères/4
+        if _real_usage:
+            tokens_in  = _real_usage.get('tokens_in', 0)
+            tokens_out = _real_usage.get('tokens_out', 0)
+        elif _accumulated and provider in ('anthropic', 'deepseek', 'openai', 'openrouter', 'mistral', 'gemini'):
+            in_text   = (system_prompt or '') + ' '.join(str(m.get('content', '')) for m in messages)
+            out_text  = ''.join(str(t) for t in _accumulated)
+            tokens_in  = max(1, len(in_text) // 4)
+            tokens_out = max(1, len(out_text) // 4)
+        else:
+            tokens_in = tokens_out = 0
+        if tokens_in or tokens_out:
+            _log(provider, model or '', tokens_in, tokens_out, pipeline)
+            yield {'type': 'usage', 'tokens_in': tokens_in, 'tokens_out': tokens_out,
+                   'provider': provider, 'model': model or '', 'estimated': not bool(_real_usage)}
 
 
 # ══════════════════════════════════════════

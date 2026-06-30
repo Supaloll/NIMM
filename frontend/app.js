@@ -2444,7 +2444,15 @@ function renderMessages(messages) {
 
     messages.forEach(msg => {
         if (msg.role === 'assistant') {
-            appendAssistantMessage(msg.content, 'neutre', false);
+            const { div: _msgDiv } = appendAssistantMessage(msg.content, 'neutre', false);
+            if ((msg.tokens_in || msg.tokens_out) && _msgDiv) {
+                _attachUsageAnnotation(_msgDiv, {
+                    tokens_in:  msg.tokens_in  || 0,
+                    tokens_out: msg.tokens_out || 0,
+                    cost_eur:   msg.cost_eur   || 0,
+                    estimated:  false,
+                });
+            }
         } else {
             appendUserMessage(msg.content);
         }
@@ -2526,6 +2534,35 @@ function appendUserMessage(content, fileName = null) {
 }
 
 // ── Bulle assistant ──
+// ── Annotation tokens/coût sous une bulle assistant ──
+function _formatCostEur(cost_eur) {
+    if (!cost_eur || cost_eur < 0.000001) return null;
+    if (cost_eur < 0.01) return cost_eur.toFixed(4).replace('.', ',') + ' €';
+    return cost_eur.toFixed(3).replace('.', ',') + ' €';
+}
+function _attachUsageAnnotation(msgDiv, usageData) {
+    if (!msgDiv) return;
+    const tokIn  = usageData.tokens_in  || 0;
+    const tokOut = usageData.tokens_out || 0;
+    const cost   = usageData.cost_eur   || 0;
+    if (!tokIn && !tokOut) return;
+    // Supprimer une annotation précédente si elle existe
+    msgDiv.querySelector('.msg-usage-info')?.remove();
+    const approx = usageData.estimated ? '≈ ' : '';
+    const costStr = _formatCostEur(cost);
+    const label   = `Coût de cette réponse : ${tokIn} tokens en entrée, ${tokOut} en sortie${costStr ? ', estimation ' + costStr : ''}`;
+    const text    = `↳ ${tokIn} + ${tokOut} tok${costStr ? ' · ' + approx + costStr : ''}`;
+    const p = document.createElement('p');
+    p.className  = 'msg-usage-info';
+    p.setAttribute('role', 'note');
+    p.setAttribute('aria-label', label);
+    p.textContent = text;
+    // Insérer après .msg-bottom, ou à la fin du div
+    const bottom = msgDiv.querySelector('.msg-bottom');
+    if (bottom) msgDiv.insertBefore(p, bottom.nextSibling);
+    else msgDiv.appendChild(p);
+}
+
 function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
     const pair = EMOJI_MOODS[dominant] || EMOJI_MOODS['neutre'];
 
@@ -3490,6 +3527,16 @@ async function _triggerStream(content, conversationId, images = null) {
                     placeholder?.remove();
                     const errMsg = data.slice(15);
                     appendAssistantMessage(`\u274c Erreur g\u00e9n\u00e9ration image : ${errMsg}`);
+                    continue;
+                }
+
+                if (data.startsWith('[USAGE]')) {
+                    try {
+                        const usage = JSON.parse(data.slice(7));
+                        const allMsgs = messagesDiv.querySelectorAll('.message.assistant');
+                        const lastMsg = allMsgs[allMsgs.length - 1];
+                        if (lastMsg) _attachUsageAnnotation(lastMsg, usage);
+                    } catch(e) { /* silencieux */ }
                     continue;
                 }
 
