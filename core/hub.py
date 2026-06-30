@@ -1508,6 +1508,157 @@ NIMM_TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    # ── Services libres (free_apis.py) ──
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": (
+                "Donne la meteo actuelle et les previsions sur 3 jours pour une ville. "
+                "Utilise cet outil pour toute question de type : meteo, temps qu'il fait, "
+                "temperature, pluie, neige, vent. Source : Open-Meteo + OpenStreetMap."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "Nom de la ville (ex. Paris, Lyon, Marseille, New York)"}
+                },
+                "required": ["city"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_jours_feries",
+            "description": (
+                "Retourne la liste des jours feries en France pour une annee donnee. "
+                "Utilise cet outil quand l'utilisateur demande les jours feries, "
+                "les fetes, les ponts, les jours chomés d'une annee."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "year":  {"type": "integer", "description": "Annee (defaut : annee courante)"},
+                    "zone":  {"type": "string",  "description": "Zone geographique : metropole (defaut), alsace-moselle, guadeloupe, martinique, guyane, la-reunion, mayotte, saint-barthelemy, saint-martin, saint-pierre-et-miquelon, wallis-et-futuna, polynesie-francaise, nouvelle-caledonie"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_exchange_rate",
+            "description": (
+                "Donne les taux de change en temps reel (source : Banque Centrale Europeenne). "
+                "Utilise cet outil pour convertir des devises ou connaitre le cours EUR/USD, "
+                "EUR/GBP, EUR/CHF, EUR/JPY etc. "
+                "NE PAS utiliser pour la bourse ou les cryptomonnaies."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount":        {"type": "number", "description": "Montant a convertir (defaut : 1)"},
+                    "from_currency": {"type": "string", "description": "Devise source ISO 4217 (ex. EUR, USD, GBP)"},
+                    "to_currencies": {"type": "string", "description": "Devise(s) cible(s) separees par virgule (ex. USD,GBP,CHF). Vide = toutes les devises."}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "geocode_address",
+            "description": (
+                "Geolocalise une adresse et retourne ses coordonnees GPS. "
+                "Utilise cet outil quand l'utilisateur donne une adresse et demande "
+                "ou elle se trouve, ses coordonnees, ou pour verifier une adresse. "
+                "Priorite a la Base Adresse Nationale pour les adresses françaises."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "address": {"type": "string", "description": "Adresse complete ou partielle (rue, ville, code postal, pays)"}
+                },
+                "required": ["address"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_url_content",
+            "description": (
+                "Lit et extrait le contenu textuel complet d'une page web a partir de son URL. "
+                "Utilise cet outil quand l'utilisateur partage un lien et demande de le lire, "
+                "le resumer, ou analyser son contenu. "
+                "Necessite la cle Tavily. Different de search_web : ici on lit une URL connue."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL complete de la page a lire (https://...)"}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_book",
+            "description": (
+                "Recherche des informations sur un livre : titre, auteur, date de parution, "
+                "ISBN, nombre de pages. Accepte un titre, un auteur, ou un code ISBN. "
+                "Source : Open Library (base mondiale de livres en libre acces)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Titre du livre, nom d'auteur, ou ISBN (10 ou 13 chiffres)"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_country_info",
+            "description": (
+                "Donne des informations detaillees sur un pays : capitale, population, "
+                "superficie, langues officielles, monnaie, region, fuseaux horaires. "
+                "Utilise cet outil pour toute question factuelle sur un pays."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "country": {"type": "string", "description": "Nom du pays en francais ou en anglais (ex. France, Allemagne, Germany, Espagne)"}
+                },
+                "required": ["country"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_commune",
+            "description": (
+                "Recherche une commune, un departement ou une region française. "
+                "Retourne : nom officiel, code commune, code postal, departement, population. "
+                "Accepte un nom de commune, un code postal (5 chiffres) ou un nom de departement."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Nom de la commune, code postal (5 chiffres), ou nom du departement"}
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 
@@ -1792,6 +1943,114 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         except Exception as e:
             print(f"[HUB] Erreur find_skill : {e}")
             return '[Erreur lors de la recherche de skills]'
+
+    # ── Services libres (free_apis.py) ──
+
+    elif name == 'get_weather':
+        city = args.get('city', query).strip()
+        if not city:
+            return '[get_weather] Nom de ville manquant.'
+        try:
+            from modules.free_apis import get_weather as _get_weather
+            result = await _get_weather(city)
+            print(f"[HUB] 🌤️ Tool get_weather({city!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur get_weather : {e}")
+            return f'[Erreur météo : {e}]'
+
+    elif name == 'get_jours_feries':
+        year = args.get('year')
+        zone = args.get('zone', 'metropole')
+        try:
+            from modules.free_apis import get_jours_feries as _get_jf
+            result = await _get_jf(year=year, zone=zone)
+            print(f"[HUB] 📅 Tool get_jours_feries(year={year}, zone={zone!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur get_jours_feries : {e}")
+            return f'[Erreur jours fériés : {e}]'
+
+    elif name == 'get_exchange_rate':
+        amount      = float(args.get('amount', 1.0))
+        from_cur    = args.get('from_currency', 'EUR')
+        to_cur      = args.get('to_currencies', '')
+        try:
+            from modules.free_apis import get_exchange_rate as _get_fx
+            result = await _get_fx(amount=amount, from_currency=from_cur, to_currencies=to_cur)
+            print(f"[HUB] 💱 Tool get_exchange_rate({amount} {from_cur}→{to_cur or 'tout'}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur get_exchange_rate : {e}")
+            return f'[Erreur taux de change : {e}]'
+
+    elif name == 'geocode_address':
+        address = args.get('address', query).strip()
+        if not address:
+            return '[geocode_address] Adresse manquante.'
+        try:
+            from modules.free_apis import geocode_address as _geocode
+            result = await _geocode(address)
+            print(f"[HUB] 📍 Tool geocode_address({address!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur geocode_address : {e}")
+            return f'[Erreur géocodage : {e}]'
+
+    elif name == 'extract_url_content':
+        url = args.get('url', query).strip()
+        if not url:
+            return '[extract_url_content] URL manquante.'
+        try:
+            from modules.free_apis import extract_url_content as _extract_url
+            from core.database import get_api_keys as _gak
+            api_keys = _gak()
+            tavily_key = api_keys.get('tavily', '')
+            result = await _extract_url(url, tavily_key)
+            print(f"[HUB] 🔗 Tool extract_url_content({url[:60]!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur extract_url_content : {e}")
+            return f'[Erreur extraction URL : {e}]'
+
+    elif name == 'lookup_book':
+        bquery = args.get('query', query).strip()
+        if not bquery:
+            return '[lookup_book] Titre ou ISBN manquant.'
+        try:
+            from modules.free_apis import lookup_book as _lookup_book
+            result = await _lookup_book(bquery)
+            print(f"[HUB] 📚 Tool lookup_book({bquery!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur lookup_book : {e}")
+            return f'[Erreur recherche livre : {e}]'
+
+    elif name == 'get_country_info':
+        country = args.get('country', query).strip()
+        if not country:
+            return '[get_country_info] Nom de pays manquant.'
+        try:
+            from modules.free_apis import get_country_info as _get_country
+            result = await _get_country(country)
+            print(f"[HUB] 🌍 Tool get_country_info({country!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur get_country_info : {e}")
+            return f'[Erreur infos pays : {e}]'
+
+    elif name == 'search_commune':
+        cquery = args.get('query', query).strip()
+        if not cquery:
+            return '[search_commune] Nom ou code postal manquant.'
+        try:
+            from modules.free_apis import search_commune as _search_commune
+            result = await _search_commune(cquery)
+            print(f"[HUB] 🏘️ Tool search_commune({cquery!r}) → {len(result)} chars")
+            return result
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur search_commune : {e}")
+            return f'[Erreur commune : {e}]'
 
     elif name == 'run_code':
         code = args.get('code', '').strip()
