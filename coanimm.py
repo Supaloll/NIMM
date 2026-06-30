@@ -1278,18 +1278,34 @@ async def audit_against_skill(code: str, fiche_text: str, consigne: str = '',
 
 
 async def generate_plan(consigne: str, thread_id: str = None,
-                         provider_override: str = None) -> dict:
+                         provider_override: str = None,
+                         selected_bond_id: str = None) -> dict:
     """Demande au LLM de décrire ce qu'il va faire (sans coder).
-    Retourne {'plan': str, 'needs_explore': bool}."""
+    Retourne {'plan': str, 'needs_explore': bool}.
+    Si selected_bond_id est fourni, le bond est injecté dans la consigne."""
     import core.engine as engine
     import core.hub as hub
+
+    # Injection du bond sélectionné explicitement par l'utilisateur
+    consigne_effective = consigne
+    if selected_bond_id:
+        _all = db.list_prompts('skill')
+        _sk = (_all or {}).get(selected_bond_id)
+        if _sk:
+            _bond_text = _skill_to_text(_sk)
+            consigne_effective = (
+                f"[BOND SÉLECTIONNÉ PAR L'UTILISATEUR — applique impérativement cette méthode]\n"
+                f"{_bond_text}\n\n"
+                f"[CONSIGNE]\n{consigne}"
+            )
+            print(f"[COANIMM] Bond sélectionné injecté dans le plan : {_sk.get('label','?')}")
 
     settings = hub.load_settings(thread_id)
     provider, model = hub.get_task_provider_model('coanimm', settings)
     if provider_override:
         provider, model = provider_override, None
     raw = await engine.call_llm(
-        messages=[{'role': 'user', 'content': consigne}],
+        messages=[{'role': 'user', 'content': consigne_effective}],
         provider=provider,
         model=model,
         system_prompt=PLANNING_SYSTEM_PROMPT,
@@ -1443,11 +1459,14 @@ def execute_code(code: str, thread_id: str = None) -> dict:
 
 
 async def run_generated(consigne: str, thread_id: str = None,
-                        confirm_scope: str = None) -> dict:
+                        confirm_scope: str = None,
+                        selected_bond_id: str = None) -> dict:
     """Génère un script Python à partir de `consigne` puis l'exécute.
 
     Gère automatiquement la permission exec_generated_code et relance
     une fois si le code généré est syntaxiquement invalide (tronqué).
+    Si selected_bond_id est fourni, le bond est injecté dans la consigne
+    et utilisé directement pour l'auto-audit (pas de détection automatique).
     """
     if not consigne or not consigne.strip():
         return {'status': 'error', 'message': 'La consigne est vide.'}
@@ -1464,8 +1483,24 @@ async def run_generated(consigne: str, thread_id: str = None,
             'label': "Génération et exécution d'un script à partir d'une consigne libre",
         }
 
+    # Résoudre le bond sélectionné explicitement
+    _forced_bond = None
+    consigne_effective = consigne
+    if selected_bond_id:
+        _all = db.list_prompts('skill')
+        _forced_bond = (_all or {}).get(selected_bond_id)
+        if _forced_bond:
+            _bond_text = _skill_to_text(_forced_bond)
+            consigne_effective = (
+                f"[BOND SÉLECTIONNÉ PAR L'UTILISATEUR — tu DOIS appliquer impérativement "
+                f"la méthode décrite ci-dessous, en utilisant les fonctions nimm_* indiquées]\n"
+                f"{_bond_text}\n\n"
+                f"[CONSIGNE DE L'UTILISATEUR]\n{consigne}"
+            )
+            print(f"[COANIMM] Bond forcé : {_forced_bond.get('label','?')}")
+
     try:
-        code = await generate_code(consigne, thread_id)
+        code = await generate_code(consigne_effective, thread_id)
     except Exception as e:
         detail = str(e) or type(e).__name__
         print(f"[COANIMM] Erreur génération : {type(e).__name__}: {e}")
@@ -1495,35 +1530,4 @@ async def run_generated(consigne: str, thread_id: str = None,
         syntax_err2 = _check_syntax(code)
         if syntax_err2:
             return {
-                'status': 'error',
-                'message': (
-                    f"Le code généré est invalide même après réécriture ({syntax_err2}). "
-                    "Essaie de simplifier ta demande ou de la découper en plusieurs étapes."
-                ),
-                'code': code,
-            }
-
-    # Auto-audit à la lumière d'un skill validé (Étape C) — inerte si aucune fiche ne correspond.
-    _fiche = _find_relevant_skill(consigne)
-    if _fiche:
-        try:
-            _audited = await audit_against_skill(code, _skill_to_text(_fiche), consigne, thread_id)
-            if _audited.strip() and _check_syntax(_audited) is None:
-                code = _audited
-                print("[COANIMM] Auto-audit skill appliqué avant exécution.")
-        except Exception as _e:
-            print(f"[COANIMM] Auto-audit skill ignoré : {_e}")
-
-    workdir = _workspace_dir(thread_id)
-    before  = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
-    result  = _execute(code, None, workdir, thread_id)
-    result['code'] = code
-    new_files = _scan_new_files(workdir, before)
-    result['files_info'], result['files_list'] = _route_new_files(new_files, thread_id)
-    result['files_count'] = len(new_files)
-    return result
-
-
-# ══════════════════════════════════════════════════════════════════════
-# WORKFLOWS — Étape 3 : séquences de skills rejouables
-# ════════════════════════════════════════════════════════�
+                'st
