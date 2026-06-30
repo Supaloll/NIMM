@@ -1765,6 +1765,87 @@ async def coanimm_download_file(filename: str, thread_id: str = None):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+class CoanimmAxeAuditRequest(BaseModel):
+    url: str
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/axe_audit")
+async def coanimm_axe_audit(req: CoanimmAxeAuditRequest):
+    """Audit d'accessibilité WCAG d'une URL via axe-core + Playwright.
+    L'URL est validée anti-SSRF (net_guard). Retourne les violations classées
+    par niveau d'impact (critical, serious, moderate, minor) en texte brut.""";
+    import core.database as _db
+    if "axe_audit" in _db.list_coanimm_disabled_tools():
+        return {"status": "ok", "result": "[Outil audit accessibilité désactivé dans les réglages CoaNIMM]"}
+    url = (req.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return {"status": "error", "result": "URL invalide — doit commencer par http:// ou https://"}
+    try:
+        from modules import net_guard as _ng
+        _ng.assert_public_url(url)
+    except Exception as _e:
+        return {"status": "error", "result": f"URL refusée (protection anti-SSRF) : {_e}"}
+    try:
+        from playwright.async_api import async_playwright
+        from axe_playwright_python.async_playwright import Axe
+    except ImportError:
+        return {"status": "error", "result": (
+            "[axe-playwright-python non installé. "
+            "Exécuter : pip install axe-playwright-python && playwright install chromium]"
+        )}
+    try:
+        async with async_playwright() as _pw:
+            _browser = await _pw.chromium.launch(headless=True)
+            _page = await _browser.new_page()
+            await _page.goto(url, timeout=30000, wait_until="networkidle")
+            _axe = Axe()
+            _results = await _axe.run(_page)
+            await _browser.close()
+    except Exception as _e:
+        return {"status": "error", "result": f"[Erreur lors du chargement de la page : {_e}]"}
+    # Formater les violations par niveau d'impact
+    _IMPACTS = ["critical", "serious", "moderate", "minor"]
+    _violations = getattr(_results, "violations", []) or []
+    if not _violations:
+        return {"status": "ok", "result": (
+            f"Audit axe-core de {url}\n"
+            f"Aucune violation d'accessibilité détectée automatiquement.\n"
+            f"(Rappel : les outils automatisés couvrent ~30 à 40 % des critères WCAG — "
+            f"une évaluation humaine reste nécessaire pour le reste.)"
+        )}
+    _by_impact = {lvl: [] for lvl in _IMPACTS}
+    for v in _violations:
+        lvl = (v.get("impact") or "minor").lower()
+        if lvl not in _by_impact:
+            lvl = "minor"
+        _by_impact[lvl].append(v)
+    lines = [f"Audit axe-core de {url}", f"{len(_violations)} violation(s) détectée(s) :\n"]
+    _LABELS = {"critical": "CRITIQUE", "serious": "GRAVE", "moderate": "MODÉRÉE", "minor": "MINEURE"}
+    for lvl in _IMPACTS:
+        group = _by_impact[lvl]
+        if not group:
+            continue
+        lines.append(f"--- {_LABELS[lvl]} ({len(group)}) ---")
+        for v in group:
+            desc = v.get("description") or v.get("help") or v.get("id", "?")
+            rule = v.get("id", "")
+            nodes = len(v.get("nodes") or [])
+            wcag = ", ".join(
+                t.get("id", "") for t in (v.get("tags") or [])
+                if isinstance(t, dict) and t.get("id", "").startswith("wcag")
+            ) if isinstance((v.get("tags") or [{}])[0], dict) else ", ".join(
+                t for t in (v.get("tags") or []) if isinstance(t, str) and t.startswith("wcag")
+            )
+            lines.append(f"  [{rule}] {desc}")
+            if wcag:
+                lines.append(f"    Critère WCAG : {wcag}")
+            lines.append(f"    Éléments affectés : {nodes}")
+    lines.append(
+        "\n(Les outils automatisés couvrent ~30 à 40 % des critères WCAG. "
+        "Une évaluation humaine reste nécessaire.)"
+    )
+    return {"status": "ok", "result": "\n".join(lines)}
+
 class CoanimmPathRequest(BaseModel):
     path: str
 
