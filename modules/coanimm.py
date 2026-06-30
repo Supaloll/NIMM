@@ -198,7 +198,7 @@ GENERATE_SYSTEM_PROMPT = (
     "  Audit d'accessibilite WCAG d'une URL via axe-core (navigateur headless). "
     "Retourne les violations par niveau d'impact (critical, serious, moderate, minor) "
     "avec le critere WCAG et le nombre d'elements affectes. Protege anti-SSRF.\n"
-    "  nimm_generate_map(title, city, waypoints, route_segments=None, output_format='pdf') -> str\n"
+    "  nimm_generate_map(title, city, waypoints, route_segments=None, output_format='html') -> str\n"
     "  Genere un plan de trajet pedestre sur fond OpenStreetMap reel. waypoints = liste de dicts "
     "{address, lat, lon, annotation, color}. route_segments = [{from_idx, to_idx, color, label}]. "
     "Geocode chaque adresse via Nominatim, trace le reseau OSM reel, exporte en PDF ou PNG. "
@@ -791,7 +791,7 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     ) % tid
     parts.append(ax if "axe_audit" not in _disabled else _stub("nimm_axe_audit", "audit accessibilité WCAG"))
     gm = (
-        "def nimm_generate_map(title, city, waypoints, route_segments=None, output_format='pdf', _tid='%s'):\n"
+        "def nimm_generate_map(title, city, waypoints, route_segments=None, output_format='html', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"title\": title, \"city\": city, \"waypoints\": waypoints,\n"
         "        \"route_segments\": route_segments or [], \"output_format\": output_format,\n"
         "        \"thread_id\": _tid}).encode()\n"
