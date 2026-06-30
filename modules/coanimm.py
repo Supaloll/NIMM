@@ -191,8 +191,12 @@ GENERATE_SYSTEM_PROMPT = (
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
     "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
-    "nimm_make_daisy, nimm_list_voices, nimm_ocr_document, nimm_mistral_speak) : "
-    "ils sont déjà présents dans l'environnement."
+    "nimm_make_daisy, nimm_list_voices, nimm_ocr_document, nimm_mistral_speak, nimm_axe_audit) : "
+    "ils sont déjà présents dans l'environnement.\n"
+    "  nimm_axe_audit(url: str) -> str\n"
+    "  Audit d'accessibilite WCAG d'une URL via axe-core (navigateur headless). "
+    "Retourne les violations par niveau d'impact (critical, serious, moderate, minor) "
+    "avec le critere WCAG et le nombre d'elements affectes. Protege anti-SSRF.\n"
 )
 
 SKILL_WRITER_SYSTEM_PROMPT = (
@@ -767,6 +771,19 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     ) % tid
     parts.append(ma if "mistral_agent" not in _disabled else _stub("nimm_mistral_agent", "invoquer un agent Mistral"))
     parts.append(ml if "mistral_list_agents" not in _disabled else _stub("nimm_mistral_list_agents", "lister les agents Mistral"))
+    ax = (
+        "def nimm_axe_audit(url, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"url\": url, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/axe_audit\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get('status') != 'ok':\n"
+        "        raise RuntimeError('nimm_axe_audit : ' + _res.get('result', '?'))\n"
+        "    return _res.get('result', '')\n"
+    ) % tid
+    parts.append(ax if "axe_audit" not in _disabled else _stub("nimm_axe_audit", "audit accessibilité WCAG"))
     return "".join(parts)
 
 
