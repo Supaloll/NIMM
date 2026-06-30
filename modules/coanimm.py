@@ -191,17 +191,23 @@ GENERATE_SYSTEM_PROMPT = (
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
     "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
-    "nimm_make_daisy, nimm_list_voices, nimm_ocr_document, nimm_mistral_speak, nimm_axe_audit) : "
+    "nimm_make_daisy, nimm_list_voices, nimm_ocr_document, nimm_mistral_speak, nimm_axe_audit,\n"
+    "nimm_generate_map) : "
     "ils sont déjà présents dans l'environnement.\n"
     "  nimm_axe_audit(url: str) -> str\n"
     "  Audit d'accessibilite WCAG d'une URL via axe-core (navigateur headless). "
     "Retourne les violations par niveau d'impact (critical, serious, moderate, minor) "
     "avec le critere WCAG et le nombre d'elements affectes. Protege anti-SSRF.\n"
+    "  nimm_generate_map(title, city, waypoints, route_segments=None, output_format='pdf') -> str\n"
+    "  Genere un plan de trajet pedestre sur fond OpenStreetMap reel. waypoints = liste de dicts "
+    "{address, lat, lon, annotation, color}. route_segments = [{from_idx, to_idx, color, label}]. "
+    "Geocode chaque adresse via Nominatim, trace le reseau OSM reel, exporte en PDF ou PNG. "
+    "Retourne le chemin du PDF genere et un resume textuel accessible.\n"
 )
 
 SKILL_WRITER_SYSTEM_PROMPT = (
     "Tu es CoaNIMM en mode rédaction de fiche skill.\n"
-    "Une fiche skill capture une MÉTHODE qui vient d'être validée par Laurent, pour pouvoir "
+    "Une fiche bond capture une MÉTHODE qui vient d'être validée par Laurent, pour pouvoir "
     "la redemander plus tard. Ce n'est pas un script figé : c'est un mode d'emploi en langage "
     "naturel qui enseigne la LOGIQUE de la méthode.\n\n"
     "RÈGLE CARDINALE : enseigne par la logique de la méthode, jamais en recopiant l'exemple. "
@@ -213,7 +219,7 @@ SKILL_WRITER_SYSTEM_PROMPT = (
     "FORMAT OBLIGATOIRE de ta réponse, en TEXTE BRUT uniquement (Laurent lit sur plage braille : "
     "aucun markdown, aucune balise, aucun astérisque, aucun titre #, aucun backtick, aucune puce) :\n\n"
     "Ligne 1, exactement, la description « quand l'utiliser » en une seule phrase :\n"
-    "  DESCRIPTION: <une phrase qui dit dans quel cas ce skill s'applique>\n"
+    "  DESCRIPTION: <une phrase qui dit dans quel cas ce bond s'applique>\n"
     "Ligne 2, exactement, les déclencheurs séparés par des virgules :\n"
     "  MOTS-CLES: <mot1, mot2, mot3, ...>\n"
     "Puis une ligne vide, puis le CORPS de la fiche : la méthode en langage naturel, "
@@ -784,6 +790,21 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    return _res.get('result', '')\n"
     ) % tid
     parts.append(ax if "axe_audit" not in _disabled else _stub("nimm_axe_audit", "audit accessibilité WCAG"))
+    gm = (
+        "def nimm_generate_map(title, city, waypoints, route_segments=None, output_format='pdf', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"title\": title, \"city\": city, \"waypoints\": waypoints,\n"
+        "        \"route_segments\": route_segments or [], \"output_format\": output_format,\n"
+        "        \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/generate_map\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        _res = _nimm_json.loads(_r.read())\n"
+        "    if _res.get('status') != 'ok':\n"
+        "        raise RuntimeError('nimm_generate_map : ' + _res.get('result', '?'))\n"
+        "    return _res.get('result', '')\n"
+    ) % tid
+    parts.append(gm if "generate_map" not in _disabled else _stub("nimm_generate_map", "générer un plan de trajet pédestre"))
     return "".join(parts)
 
 
@@ -1024,16 +1045,16 @@ def _parse_skill_fiche(raw: str) -> dict:
 async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
                       label: str = None, script_ref: str = None,
                       provider_override: str = None) -> dict:
-    """Rédige et enregistre une fiche skill à partir d'un script validé par Laurent.
+    """Rédige et enregistre une fiche bond à partir d'un script validé par Laurent.
 
     Calqué sur maybe_generate_carnet_note : appel LLM en arrière-plan, lecture des
     fiches déjà écrites pour éviter un doublon, option SKIP si rien de réutilisable,
-    puis écriture via save_prompt(type='skill').
+    puis écriture via save_prompt(type='skill').  # type DB conservé
 
     Une fiche n'existe qu'après accord explicite de Laurent : cette fonction est donc
     appelée APRÈS validation. Elle pose valide_par_laurent=True et version=1.
 
-    Retourne {'status': 'created', 'skill': <entrée>} en cas de succès,
+    Retourne {'status': 'created', 'bond': <entrée>} en cas de succès,
     {'status': 'skip'} si le modèle juge l'entrée non réutilisable, ou
     {'status': 'error', 'message': ...}.
     """
@@ -1050,7 +1071,7 @@ async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
     if provider_override:
         provider, model = provider_override, None
 
-    # Fiches déjà écrites — évite de recréer un skill équivalent (cf. carnet de bord).
+    # Fiches déjà écrites — évite de recréer un bond équivalent (cf. carnet de bord).
     existing = db.list_prompts('skill')
     existing_block = ''
     if existing:
@@ -1061,7 +1082,7 @@ async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
                 lignes.append(f"- {desc}")
         if lignes:
             existing_block = (
-                "Fiches skill déjà existantes (ne recrée pas un doublon ; réponds SKIP "
+                "Fiches bond déjà existantes (ne recrée pas un doublon ; réponds SKIP "
                 "si ta fiche serait équivalente à l'une d'elles) :\n"
                 + '\n'.join(lignes) + "\n\n"
             )
@@ -1072,7 +1093,7 @@ async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
         f"{consigne_origine or '(non précisée)'}\n\n"
         "Script validé :\n"
         f"{script or '(aucun script)'}\n\n"
-        "Rédige la fiche skill selon le format imposé."
+        "Rédige la fiche bond selon le format imposé."
     )
 
     try:
@@ -1091,14 +1112,14 @@ async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
 
     fiche = _parse_skill_fiche(raw)
     if fiche.get('skip'):
-        print("[SKILL] Fiche ignorée (SKIP : rien de réutilisable ou doublon).")
+        print("[BOND] Fiche ignorée (SKIP : rien de réutilisable ou doublon).")
         return {'status': 'skip'}
 
     corps = fiche['corps']
     if not corps:
         return {'status': 'error', 'message': "La fiche générée est vide."}
 
-    label = (label or fiche['description'] or 'Skill sans titre')[:120]
+    label = (label or fiche['description'] or 'Bond sans titre')[:120]
     import modules.coanimm_safety as _safety
     capacites = _safety.capabilities_of(script)
     meta = {
@@ -1112,7 +1133,7 @@ async def write_skill(consigne_origine: str, script: str, thread_id: str = None,
         'version': 1,
     }
     entry = db.save_prompt(None, label, corps, type='skill', meta=meta)
-    print(f"[SKILL] Fiche créée : {label!r} — mots-clés : {', '.join(fiche['mots_cles']) or '(aucun)'}")
+    print(f"[BOND] Fiche créée : {label!r} — mots-clés : {', '.join(fiche['mots_cles']) or '(aucun)'}")
     return {'status': 'created', 'skill': entry}
 
 
@@ -1137,7 +1158,7 @@ def update_skill(skill_id, label=None, description=None, mots_cles=None, corps=N
     except Exception:
         meta['version'] = 2
     entry = db.save_prompt(skill_id, new_label, new_text, type='skill', meta=meta)
-    print(f"[SKILL] Fiche modifiée : {new_label!r} (v{meta['version']})")
+    print(f"[BOND] Fiche modifiée : {new_label!r} (v{meta['version']})")
     return {'status': 'ok', 'skill': entry}
 
 
@@ -1146,7 +1167,7 @@ def _skill_to_text(sk: dict) -> str:
     meta = sk.get('meta') or {}
     desc = meta.get('description', '') or sk.get('label', '')
     return (
-        f"SKILL : {sk.get('label', '')}\n"
+        f"BOND : {sk.get('label', '')}\n"
         f"Quand l'utiliser : {desc}\n"
         f"Méthode :\n{sk.get('text', '')}"
     )
@@ -1239,9 +1260,9 @@ async def audit_against_skill(code: str, fiche_text: str, consigne: str = '',
     que par une erreur d'exécution. Renvoie le script (corrigé ou inchangé)."""
     objectif = (consigne or '').strip() or "(objectif initial non précisé)"
     message = (
-        "Une MÉTHODE déjà validée par l'utilisateur (fiche skill) décrit comment réaliser "
+        "Une MÉTHODE déjà validée par l'utilisateur (fiche bond) décrit comment réaliser "
         "ce type de tâche.\n\n"
-        f"Fiche skill :\n{fiche_text}\n\n"
+        f"Fiche bond :\n{fiche_text}\n\n"
         f"Objectif :\n{objectif}\n\n"
         "Script généré :\n"
         f"{code}\n\n"

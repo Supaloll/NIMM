@@ -16,11 +16,18 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from core.database import save_prompt, list_prompts
+    from core.database import save_prompt, list_prompts, get_all_users, set_user_context
 except ImportError as e:
     print(f"Erreur d'import : {e}")
     print("Vérifiez que vous lancez ce script depuis la racine du projet NIMM.")
     sys.exit(1)
+
+_users = get_all_users()
+if not _users:
+    print("Aucun utilisateur trouvé. Lancez NIMM au moins une fois.")
+    sys.exit(1)
+set_user_context(_users[0]["id"])
+print(f"Contexte utilisateur : {_users[0].get('name', _users[0]['id'])}")
 
 SKILL_LABEL = "Audit d'accessibilité WCAG d'un site web (axe-core)"
 
