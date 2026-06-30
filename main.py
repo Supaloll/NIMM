@@ -1907,15 +1907,29 @@ async def coanimm_generate_map(req: CoanimmMapRequest):
             continue
         try:
             loc = geocoder.geocode(query, timeout=10)
+            if not loc:
+                # Repli 1 : extraire le premier élément ressemblant à une rue
+                import re as _re
+                _rue = _re.search(r'((?:rue|avenue|boulevard|allée|passage|impasse|place|square|voie)\s+[^,]+)', addr, _re.I)
+                if _rue:
+                    loc = geocoder.geocode(f"{_rue.group(1).strip()}, {req.city}", timeout=10)
+            if not loc:
+                # Repli 2 : premier segment de l'adresse
+                simplified = addr.split(",")[0].strip()
+                if simplified and simplified != addr:
+                    loc = geocoder.geocode(f"{simplified}, {req.city}", timeout=10)
         except GeocoderTimedOut:
             loc = None
         if loc:
             resolved.append({**wp, "lat": loc.latitude, "lon": loc.longitude, "address": addr or loc.address})
         else:
-            errors.append(f"Waypoint {i+1} ({addr!r}) : adresse non trouvée dans OpenStreetMap — vérifiez le nom de rue.")
+            errors.append(f"Waypoint {i+1} ({addr!r}) : adresse non trouvée dans OpenStreetMap.")
 
-    if errors:
-        return {"status": "error", "result": "Erreurs de géocodage :\n" + "\n".join(errors)}
+    if errors and len(resolved) < 2:
+        return {"status": "error", "result": "Erreurs de géocodage (trop peu de waypoints résolus) :\n" + "\n".join(errors)}
+    # Avertissements non bloquants si au moins 2 waypoints résolus
+    warnings_geo = errors[:]
+    errors = []
 
     # ── 2. Réseau OSM autour du tracé ──
     lats = [p["lat"] for p in resolved]
@@ -2096,7 +2110,9 @@ async def coanimm_generate_map(req: CoanimmMapRequest):
         text_lines.append(f"\nFichier HTML : {html_path}")
         text_lines.append("Ouvrez ce fichier dans un navigateur pour voir la carte interactive.")
         text_lines.append("La section texte en haut du fichier liste toutes les étapes pour votre lecteur d'écran.")
-        return {"status": "ok", "result": "\n".join(text_lines), "html_path": html_path}
+        if warnings_geo:
+            text_lines.insert(0, "⚠️ Certains waypoints n'ont pas pu être géocodés et ont été ignorés :\n" + "\n".join(warnings_geo) + "\n")
+        return {"status": "ok", "result": "\n".join(text_lines), "html_path": html_path, "warnings": warnings_geo}
 
 class CoanimmPathRequest(BaseModel):
     path: str
