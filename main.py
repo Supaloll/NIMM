@@ -1846,6 +1846,182 @@ async def coanimm_axe_audit(req: CoanimmAxeAuditRequest):
     )
     return {"status": "ok", "result": "\n".join(lines)}
 
+
+class CoanimmMapRequest(BaseModel):
+    thread_id: Optional[str] = None
+    title: str = "Plan de trajet"
+    city: str = "Paris, France"
+    waypoints: list  # [{address, lat, lon, annotation, color, symbol}]
+    route_segments: list = []  # [{from_idx, to_idx, color, label}]
+    output_format: str = "pdf"  # pdf ou html
+
+@app.post("/api/coanimm/generate_map")
+async def coanimm_generate_map(req: CoanimmMapRequest):
+    """Génère un plan de trajet pédestre à partir de waypoints géocodés.
+    Utilise OpenStreetMap (osmnx) pour le réseau réel, matplotlib pour le rendu,
+    contextily pour le fond de carte, et exporte en PDF ou HTML."""
+    import tempfile, os, math
+    try:
+        import osmnx as ox
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import contextily as ctx
+        from geopy.geocoders import Nominatim
+        from geopy.exc import GeocoderTimedOut
+        import geopandas as gpd
+        from shapely.geometry import LineString, Point
+        import networkx as nx
+    except ImportError as e:
+        return {"status": "error", "result": f"Dépendance manquante : {e}. Installez : pip install osmnx folium contextily geopandas matplotlib geopy --break-system-packages"}
+
+    geocoder = Nominatim(user_agent="nimm-map/1.0")
+    waypoints = req.waypoints or []
+    if len(waypoints) < 2:
+        return {"status": "error", "result": "Il faut au moins 2 waypoints pour générer un plan de trajet."}
+
+    # ── 1. Géocodage ──
+    resolved = []
+    errors = []
+    for i, wp in enumerate(waypoints):
+        lat = wp.get("lat")
+        lon = wp.get("lon")
+        addr = wp.get("address", "")
+        if lat and lon:
+            resolved.append({**wp, "lat": float(lat), "lon": float(lon)})
+            continue
+        query = f"{addr}, {req.city}" if addr else None
+        if not query:
+            errors.append(f"Waypoint {i+1} : adresse manquante et coordonnées absentes.")
+            continue
+        try:
+            loc = geocoder.geocode(query, timeout=10)
+        except GeocoderTimedOut:
+            loc = None
+        if loc:
+            resolved.append({**wp, "lat": loc.latitude, "lon": loc.longitude, "address": addr or loc.address})
+        else:
+            errors.append(f"Waypoint {i+1} ({addr!r}) : adresse non trouvée dans OpenStreetMap — vérifiez le nom de rue.")
+
+    if errors:
+        return {"status": "error", "result": "Erreurs de géocodage :\n" + "\n".join(errors)}
+
+    # ── 2. Réseau OSM autour du tracé ──
+    lats = [p["lat"] for p in resolved]
+    lons = [p["lon"] for p in resolved]
+    center = (sum(lats)/len(lats), sum(lons)/len(lons))
+    # Rayon englobant tous les points + 15 % de marge
+    radius = max(
+        max(abs(lat - center[0]) for lat in lats) * 111320,
+        max(abs(lon - center[1]) for lon in lons) * 111320 * math.cos(math.radians(center[0]))
+    ) * 1.15
+    radius = max(radius, 200)  # minimum 200 m
+
+    try:
+        G = ox.graph_from_point(center, dist=int(radius), network_type="walk", simplify=True)
+    except Exception as e:
+        return {"status": "error", "result": f"Impossible de charger le réseau OSM : {e}"}
+
+    # ── 3. Tracé des segments entre waypoints (réseau réel) ──
+    route_edges = []
+    for i in range(len(resolved) - 1):
+        try:
+            n0 = ox.nearest_nodes(G, resolved[i]["lon"],  resolved[i]["lat"])
+            n1 = ox.nearest_nodes(G, resolved[i+1]["lon"], resolved[i+1]["lat"])
+            path = nx.shortest_path(G, n0, n1, weight="length")
+            route_edges.append(path)
+        except nx.NetworkXNoPath:
+            route_edges.append(None)
+
+    # ── 4. Rendu matplotlib ──
+    fig, ax = plt.subplots(figsize=(12, 10))
+    fig.patch.set_facecolor("white")
+
+    # Réseau de fond (gris clair)
+    ox.plot_graph(G, ax=ax, show=False, close=False,
+                  node_size=0, edge_color="#cccccc", edge_linewidth=0.5, bgcolor="white")
+
+    # Segments de trajet
+    COLORS = ["#e74c3c", "#2980b9", "#27ae60", "#8e44ad", "#e67e22"]
+    seg_defs = req.route_segments or [{"from_idx": i, "to_idx": i+1,
+                                        "color": COLORS[i % len(COLORS)], "label": f"Segment {i+1}"}
+                                       for i in range(len(resolved)-1)]
+    legend_patches = []
+    for seg in seg_defs:
+        fi = seg.get("from_idx", 0)
+        ti = seg.get("to_idx", fi + 1)
+        color = seg.get("color", "#e74c3c")
+        label = seg.get("label", f"Segment {fi+1}→{ti+1}")
+        if fi < len(route_edges) and route_edges[fi]:
+            path = route_edges[fi]
+            xs = [G.nodes[n]["x"] for n in path]
+            ys = [G.nodes[n]["y"] for n in path]
+            ax.plot(xs, ys, color=color, linewidth=3.5, zorder=4, solid_capstyle="round")
+            legend_patches.append(mpatches.Patch(color=color, label=label))
+
+    # Fond de carte OSM
+    try:
+        ctx.add_basemap(ax, crs="EPSG:4326", source=ctx.providers.OpenStreetMap.Mapnik, zoom="auto")
+    except Exception:
+        pass  # Fond de carte optionnel (pas de connexion → carte sans fond)
+
+    # Marqueurs waypoints
+    SYMBOLS = ["●", "▲", "■", "★", "◆"]
+    for i, wp in enumerate(resolved):
+        sym = wp.get("symbol", SYMBOLS[i % len(SYMBOLS)])
+        ann = wp.get("annotation", wp.get("address", f"Point {i+1}"))
+        color = wp.get("color", "#2c3e50")
+        ax.plot(wp["lon"], wp["lat"], "o", color=color, markersize=10, zorder=6, markeredgecolor="white", markeredgewidth=1.5)
+        ax.annotate(f"{i+1}. {ann}",
+                    xy=(wp["lon"], wp["lat"]),
+                    xytext=(8, 8), textcoords="offset points",
+                    fontsize=8, color="#1a1a1a",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.85, edgecolor="#cccccc"),
+                    zorder=7)
+
+    # Titre et légende
+    ax.set_title(req.title, fontsize=14, fontweight="bold", pad=12)
+    ax.set_xlabel("Longitude", fontsize=8, color="#666666")
+    ax.set_ylabel("Latitude", fontsize=8, color="#666666")
+    if legend_patches:
+        ax.legend(handles=legend_patches, loc="lower right", fontsize=9,
+                  framealpha=0.9, edgecolor="#cccccc")
+
+    # Note de bas de page
+    fig.text(0.01, 0.01,
+             "Fond de carte © OpenStreetMap contributors — réseau pédestre OSM",
+             fontsize=7, color="#888888")
+
+    # ── 5. Export ──
+    out_dir = "/tmp/nimm_maps"
+    os.makedirs(out_dir, exist_ok=True)
+    import time, hashlib
+    slug = hashlib.md5(req.title.encode()).hexdigest()[:8]
+    fname = f"trajet_{slug}_{int(time.time())}"
+    pdf_path = f"{out_dir}/{fname}.pdf"
+    png_path = f"{out_dir}/{fname}.png"
+
+    plt.tight_layout()
+    plt.savefig(pdf_path, format="pdf", dpi=150, bbox_inches="tight")
+    plt.savefig(png_path, format="png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    # Résumé textuel (accessible)
+    lines = [f"Plan généré : {req.title}", f"Ville : {req.city}", ""]
+    lines.append("Waypoints :")
+    for i, wp in enumerate(resolved):
+        lines.append(f"  {i+1}. {wp.get('address','?')} ({wp['lat']:.5f}, {wp['lon']:.5f})")
+        if wp.get("annotation"):
+            lines.append(f"     → {wp['annotation']}")
+    if any(e is None for e in route_edges):
+        lines.append("")
+        lines.append("⚠ Certains segments n'ont pas pu être tracés sur le réseau pédestre (réseau OSM incomplet dans cette zone).")
+    lines.append(f"")
+    lines.append(f"Fichier PDF : {pdf_path}")
+    lines.append(f"Fichier PNG : {png_path}")
+    return {"status": "ok", "result": "\n".join(lines), "pdf_path": pdf_path, "png_path": png_path}
+
 class CoanimmPathRequest(BaseModel):
     path: str
 

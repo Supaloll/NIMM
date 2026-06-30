@@ -8756,7 +8756,7 @@ async function _coanimmComposeWorkflowFromHistory() {
         const matched = matches.filter(m => m.matched);
         const unmatched = matches.filter(m => !m.matched);
         if (!matched.length) {
-            const msg = "Aucune tâche cochée ne correspond à un skill validé. Crée d'abord les skills (case « mémoriser la méthode » après une tâche réussie).";
+            const msg = "Aucune tâche cochée ne correspond à un bond validé. Crée d'abord les bonds (case « mémoriser la méthode » après une tâche réussie).";
             if (status) status.textContent = msg;
             _coanimmAnnounce(msg);
             return;
@@ -8768,7 +8768,7 @@ async function _coanimmComposeWorkflowFromHistory() {
         const cdet = document.getElementById('coanimm-wf-compose-details');
         if (cdet) cdet.open = true;
         let msg = matched.length + ' étape(s) ajoutée(s) au compositeur de workflow.';
-        if (unmatched.length) msg += ' ' + unmatched.length + ' tâche(s) sans skill correspondant, ignorée(s).';
+        if (unmatched.length) msg += ' ' + unmatched.length + ' tâche(s) sans bond correspondant, ignorée(s).';
         msg += ' Donne un nom au workflow puis enregistre-le.';
         if (status) status.textContent = msg;
         _coanimmAnnounce(msg);
@@ -8929,7 +8929,7 @@ document.getElementById('coanimm-seclog-clear-btn')?.addEventListener('click', a
     } catch (e) { if (status) status.textContent = 'Erreur.'; }
 });
 
-// ── Skills enregistrés : liste, édition, suppression ──
+// ── Bonds enregistrés : liste, édition, suppression ──
 let _coanimmEditingSkillId = null;
 async function loadCoanimmSkills() {
     try {
@@ -8945,7 +8945,7 @@ function _renderCoanimmSkills(prompts) {
     const ids = Object.keys(prompts || {});
     if (!ids.length) {
         const li = document.createElement('li');
-        li.textContent = "Aucun skill enregistré pour le moment.";
+        li.textContent = "Aucun bond enregistré pour le moment.";
         li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
         ul.appendChild(li);
         return;
@@ -8971,13 +8971,13 @@ function _renderCoanimmSkills(prompts) {
         const edit = document.createElement('button');
         edit.type = 'button';
         edit.textContent = 'Modifier';
-        edit.setAttribute('aria-label', 'Modifier le skill ' + (sk.label || ''));
+        edit.setAttribute('aria-label', 'Modifier le bond ' + (sk.label || ''));
         edit.style.cssText = 'font-size:0.8rem;padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
         edit.addEventListener('click', () => _coanimmEditSkill(id, sk));
         const del = document.createElement('button');
         del.type = 'button';
         del.textContent = 'Supprimer';
-        del.setAttribute('aria-label', 'Supprimer le skill ' + (sk.label || ''));
+        del.setAttribute('aria-label', 'Supprimer le bond ' + (sk.label || ''));
         del.style.cssText = 'font-size:0.8rem;padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
         del.addEventListener('click', () => _coanimmDeleteSkill(id, sk.label || ''));
         actions.appendChild(edit); actions.appendChild(del);
@@ -9019,25 +9019,25 @@ async function _coanimmSaveSkillEdit() {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
-        if (!r.ok) { if (status) status.textContent = 'Erreur lors de la modification.'; _coanimmAnnounce('Erreur lors de la modification du skill.'); return; }
+        if (!r.ok) { if (status) status.textContent = 'Erreur lors de la modification.'; _coanimmAnnounce('Erreur lors de la modification du bond.'); return; }
         document.getElementById('coanimm-skill-edit')?.classList.add('hidden');
         _coanimmEditingSkillId = null;
         await loadCoanimmSkills();
         if (typeof _coanimmWfPopulateSkillPicker === 'function') _coanimmWfPopulateSkillPicker();
-        if (status) status.textContent = 'Skill modifié (nouvelle version enregistrée).';
-        _coanimmAnnounce('Skill modifié, nouvelle version enregistrée.');
+        if (status) status.textContent = 'Bond modifié (nouvelle version enregistrée).';
+        _coanimmAnnounce('Bond modifié, nouvelle version enregistrée.');
     } catch (e) { if (status) status.textContent = 'Erreur réseau.'; }
 }
 async function _coanimmDeleteSkill(id, label) {
-    if (!confirm('Supprimer définitivement le skill « ' + label + ' » ?')) return;
+    if (!confirm('Supprimer définitivement le bond « ' + label + ' » ?')) return;
     const status = document.getElementById('coanimm-skills-status');
     try {
         const r = await fetch('/api/coanimm/skills/' + encodeURIComponent(id), { method: 'DELETE' });
         if (!r.ok) { if (status) status.textContent = 'Erreur lors de la suppression.'; return; }
         await loadCoanimmSkills();
         if (typeof _coanimmWfPopulateSkillPicker === 'function') _coanimmWfPopulateSkillPicker();
-        if (status) status.textContent = 'Skill supprimé.';
-        _coanimmAnnounce('Skill supprimé.');
+        if (status) status.textContent = 'Bond supprimé.';
+        _coanimmAnnounce('Bond supprimé.');
     } catch (e) { if (status) status.textContent = 'Erreur réseau.'; }
 }
 document.getElementById('coanimm-skill-edit-save')?.addEventListener('click', _coanimmSaveSkillEdit);
@@ -9111,7 +9111,7 @@ async function loadCoanimmWorkflows() {
         const r = await fetch('/api/coanimm/workflows');
         const d = await r.json();
         _renderCoanimmWorkflows(d.workflows || []);
-        // Peupler le sélecteur de skills pour la composition
+        // Peupler le sélecteur de bonds pour la composition
         await _coanimmWfPopulateSkillPicker();
     } catch (e) { console.error('[COANIMM-WF] Erreur chargement workflows :', e); }
 }
@@ -9206,9 +9206,9 @@ async function _coanimmWfPopulateSkillPicker() {
         const d = await r.json();
         const skills = Object.entries(d.prompts || {});
         // Conserver la première option vide
-        sel.innerHTML = '<option value="">— Ajouter un skill —</option>';
+        sel.innerHTML = '<option value="">— Ajouter un bond —</option>';
         skills.forEach(([id, sk]) => {
-            if (!sk.meta?.valide_par_laurent) return; // skills validés seulement
+            if (!sk.meta?.valide_par_laurent) return; // bonds validés seulement
             const opt = document.createElement('option');
             opt.value = id;
             opt.textContent = sk.label || id;
@@ -9287,7 +9287,7 @@ async function _coanimmWfSave() {
     const status = document.getElementById('coanimm-wf-save-status');
     const label = nameInput?.value?.trim();
     if (!label) { if (status) status.textContent = 'Donnez un nom au workflow.'; return; }
-    if (!_coanimmWfSteps.length) { if (status) status.textContent = 'Ajoutez au moins un skill.'; return; }
+    if (!_coanimmWfSteps.length) { if (status) status.textContent = 'Ajoutez au moins un bond.'; return; }
     if (status) status.textContent = 'Enregistrement…';
     try {
         const r = await fetch('/api/coanimm/workflows', {
@@ -10122,9 +10122,9 @@ document.getElementById('coanimm-save-confirm')?.addEventListener('click', async
                     });
                     const ds = await rs.json();
                     if (ds.status === 'created') {
-                        suffix += ' Méthode mémorisée comme skill' + (ds.skill && ds.skill.label ? ' : ' + ds.skill.label : '') + '.';
+                        suffix += ' Méthode mémorisée comme bond' + (ds.skill && ds.skill.label ? ' : ' + ds.skill.label : '') + '.';
                     } else if (ds.status === 'skip') {
-                        suffix += ' (Méthode non retenue : déjà couverte par un skill existant.)';
+                        suffix += ' (Méthode non retenue : déjà couverte par un bond existant.)';
                     } else {
                         suffix += ' (Méthode non mémorisée : ' + (ds.message || 'erreur') + '.)';
                     }

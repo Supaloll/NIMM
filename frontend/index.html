@@ -1034,14 +1034,14 @@ Analyse les sentiments de : ..."
             <p id="coanimm-seclog-status" role="status" aria-live="polite" style="font-size:0.82rem;margin:6px 0 0;min-height:1em;"></p>
         </details>
         <details id="coanimm-skills-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
-            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Skills enregistrés</summary>
+            <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Bonds enregistrés</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
                 Les méthodes validées que CoaNIMM peut réutiliser. Vous pouvez modifier leur description, leurs mots-clés ou leur méthode, ou les supprimer.
             </p>
-            <ul id="coanimm-skills-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;" aria-label="Skills enregistrés"></ul>
+            <ul id="coanimm-skills-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;" aria-label="Bonds enregistrés"></ul>
             <p id="coanimm-skills-status" role="status" aria-live="polite" style="font-size:0.82rem;margin:4px 0;min-height:1em;"></p>
             <div id="coanimm-skill-edit" class="hidden" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
-                <h4 id="coanimm-skill-edit-title" tabindex="-1" style="margin:0 0 6px;font-size:0.85rem;">Modifier le skill</h4>
+                <h4 id="coanimm-skill-edit-title" tabindex="-1" style="margin:0 0 6px;font-size:0.85rem;">Modifier le bond</h4>
                 <label for="coanimm-skill-edit-name" style="display:block;font-size:0.82rem;margin-bottom:2px;">Nom</label>
                 <input type="text" id="coanimm-skill-edit-name" style="width:100%;box-sizing:border-box;padding:5px 8px;margin-bottom:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);font-size:0.82rem;" />
                 <label for="coanimm-skill-edit-desc" style="display:block;font-size:0.82rem;margin-bottom:2px;">Quand l'utiliser</label>
@@ -1058,7 +1058,7 @@ Analyse les sentiments de : ..."
         <details id="coanimm-workflows-details" style="margin-top:14px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
             <summary style="cursor:pointer;font-size:0.88rem;font-weight:600;">Workflows enregistrés</summary>
             <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0;">
-                Enchaînez plusieurs skills validés en une seule action. Créez un workflow depuis la liste des skills ou depuis l'historique.
+                Enchaînez plusieurs bonds validés en une seule action. Créez un plouf depuis la liste des bonds ou depuis l'historique.
             </p>
             <!-- Liste des workflows existants -->
             <ul id="coanimm-workflows-list" style="list-style:none;padding:0;margin:0 0 10px;font-size:0.82rem;" aria-label="Workflows enregistrés"></ul>
@@ -1071,16 +1071,16 @@ Analyse les sentiments de : ..."
                     <label for="coanimm-wf-name" style="display:block;font-size:0.82rem;margin-bottom:4px;">Nom du workflow</label>
                     <input type="text" id="coanimm-wf-name" placeholder="Ex. : Préparer les images pour la machine"
                            style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);font-size:0.82rem;" />
-                    <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0 4px;">Skills à enchaîner (glisser/déposer ou boutons ↑↓ pour réordonner) :</p>
+                    <p style="font-size:0.8rem;color:var(--text-muted);margin:8px 0 4px;">Bonds à enchaîner (glisser/déposer ou boutons ↑↓ pour réordonner) :</p>
                     <ul id="coanimm-wf-steps" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;" aria-label="Étapes du workflow en cours de composition"></ul>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <select id="coanimm-wf-skill-pick" aria-label="Choisir un skill à ajouter"
+                        <select id="coanimm-wf-skill-pick" aria-label="Choisir un bond à ajouter"
                                 style="flex:1;min-width:0;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text);font-size:0.82rem;">
                             <option value="">— Ajouter un skill —</option>
                         </select>
                         <button type="button" id="coanimm-wf-add-step-btn"
                                 style="padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;font-size:0.82rem;"
-                                aria-label="Ajouter le skill sélectionné au workflow">Ajouter</button>
+                                aria-label="Ajouter le bond sélectionné au plouf">Ajouter</button>
                     </div>
                     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
                         <button type="button" id="coanimm-wf-save-btn"
@@ -1220,7 +1220,7 @@ Analyse les sentiments de : ..."
                     style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.85rem;margin-bottom:8px;">
                 <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:8px;">
                     <input type="checkbox" id="coanimm-save-skill-check" style="width:auto;margin:2px 0 0;flex:none;">
-                    <label for="coanimm-save-skill-check" style="font-size:0.82rem;margin:0;cursor:pointer;">Aussi mémoriser la méthode comme skill réutilisable (la prochaine tâche semblable la réutilisera)</label>
+                    <label for="coanimm-save-skill-check" style="font-size:0.82rem;margin:0;cursor:pointer;">Aussi mémoriser la méthode comme bond réutilisable (la prochaine tâche semblable le réutilisera)</label>
                 </div>
                 <div style="display:flex;gap:8px;">
                     <button id="coanimm-save-confirm" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">Enregistrer</button>

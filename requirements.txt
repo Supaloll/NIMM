@@ -61,3 +61,9 @@ rapidfuzz>=3.0.0
 
 # ── QR codes ──
 qrcode[pil]>=7.4.2   # génération QR code (texte, URL, vCard, Wi-Fi…) — PIL déjà présent via pillow
+# ── Cartographie / plans de trajet pédestre ──
+osmnx>=1.9.0              # réseau routier OpenStreetMap + géocodage Nominatim
+folium>=0.15.0            # cartes interactives HTML (Leaflet.js)
+contextily>=1.6.0         # fond de carte raster (tuiles OSM/Stamen) pour matplotlib
+geopandas>=0.14.0         # manipulation de géométries (dépendance osmnx)
+matplotlib>=3.8.0         # rendu statique + export PDF
