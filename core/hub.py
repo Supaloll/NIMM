@@ -3079,6 +3079,16 @@ async def process_message_stream(
     if _agent_mode == 'vibe':
         settings['provider'] = 'mistral'
         web_search = True  # Vibe = web search natif Mistral toujours actif
+        # S'assurer que le modèle est un modèle Mistral valide
+        _cur_model = settings.get('model') or ''
+        _MISTRAL_MODELS = {
+            'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest',
+            'mistral-saba-latest', 'open-mistral-nemo', 'open-mixtral-8x22b',
+            'pixtral-12b-2409', 'pixtral-large-latest',
+        }
+        if not _cur_model or not any(_cur_model.startswith(m.split('-')[0]) for m in _MISTRAL_MODELS):
+            # Modèle non-Mistral (ex: deepseek-chat) → forcer un modèle Mistral par défaut
+            settings['model'] = 'mistral-small-latest'
 
     # ── Garde provider ──
     provider  = settings.get('provider', '')

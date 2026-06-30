@@ -3696,8 +3696,8 @@ async function _triggerStream(content, conversationId, images = null) {
             _srAnnounce('Connexion impossible au serveur.');
         } else {
             // Erreur HTTP : le toast a déjà été affiché par _notifyServiceError
-            appendAssistantMessage('❌ Le fournisseur n'a pas pu répondre.', 'neutre', false);
-            _srAnnounce('Le fournisseur n'a pas pu répondre.');
+            appendAssistantMessage(`❌ Le fournisseur n'a pas pu répondre.`, 'neutre', false);
+            _srAnnounce(`Le fournisseur n'a pas pu répondre.`);
         }
         console.error('[NIMM] Erreur stream :', e);
     }
