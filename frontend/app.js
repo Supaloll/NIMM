@@ -8694,7 +8694,7 @@ function _renderCoanimmHistory(list) {
         cb.className = 'coanimm-hist-pick';
         cb.style.marginTop = '3px';
         cb._consigne = item.consigne || '';
-        cb.setAttribute('aria-label', 'Inclure dans un workflow : ' + cons);
+        cb.setAttribute('aria-label', 'Inclure dans un ricochet : ' + cons);
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.textContent = date + ' — ' + statusTxt + ' : ' + cons;
@@ -8769,13 +8769,13 @@ async function _coanimmComposeWorkflowFromHistory() {
         if (cdet) cdet.open = true;
         let msg = matched.length + ' étape(s) ajoutée(s) au compositeur de workflow.';
         if (unmatched.length) msg += ' ' + unmatched.length + ' tâche(s) sans bond correspondant, ignorée(s).';
-        msg += ' Donne un nom au workflow puis enregistre-le.';
+        msg += ' Donne un nom au ricochet puis enregistre-le.';
         if (status) status.textContent = msg;
         _coanimmAnnounce(msg);
         const nm = document.getElementById('coanimm-wf-name');
         if (nm) setTimeout(() => nm.focus(), 80);
     } catch (e) {
-        if (status) status.textContent = 'Erreur lors de la composition du workflow.';
+        if (status) status.textContent = 'Erreur lors de la composition du ricochet.';
         console.error('[COANIMM-WF] from history:', e);
     }
 }
@@ -9102,7 +9102,7 @@ async function _toggleCoanimmCapability(cap, grant) {
     } catch (e) { _coanimmAnnounce("Erreur lors de la mise à jour de la capacité."); }
 }
 
-// ── Workflows CoaNIMM ──────────────────────────────────────────────────────────
+// ── Ricochets CoaNIMM ──────────────────────────────────────────────────────────
 
 let _coanimmWfSteps = []; // [{skill_id, label}]
 
@@ -9123,7 +9123,7 @@ function _renderCoanimmWorkflows(workflows) {
     if (!workflows.length) {
         const li = document.createElement('li');
         li.style.cssText = 'color:var(--text-muted);font-size:0.8rem;margin-bottom:6px;';
-        li.textContent = 'Aucun workflow enregistré.';
+        li.textContent = 'Aucun ricochet enregistré.';
         list.appendChild(li);
         return;
     }
@@ -9172,7 +9172,7 @@ async function _runCoanimmWorkflow(wfId, label) {
     const resultDiv = document.getElementById('coanimm-wf-result');
     if (!resultDiv) return;
     resultDiv.style.display = 'block';
-    resultDiv.textContent = `Exécution du workflow « ${label} »…`;
+    resultDiv.textContent = `Exécution du ricochet « ${label} »…`;
 
     try {
         const r = await fetch(`/api/coanimm/workflows/${wfId}/run?thread_id=${encodeURIComponent(currentThreadId || '')}`, {
@@ -9194,7 +9194,7 @@ async function _runCoanimmWorkflow(wfId, label) {
         if (data.files_info) html += `<p style="margin:6px 0 0;font-size:0.82rem;">${_escHtml(data.files_info)}</p>`;
         resultDiv.innerHTML = html;
     } catch (e) {
-        resultDiv.textContent = `Erreur réseau lors de l'exécution du workflow.`;
+        resultDiv.textContent = `Erreur réseau lors de l'exécution du ricochet.`;
     }
 }
 
@@ -9286,7 +9286,7 @@ async function _coanimmWfSave() {
     const nameInput = document.getElementById('coanimm-wf-name');
     const status = document.getElementById('coanimm-wf-save-status');
     const label = nameInput?.value?.trim();
-    if (!label) { if (status) status.textContent = 'Donnez un nom au workflow.'; return; }
+    if (!label) { if (status) status.textContent = 'Donnez un nom au ricochet.'; return; }
     if (!_coanimmWfSteps.length) { if (status) status.textContent = 'Ajoutez au moins un bond.'; return; }
     if (status) status.textContent = 'Enregistrement…';
     try {
@@ -9297,7 +9297,7 @@ async function _coanimmWfSave() {
         });
         const d = await r.json();
         if (d.status === 'created') {
-            if (status) status.textContent = 'Workflow enregistré !';
+            if (status) status.textContent = 'Ricochet enregistré !';
             _coanimmWfSteps = [];
             _renderCoanimmWfSteps();
             if (nameInput) nameInput.value = '';
