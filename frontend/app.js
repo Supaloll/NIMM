@@ -1848,6 +1848,12 @@ async function promptThreadParamsModal() {
     if (visionSel)    visionSel.value     = visionVal0;
     if (imageSel)     imageSel.value      = imageVal0;
     if (coanimSel)    coanimSel.value     = coanimVal0;
+    // Peupler la liste de modèles pour le fournisseur courant
+    await _populateModelSelect(providerVal, null, 'new-thread-model-select');
+    // Mettre à jour les modèles quand le fournisseur change
+    if (providerSel) providerSel.onchange = async () => {
+        await _populateModelSelect(providerSel.value, null, 'new-thread-model-select');
+    };
     const currentVoice = localStorage.getItem('nimm-voice') || '';
     fetch('/api/tts/voices').then(r=>r.json()).then(voices => {
         if (!ttsSel) return;
@@ -1898,6 +1904,15 @@ async function promptThreadParamsModal() {
             if (ttsSel      && ttsSel.value && ttsSel.value !== currentVoice) {
                 localStorage.setItem('nimm-voice', ttsSel.value);
                 _selectedVoice = ttsSel.value;
+            }
+            // Sauvegarder le modèle sélectionné
+            const modelSel = document.getElementById('new-thread-model-select');
+            if (modelSel && modelSel.value) {
+                await fetch('/api/settings/model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: modelSel.value })
+                });
             }
             cleanup();
         };
@@ -3145,7 +3160,11 @@ async function _triggerStream(content, conversationId, images = null) {
             })
         });
 
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+            const _status = r.status;
+            _notifyServiceError(_status);
+            throw new Error(`HTTP ${_status}`);
+        }
 
         _bip(220, 80); // bip grave : début de réponse
         // Retirer la bulle "recherche en cours" si elle est encore affichée
@@ -3623,8 +3642,16 @@ async function _triggerStream(content, conversationId, images = null) {
             return;
         }
         removeLoader();
-        appendAssistantMessage('❌ Erreur de connexion au serveur.', 'neutre', false);
-        _srAnnounce('Erreur de connexion au serveur.');
+        // TypeError = le fetch lui-même a échoué (réseau coupé, serveur injoignable)
+        if (e instanceof TypeError) {
+            _notifyServiceError(0);
+            appendAssistantMessage('❌ Connexion impossible au serveur.', 'neutre', false);
+            _srAnnounce('Connexion impossible au serveur.');
+        } else {
+            // Erreur HTTP : le toast a déjà été affiché par _notifyServiceError
+            appendAssistantMessage('❌ Le fournisseur n'a pas pu répondre.', 'neutre', false);
+            _srAnnounce('Le fournisseur n'a pas pu répondre.');
+        }
         console.error('[NIMM] Erreur stream :', e);
     }
 }
@@ -3794,7 +3821,11 @@ async function continueLastMessage(assistantDiv, conversationId) {
             method: 'POST',
             signal: _streamAbortController.signal,
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+            const _status = r.status;
+            _notifyServiceError(_status);
+            throw new Error(`HTTP ${_status}`);
+        }
 
         const reader  = r.body.getReader();
         const decoder = new TextDecoder();
@@ -5423,6 +5454,24 @@ function _notify(msg, type) {
     setTimeout(() => { el.remove(); }, 3500);
 }
 
+/**
+ * Affiche un toast contextuel selon le code HTTP d'une erreur de service.
+ * @param {number} status  Code HTTP (0 = erreur réseau / pas de réponse)
+ */
+function _notifyServiceError(status) {
+    if (status === 401 || status === 403) {
+        _notify('Clé API invalide ou expirée — vérifiez vos réglages.', 'error');
+    } else if (status === 429) {
+        _notify('Limite de débit atteinte — réessayez dans quelques instants.', 'warn');
+    } else if (status >= 500 && status < 600) {
+        _notify('Fournisseur temporairement indisponible — réessayez plus tard.', 'warn');
+    } else if (!status) {
+        _notify('Connexion impossible — vérifiez votre réseau.', 'warn');
+    } else {
+        _notify(`Erreur inattendue du fournisseur (code ${status}).`, 'error');
+    }
+}
+
 async function _saveExtKey(serviceId) {
     const input = document.getElementById(`ext-key-${serviceId}`);
     if (!input) return;
@@ -6806,7 +6855,7 @@ async function loadMemory() {
                 removeLoader();
 
                 if (data.count === -1) {
-                    appendAssistantMessage('⚠️ Impossible de lancer l\'audit — aucun provider configuré.', 'neutre', false);
+                    appendAssistantMessage('⚠️ Impossible de lancer l\'audit — aucun fournisseur configuré.', 'neutre', false);
                 } else if (data.count === 0) {
                     appendAssistantMessage('✅ Mémoire cohérente — rien à clarifier.', 'neutre', false);
                 } else if (currentThreadId) {
@@ -7807,7 +7856,7 @@ async function loadCosts() {
         const d = await r.json();
         if (loading) loading.style.display = 'none';
         if (!d.wallets || !d.wallets.length) {
-            grid.innerHTML = '<p style="color:var(--text-muted);padding:12px;">Aucun provider configuré.</p>';
+            grid.innerHTML = '<p style="color:var(--text-muted);padding:12px;">Aucun fournisseur configuré.</p>';
             return;
         }
         grid.innerHTML = d.wallets.map(w => _renderWalletCard(w)).join('');

@@ -65,7 +65,7 @@
 
     <!-- BANNIÈRE PROVIDER MANQUANT -->
     <div id="no-provider-banner" class="hidden" role="alert" aria-live="assertive">
-        ⚙️ Aucun provider configuré — <button id="banner-open-settings">Configure ta clé API pour démarrer</button>
+        ⚙️ Aucun fournisseur configuré — <button id="banner-open-settings">Configure ta clé API pour démarrer</button>
     </div>
 
     <!-- BARRE ONGLETS -->
@@ -282,7 +282,7 @@
                 <div class="routing-provider-group">
                     <div class="routing-provider-inner">
                         <span class="routing-label">💬 API</span>
-                        <select id="provider-select" class="routing-select" aria-label="Provider API principal">
+                        <select id="provider-select" class="routing-select" aria-label="Fournisseur API principal">
                             <option value="anthropic" data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                             <option value="deepseek"  data-needs-key="deepseek">🟢 DeepSeek</option>
                             <option value="gemini"    data-needs-key="gemini">🟡 Gemini</option>
@@ -291,7 +291,7 @@
                             <option value="mistral"   data-needs-key="mistral">🔵 Mistral</option>
                             <option value="ollama">🟢 Ollama (local)</option>
                         </select>
-                        <span class="routing-warning hidden" id="warn-chat" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                        <span class="routing-warning hidden" id="warn-chat" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
                         <span class="routing-sublabel">🤖 Modèle</span>
                         <div id="ollama-warn" class="hidden" style="font-size:0.8rem;color:#f0a500;margin-bottom:6px;">⚠️ Ollama ne répond pas sur le port 11434. Est-il lancé ?</div>
                         <select id="model-select" class="routing-select routing-subselect" aria-label="Modèle de langage">
@@ -301,14 +301,14 @@
                     </div>
                 </div>
                 <span class="routing-label">👀 Reconnaissance image</span>
-                <select id="routing-vision" class="routing-select" aria-label="Provider pour la reconnaissance image">
+                <select id="routing-vision" class="routing-select" aria-label="Fournisseur pour la reconnaissance image">
                     <option value="anthropic" data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                     <option value="gemini"    data-needs-key="gemini">🟡 Gemini</option>
                     <option value="openai"    data-needs-key="openai">🔴 OpenAI (GPT-4o)</option>
                     <option value="mistral"   data-needs-key="mistral">🟠 Mistral (Pixtral)</option>
                     <option value="ollama">🟢 Ollama / LLava (local)</option>
                 </select>
-                <span class="routing-warning hidden" id="warn-vision" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                <span class="routing-warning hidden" id="warn-vision" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
                 <div id="pixtral-model-row" style="display:none;margin-top:6px;">
                     <label for="pixtral-model-select" style="font-size:0.82rem;">Modèle Pixtral</label>
                     <select id="pixtral-model-select" aria-label="Modèle Pixtral utilisé pour la vision">
@@ -318,17 +318,17 @@
                 </div>
 
                 <span class="routing-label">🖼️ Génération image</span>
-                <select id="routing-image" class="routing-select" aria-label="Provider pour la génération d'image">
+                <select id="routing-image" class="routing-select" aria-label="Fournisseur pour la génération d'image">
                     <option value="dall-e"       data-needs-key="openai">🔴 OpenAI (gpt-image-1)</option>
                     <option value="gemini"       data-needs-key="gemini">🟠 Gemini (≈ 0,067 $/image, plus de quota gratuit)</option>
                     <option value="mistral"      data-needs-key="mistral">🟠 Mistral (Agents image_generation)</option>
                     <option value="stability-ai" data-needs-key="stability-ai">🟠 Stability AI</option>
                     <option value="local">🟢 Local (ComfyUI)</option>
                 </select>
-                <span class="routing-warning hidden" id="warn-image" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                <span class="routing-warning hidden" id="warn-image" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
 
                 <span class="routing-label">🧠 Mémoire (extraction)</span>
-                <select id="routing-memory" class="routing-select" aria-label="Provider pour l'extraction mémoire en arrière-plan">
+                <select id="routing-memory" class="routing-select" aria-label="Fournisseur pour l'extraction mémoire en arrière-plan">
                     <option value="same">↩ Même que le fil</option>
                     <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                     <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
@@ -338,10 +338,10 @@
                     <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
                     <option value="ollama">🟢 Ollama (local)</option>
                 </select>
-                <span class="routing-warning hidden" id="warn-memory" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                <span class="routing-warning hidden" id="warn-memory" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
 
                 <span class="routing-label">🏷️ Titre des conversations</span>
-                <select id="routing-titre" class="routing-select" aria-label="Provider pour la génération du titre des conversations">
+                <select id="routing-titre" class="routing-select" aria-label="Fournisseur pour la génération du titre des conversations">
                     <option value="same">↩ Même que le fil</option>
                     <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                     <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
@@ -351,10 +351,10 @@
                     <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
                     <option value="ollama">🟢 Ollama (local)</option>
                 </select>
-                <span class="routing-warning hidden" id="warn-titre" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                <span class="routing-warning hidden" id="warn-titre" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
 
                 <span class="routing-label">📄 Synthèse</span>
-                <select id="routing-synthese" class="routing-select" aria-label="Provider pour la génération de synthèse">
+                <select id="routing-synthese" class="routing-select" aria-label="Fournisseur pour la génération de synthèse">
                     <option value="same">↩ Même que le fil</option>
                     <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                     <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
@@ -364,10 +364,10 @@
                     <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
                     <option value="ollama">🟢 Ollama (local)</option>
                 </select>
-                <span class="routing-warning hidden" id="warn-synthese" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                <span class="routing-warning hidden" id="warn-synthese" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
 
                 <span class="routing-label">🐸 CoaNIMM (génération de code)</span>
-                <select id="routing-coanimm" class="routing-select" aria-label="Provider pour CoaNIMM">
+                <select id="routing-coanimm" class="routing-select" aria-label="Fournisseur pour CoaNIMM">
                     <option value="same">↩ Même que le fil</option>
                     <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                     <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
@@ -378,14 +378,14 @@
                     <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
                     <option value="ollama">🟢 Ollama (local)</option>
                 </select>
-                <span class="routing-warning hidden" id="warn-coanimm" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                <span class="routing-warning hidden" id="warn-coanimm" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
 
                 <span class="routing-label">🌐 Recherche web</span>
-                <select id="routing-websearch" class="routing-select" aria-label="Provider pour la recherche web">
+                <select id="routing-websearch" class="routing-select" aria-label="Fournisseur pour la recherche web">
                     <option value="same">↩ Brave / Tavily (par défaut)</option>
                     <option value="mistral" data-needs-key="mistral">🔵 Mistral (web search natif)</option>
                 </select>
-                <span class="routing-warning hidden" id="warn-websearch" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce provider</span>
+                <span class="routing-warning hidden" id="warn-websearch" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
 
                 <span class="routing-label">🔠 PDF (texte sélectionnable)</span>
                 <span class="routing-fixed">Local gratuit (pypdf)</span>
@@ -1356,7 +1356,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <span class="routing-label">🧠 Mémoire</span>
-            <select id="new-thread-routing-memory" class="routing-select" aria-label="Provider pour l'extraction mémoire de ce fil">
+            <select id="new-thread-routing-memory" class="routing-select" aria-label="Fournisseur pour l'extraction mémoire de ce fil">
                 <option value="same">↩ Même que le fil</option>
                 <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
@@ -1368,7 +1368,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <span class="routing-label">🏷️ Titre</span>
-            <select id="new-thread-routing-titre" class="routing-select" aria-label="Provider pour le titre de ce fil">
+            <select id="new-thread-routing-titre" class="routing-select" aria-label="Fournisseur pour le titre de ce fil">
                 <option value="same">↩ Même que le fil</option>
                 <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
@@ -1380,7 +1380,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <span class="routing-label">📄 Synthèse</span>
-            <select id="new-thread-routing-synthese" class="routing-select" aria-label="Provider pour la synthèse de ce fil">
+            <select id="new-thread-routing-synthese" class="routing-select" aria-label="Fournisseur pour la synthèse de ce fil">
                 <option value="same">↩ Même que le fil</option>
                 <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
@@ -1408,7 +1408,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <span class="routing-label">🖼️ Vision</span>
-            <select id="new-thread-routing-vision" class="routing-select" aria-label="Provider vision pour ce fil">
+            <select id="new-thread-routing-vision" class="routing-select" aria-label="Fournisseur vision pour ce fil">
                 <option value="same">↩ Même que le fil</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI</option>
@@ -1418,7 +1418,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <span class="routing-label">🖼️ Image</span>
-            <select id="new-thread-routing-image" class="routing-select" aria-label="Provider image pour ce fil">
+            <select id="new-thread-routing-image" class="routing-select" aria-label="Fournisseur image pour ce fil">
                 <option value="same">↩ Même que le fil</option>
                 <option value="gemini"     data-needs-key="gemini">🟡 Gemini (Imagen)</option>
                 <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
@@ -1427,7 +1427,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <span class="routing-label">🤖 CoaNIMM</span>
-            <select id="new-thread-routing-coanimm" class="routing-select" aria-label="Provider CoaNIMM pour ce fil">
+            <select id="new-thread-routing-coanimm" class="routing-select" aria-label="Fournisseur CoaNIMM pour ce fil">
                 <option value="same">↩ Même que le fil</option>
                 <option value="deepseek"   data-needs-key="deepseek">🟢 DeepSeek</option>
                 <option value="anthropic"  data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
