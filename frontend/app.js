@@ -122,16 +122,23 @@ function _setWebSearch(active) {
     const btn = document.getElementById('search-web-btn');
     if (!btn) return;
     const prov = document.getElementById('provider-select')?.value || '';
-    const isGemini = prov === 'gemini';
+    const isGemini  = prov === 'gemini';
+    const isMistral = prov === 'mistral';
     if (active) {
         btn.classList.add('web-active');
-        const lbl = isGemini ? 'Google Search Grounding actif — désactiver' : 'Recherche web via Mistral active — désactiver';
+        const lbl = isGemini  ? 'Google Search Grounding actif — désactiver'
+                  : isMistral ? 'Recherche web Mistral natif active — désactiver'
+                  : 'Recherche web Brave/Tavily active — désactiver';
         btn.setAttribute('aria-label', lbl);
-        btn.title = isGemini ? 'Google Search Grounding (Gemini natif)' : 'Recherche Web (Mistral natif)';
+        btn.title = isGemini  ? 'Google Search Grounding (Gemini natif)'
+                  : isMistral ? 'Recherche Web (Mistral natif)'
+                  : 'Recherche Web (Brave/Tavily)';
     } else {
         btn.classList.remove('web-active');
         btn.setAttribute('aria-label', 'Activer la recherche web');
-        btn.title = isGemini ? 'Google Search (Gemini natif)' : 'Recherche Web (Mistral natif)';
+        btn.title = isGemini  ? 'Google Search (Gemini natif)'
+                  : isMistral ? 'Recherche Web (Mistral natif)'
+                  : 'Recherche Web (Brave/Tavily)';
     }
 }
 
@@ -1625,7 +1632,7 @@ function renderSidebar() {
             name.appendChild(tagBadge);
         }
 
-        // Compteur coût cumulé du fil
+        // Compteur coût cumulé du fil (ajouté après name dans le flex)
         const _costEl = document.createElement('span');
         _costEl.className = 'thread-cost-badge';
         _costEl.id = 'thread-cost-' + t.thread_id;
@@ -1634,7 +1641,6 @@ function renderSidebar() {
             _costEl.textContent = _formatCostEur(_costVal) || '';
             _costEl.setAttribute('aria-label', 'Coût cumulé : ' + (_formatCostEur(_costVal) || ''));
         }
-        name.appendChild(_costEl);
 
         // Menu ...
         const menuBtn = document.createElement('button');
@@ -1778,6 +1784,7 @@ function renderSidebar() {
         dropdown.appendChild(delItem);
 
         div.appendChild(name);
+        div.appendChild(_costEl);
         div.appendChild(menuBtn);
         div.appendChild(dropdown);
         threadList.appendChild(div);
