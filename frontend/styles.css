@@ -1069,26 +1069,6 @@ body {
     transform: scale(1.1);
 }
 
-
-/* Champ de saisie clavier pour le PIN (lecteur d'écran / clavier alphanumérique) */
-.pin-text-input {
-    width: 100%;
-    padding: 10px 14px;
-    border: 1px solid var(--accent);
-    border-radius: 10px;
-    background: var(--bg-input);
-    color: var(--text);
-    font-size: 1.1rem;
-    text-align: center;
-    letter-spacing: 0.4em;
-    box-sizing: border-box;
-    margin: 6px 0 2px;
-    outline: none;
-}
-.pin-text-input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
-}
 .pin-modal-error {
     color: #d05050;
     font-size: 0.85rem;
