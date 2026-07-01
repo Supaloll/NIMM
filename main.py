@@ -4631,49 +4631,73 @@ async def mistral_audio_speak(
 @app.post("/api/mistral/audio_analyze")
 async def mistral_audio_analyze(file: UploadFile = File(...), prompt: str = Form(default="")):
     """
-    Analyse un fichier audio via Voxtral Small (mistral-small-latest avec audio nativement).
-    Retourne la transcription et/ou l'analyse selon le prompt.
+    Analyse un fichier audio.
+    Essaie Voxtral (Mistral) en premier si la cl\xc3\xa9 API est disponible,
+    sinon bascule automatiquement sur Whisper local.
     """
-    import base64 as _b64, httpx as _httpx
+    import base64 as _b64, httpx as _httpx, os as _os, tempfile as _tmp, asyncio as _aio, functools as _ft
     data = await file.read()
     filename = (file.filename or '').lower()
-    if not filename.endswith(('.mp3', '.wav', '.ogg', '.m4a', '.flac', '.webm', '.aac')):
-        raise HTTPException(400, "Format audio non supporte. Utilisez mp3, wav, ogg, m4a, flac, webm ou aac.")
+    _AUDIO_EXTS = ('.mp3', '.wav', '.ogg', '.m4a', '.flac', '.webm', '.aac', '.oga', '.opus')
+    if not any(filename.endswith(e) for e in _AUDIO_EXTS):
+        raise HTTPException(400, "Format audio non support\xc3\xa9. Utilisez mp3, wav, ogg, m4a, flac, webm, aac ou opus.")
+
+    # --- Tentative Voxtral ---
     try:
         from core.database import get_api_keys as _gak
         _mkey = (_gak().get('mistral') or '').strip()
     except Exception:
         _mkey = ''
-    if not _mkey:
-        raise HTTPException(400, "Cle API Mistral non configuree.")
 
-    _b64_str = _b64.b64encode(data).decode()
-    _mime = file.content_type or 'audio/mpeg'
-    _audio_url = f"data:{_mime};base64,{_b64_str}"
-    _user_prompt = prompt.strip() if prompt.strip() else "Transcris et analyse ce fichier audio."
-    _payload = {
-        "model": "voxtral-small-latest",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "audio_url", "audio_url": {"url": _audio_url}},
-                    {"type": "text", "text": _user_prompt}
-                ]
+    if _mkey:
+        try:
+            _b64_str = _b64.b64encode(data).decode()
+            _mime = file.content_type or 'audio/mpeg'
+            _audio_url = f"data:{_mime};base64,{_b64_str}"
+            _user_prompt = prompt.strip() if prompt.strip() else "Transcris et analyse ce fichier audio."
+            _payload = {
+                "model": "voxtral-small-latest",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "audio_url", "audio_url": {"url": _audio_url}},
+                        {"type": "text", "text": _user_prompt}
+                    ]
+                }]
             }
-        ]
-    }
-    async with _httpx.AsyncClient(timeout=120) as client:
-        _r = await client.post(
-            "https://api.mistral.ai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {_mkey}", "Content-Type": "application/json"},
-            json=_payload
-        )
-        if _r.status_code != 200:
-            raise HTTPException(_r.status_code, f"Erreur Voxtral : {_r.text[:300]}")
-        _res = _r.json()
-    _text = ((_res.get('choices') or [{}])[0].get('message', {}).get('content') or '').strip()
-    return {"text": _text, "name": file.filename, "model": "voxtral-small-latest"}
+            async with _httpx.AsyncClient(timeout=120) as _client:
+                _r = await _client.post(
+                    "https://api.mistral.ai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {_mkey}", "Content-Type": "application/json"},
+                    json=_payload
+                )
+            if _r.status_code == 200:
+                _res  = _r.json()
+                _text = ((_res.get('choices') or [{}])[0].get('message', {}).get('content') or '').strip()
+                return {"text": _text, "name": file.filename, "model": "voxtral-small-latest"}
+            print(f"[AUDIO] Voxtral \xc3\xa9chec {_r.status_code} \xe2\x80\x94 bascule Whisper")
+        except Exception as _ve:
+            print(f"[AUDIO] Voxtral exception : {_ve} \xe2\x80\x94 bascule Whisper")
+
+    # --- Fallback Whisper local ---
+    try:
+        _ext = _os.path.splitext(filename)[1] or '.mp3'
+        with _tmp.NamedTemporaryFile(suffix=_ext, delete=False) as _tf:
+            _tf.write(data)
+            _tmp_path = _tf.name
+        stt = get_stt()
+        _res_w = await _aio.get_event_loop().run_in_executor(
+            None, _ft.partial(stt.transcribe_file, _tmp_path))
+        _os.unlink(_tmp_path)
+        if isinstance(_res_w, dict):
+            if _res_w.get("status") == "ok":
+                _text_w = (_res_w.get("text") or '').strip()
+                return {"text": f"[Transcription Whisper]\n{_text_w}", "name": file.filename, "model": "whisper"}
+            return {"text": f"[Erreur Whisper : {_res_w.get('message') or _res_w.get('error') or '?'}]",
+                    "name": file.filename, "model": "whisper"}
+        return {"text": f"[Transcription Whisper]\n{str(_res_w)[:16000]}", "name": file.filename, "model": "whisper"}
+    except Exception as _we:
+        raise HTTPException(500, f"Transcription impossible (Voxtral et Whisper indisponibles) : {_we}")
 
 
 class MistralOcrReq(BaseModel):
