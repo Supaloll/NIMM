@@ -3226,6 +3226,10 @@ async def process_message_stream(
                 api_keys=settings['api_keys'],
                 images=images,
             ):
+                if isinstance(token, dict):
+                    if token.get('type') == 'usage':
+                        _last_usage = token
+                    continue
                 full_reply += token
                 _yield_buf += token
                 for chunk in _flush_buf():
@@ -3288,6 +3292,10 @@ async def process_message_stream(
                         api_keys=settings['api_keys'],
                         tools=NIMM_TOOLS,  # requis par Anthropic : l'historique contient des blocs tool_use/tool_result
                     ):
+                        if isinstance(token, dict):
+                            if token.get('type') == 'usage':
+                                _last_usage = token
+                            continue
                         full_reply += token
                         _yield_buf += token
                         for chunk in _flush_buf():
