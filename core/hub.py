@@ -3168,15 +3168,18 @@ async def process_message_stream(
         _gemini_gs_tools = [{'google_search': {}}]
         yield "data: [WEB_SEARCH_LOADING]\n\n"
         print('[HUB] 🔍 Google Search Grounding Gemini natif (stream)')
-    elif web_search:
-        # Pour tous les autres providers : recherche web via Mistral natif
-        if provider != 'mistral':
-            settings['provider'] = 'mistral'
-            provider = 'mistral'
-            settings['model'] = _resolve_model('mistral', settings.get('model'))
-            yield "data: [PROVIDER_SWITCH:mistral]\n\n"
+    elif web_search and provider == 'mistral':
         _mistral_ws_tools = [{'type': 'web_search'}]
-        print(f'[HUB] 🌐 Web search Mistral natif (stream, provider original={settings.get("provider", "?")})')
+        print('[HUB] 🌐 Web search Mistral natif (stream)')
+    elif web_search:
+        # Autres providers : Brave/Tavily (même logique que process_message)
+        yield "data: [WEB_SEARCH_LOADING]\n\n"
+        try:
+            from modules.websearch import search
+            web_context = await search(user_message)
+            print(f'[HUB] 🌐 Web search Brave/Tavily (stream) : {user_message[:60]}')
+        except Exception as e:
+            print(f'[HUB] Erreur web search (stream) : {e}')
 
     final_user_msg = user_message
     if web_context:
