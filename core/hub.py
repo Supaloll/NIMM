@@ -1016,6 +1016,10 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               Nécessite clé API INSEE dans Paramètres > Services externes.\n'
         '• search_datagouv(query) → jeux de données open data français (data.gouv.fr).\n'
         '                               Retourne titre, organisation, description et URL.\n'
+        '• describe_image(url, prompt) → décrit une image depuis une URL.\n'
+        '                               Retourne un texte alternatif accessible (WCAG).\n'
+        '                               Appeler quand l\'utilisateur donne une URL d\'image\n'
+        '                               ou demande de décrire/vérifier l\'accessibilité d\'une image.\n'
         'Appliquer la règle SONDE du lexique.\n'
     )
 
@@ -1884,6 +1888,32 @@ NIMM_TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_image",
+            "description": (
+                "T\xc3\xa9l\xc3\xa9charge une image depuis une URL et retourne une description accessible d\xc3\xa9taill\xc3\xa9e. "
+                "Appeler quand l\'utilisateur donne une URL d\'image, demande de d\xc3\xa9crire une illustration, "
+                "v\xc3\xa9rifier l\'accessibilit\xc3\xa9 d\'une image ou g\xc3\xa9n\xc3\xa9rer un texte alternatif WCAG. "
+                "Retourne une description textuelle pr\xc3\xa9cise utilisable comme attribut alt."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL publique de l\'image \xc3\xa0 d\xc3\xa9crire (jpg, png, webp, gif)."
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Consigne de description (ex: \'texte alternatif WCAG\', \'d\xc3\xa9cris l\'interface\', \'est-ce accessible ?\')."
+                    }
+                },
+                "required": ["url"]
+            }
+        }
     }
 ]
 
@@ -2565,6 +2595,35 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             return "\n\n".join(_lines_dg)
         except Exception as e:
             return f"[Erreur data.gouv\u00a0: {e}]"
+
+
+    if name == 'describe_image':
+        _di_url    = args.get('url', '').strip()
+        _di_prompt = args.get('prompt', '').strip() or (
+            "D\xc3\xa9cris cette image de fa\xc3\xa7on pr\xc3\xa9cise et concise, comme un texte alternatif accessible (attribut alt WCAG), en fran\xc3\xa7ais.")
+        if not _di_url:
+            return "[describe_image] URL manquante."
+        try:
+            import httpx as _hxdi, base64 as _b64di
+            async with _hxdi.AsyncClient(timeout=30.0, follow_redirects=True,
+                                         headers={"User-Agent": "NIMM/1.0"}) as _cdi:
+                _ri = await _cdi.get(_di_url)
+            if _ri.status_code != 200:
+                return f"[describe_image] Impossible de t\xc3\xa9l\xc3\xa9charger l\'image (HTTP {_ri.status_code})."
+            _mime_di = _ri.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+            _b64_di  = _b64di.b64encode(_ri.content).decode("ascii")
+            from core.engine import call_vision
+            _di_settings = load_settings(thread_id)
+            _di_prov     = _di_settings.get("provider_routing", {}).get("vision", "gemini")
+            _di_pm       = None
+            if _di_prov == "mistral":
+                from core.database import get_setting as _gs_di
+                _di_pm = _gs_di("pixtral_model", "pixtral-12b-2409")
+            _di_desc = await call_vision(_b64_di, _mime_di, _di_prompt, _di_prov,
+                                         _di_settings.get("api_keys", {}), vision_model=_di_pm)
+            return _di_desc or "[describe_image] Aucune description retourn\xc3\xa9e."
+        except Exception as e:
+            return f"[Erreur description image : {e}]"
 
     return f'[Outil inconnu : {name}]'
 
