@@ -837,6 +837,11 @@ Analyse les sentiments de : ..."
         <div id="pin-modal-subtitle" class="pin-modal-subtitle"></div>
         <div id="pin-modal-dots" class="pin-dots" aria-hidden="true"></div>
         <div id="pin-modal-status" class="sr-only" aria-live="polite"></div>
+        <input type="password" id="pin-modal-input" inputmode="numeric"
+               autocomplete="current-password"
+               placeholder="Code PIN"
+               aria-label="Code PIN — saisie clavier alphanumérique"
+               class="pin-text-input" />
         <div id="pin-modal-error" class="pin-modal-error" aria-live="assertive"></div>
         <div id="pin-modal-keypad" class="pin-keypad" role="group" aria-label="Pavé numérique">
             <button type="button" class="pin-key" data-key="1">1</button>
@@ -1368,10 +1373,12 @@ Analyse les sentiments de : ..."
         <h3 id="new-thread-modal-title" style="margin:0 0 14px;">💬 Nouveau fil</h3>
         <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 16px;">Le nom sera généré automatiquement après le premier échange.</p>
 
+        <div id="new-thread-mode-section">
         <label style="font-size:0.85rem;color:var(--text-muted);">Mode</label>
         <div style="display:flex;gap:8px;margin:6px 0 14px;">
             <button id="new-thread-mode-mask"   class="new-thread-mode-btn active" data-mode="mask">🎭 Masque</button>
             <button id="new-thread-mode-potards" class="new-thread-mode-btn"        data-mode="potards">🎛️ Custom</button>
+        </div>
         </div>
 
         <div id="new-thread-mask-row">
@@ -1381,25 +1388,26 @@ Analyse les sentiments de : ..."
             </select>
         </div>
 
-        <!-- ── ROUTAGE ET MODÈLE (pré-rempli avec la config en cours) ── -->
-        <details class="settings-section-details" style="margin-bottom:14px;">
-        <summary class="settings-section-title" style="font-size:0.85rem;">⚙️ Routage et modèle pour ce fil</summary>
-        <div class="settings-section" style="padding-top:8px;">
-            <span class="routing-label">💬 Fournisseur</span>
-            <select id="new-thread-provider-select" class="routing-select" aria-label="Fournisseur pour ce fil">
-                <option value="anthropic" data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
-                <option value="deepseek"  data-needs-key="deepseek">🟢 DeepSeek</option>
-                <option value="gemini"    data-needs-key="gemini">🟡 Gemini</option>
-                <option value="openai"    data-needs-key="openai">🔴 OpenAI</option>
-                <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
-                <option value="mistral"   data-needs-key="mistral">🔵 Mistral</option>
-                <option value="ollama">🟢 Ollama (local)</option>
-            </select>
-            <span class="routing-sublabel">🤖 Modèle</span>
-            <select id="new-thread-model-select" class="routing-select routing-subselect" aria-label="Modèle pour ce fil">
-                <option value="">— chargement —</option>
-            </select>
+        <!-- ── LLM PRINCIPAL (toujours visible) ── -->
+        <label for="new-thread-provider-select" style="font-size:0.85rem;color:var(--text-muted);">💬 Fournisseur LLM</label>
+        <select id="new-thread-provider-select" class="routing-select" aria-label="Fournisseur LLM principal pour ce fil" style="width:100%;margin:4px 0 10px;">
+            <option value="anthropic" data-needs-key="anthropic">🔴 Claude (Anthropic)</option>
+            <option value="deepseek"  data-needs-key="deepseek">🟢 DeepSeek</option>
+            <option value="gemini"    data-needs-key="gemini">🟡 Gemini</option>
+            <option value="openai"    data-needs-key="openai">🔴 OpenAI</option>
+            <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
+            <option value="mistral"   data-needs-key="mistral">🔵 Mistral</option>
+            <option value="ollama">🟢 Ollama (local)</option>
+        </select>
+        <label for="new-thread-model-select" style="font-size:0.85rem;color:var(--text-muted);">🤖 Modèle</label>
+        <select id="new-thread-model-select" class="routing-select routing-subselect" aria-label="Modèle pour ce fil" style="width:100%;margin:4px 0 14px;">
+            <option value="">— chargement —</option>
+        </select>
 
+        <!-- ── ROUTAGE AVANCÉ ── -->
+        <details class="settings-section-details" style="margin-bottom:14px;">
+        <summary class="settings-section-title" style="font-size:0.85rem;">⚙️ Routage avancé</summary>
+        <div class="settings-section" style="padding-top:8px;">
             <span class="routing-label">🧠 Mémoire</span>
             <select id="new-thread-routing-memory" class="routing-select" aria-label="Fournisseur pour l'extraction mémoire de ce fil">
                 <option value="same">↩ Même que le fil</option>
