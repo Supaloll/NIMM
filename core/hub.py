@@ -3174,6 +3174,7 @@ async def process_message_stream(
             settings['provider'] = 'mistral'
             provider = 'mistral'
             settings['model'] = _resolve_model('mistral', settings.get('model'))
+            yield "data: [PROVIDER_SWITCH:mistral]\n\n"
         _mistral_ws_tools = [{'type': 'web_search'}]
         print(f'[HUB] 🌐 Web search Mistral natif (stream, provider original={settings.get("provider", "?")})')
 
