@@ -335,6 +335,139 @@ window.fetch = (url, opts = {}) => {
     return _nimmOrigFetch(url, opts);
 };
 
+// ── Modale PIN — pavé numérique thémé (remplace window.prompt) ──
+const _pinModal = {
+    el: null, dotsEl: null, errEl: null, titleEl: null, subEl: null, keypadEl: null, cancelBtn: null, inputEl: null,
+    buffer: '',
+    onSubmit: null,
+    onCancel: null,
+    _keyHandler: null,
+
+    _build() {
+        this.el        = document.getElementById('pin-modal');
+        this.dotsEl    = document.getElementById('pin-modal-dots');
+        this.statusEl  = document.getElementById('pin-modal-status');
+        this.errEl     = document.getElementById('pin-modal-error');
+        this.titleEl   = document.getElementById('pin-modal-title');
+        this.subEl     = document.getElementById('pin-modal-subtitle');
+        this.keypadEl  = document.getElementById('pin-modal-keypad');
+        this.cancelBtn = document.getElementById('pin-modal-cancel');
+        this.inputEl = document.getElementById('pin-modal-input');
+        this.keypadEl.querySelectorAll('.pin-key').forEach(btn => {
+            btn.addEventListener('click', () => this._press(btn.dataset.key));
+        });
+        this.cancelBtn.addEventListener('click', () => this._cancel());
+        this.inputEl.addEventListener('input', () => {
+            // Garder uniquement les chiffres
+            const digits = this.inputEl.value.replace(/\D/g, '');
+            this.inputEl.value = digits;
+            this.buffer = digits;
+            this._render();
+        });
+        this._keyHandler = (e) => {
+            const inInput = document.activeElement === this.inputEl;
+            if (inInput) {
+                if (e.key === 'Enter')  { this._press('ok'); e.preventDefault(); }
+                else if (e.key === 'Escape') { this._cancel(); e.preventDefault(); }
+                else if (e.key === 'Tab')    { this._trapTab(e); }
+                return;
+            }
+            if (e.key >= '0' && e.key <= '9') { this._press(e.key); e.preventDefault(); }
+            else if (e.key === 'Backspace')   { this._press('back'); e.preventDefault(); }
+            else if (e.key === 'Enter')       { this._press('ok'); e.preventDefault(); }
+            else if (e.key === 'Escape')      { this._cancel(); e.preventDefault(); }
+            else if (e.key === 'Tab')         { this._trapTab(e); }
+        };
+    },
+
+    _focusableEls() {
+        return Array.from(this.el.querySelectorAll('button, input')).filter(b => !b.disabled && b.type !== 'hidden');
+    },
+
+    _trapTab(e) {
+        const els = this._focusableEls();
+        if (!els.length) return;
+        const first = els[0], last = els[els.length - 1];
+        if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+        else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+    },
+
+    // onSubmit(pin) doit retourner true (succes, ferme la modale) ou une chaine/false (erreur, reste ouverte)
+    open({ title, subtitle, onSubmit, onCancel }) {
+        if (!this.el) this._build();
+        this.buffer = '';
+        this.onSubmit = onSubmit || null;
+        this.onCancel = onCancel || null;
+        this.titleEl.textContent = title || '🔒 Code PIN';
+        this.subEl.textContent = subtitle || '';
+        this.errEl.textContent = '';
+        this._render();
+        this.el.classList.remove('hidden');
+        document.addEventListener('keydown', this._keyHandler);
+        this._lastFocused = document.activeElement;
+        if (this.inputEl) this.inputEl.value = '';
+        setTimeout(() => { if (this.inputEl) this.inputEl.focus(); }, 60);
+    },
+
+    close() {
+        if (this.el) this.el.classList.add('hidden');
+        document.removeEventListener('keydown', this._keyHandler);
+        this.buffer = '';
+        if (this.inputEl) this.inputEl.value = '';
+        if (this._lastFocused && typeof this._lastFocused.focus === 'function') {
+            this._lastFocused.focus();
+        }
+        this._lastFocused = null;
+    },
+
+    _cancel() {
+        const cb = this.onCancel;
+        this.close();
+        if (cb) cb();
+    },
+
+    async _press(key) {
+        if (key === 'back') { this.buffer = this.buffer.slice(0, -1); this._render(); if (this.inputEl) this.inputEl.value = this.buffer; return; }
+        if (key === 'ok')   { await this._submit(); return; }
+        this.buffer += key;
+        this._render();
+        if (this.inputEl) this.inputEl.value = this.buffer;
+    },
+
+    _render() {
+        this.dotsEl.innerHTML = '';
+        const len = Math.max(this.buffer.length, 1);
+        for (let i = 0; i < len; i++) {
+            const d = document.createElement('span');
+            d.className = 'pin-dot' + (i < this.buffer.length ? ' filled' : '');
+            this.dotsEl.appendChild(d);
+        }
+        const n = this.buffer.length;
+        this.statusEl.textContent = n
+            ? n + ' chiffre' + (n > 1 ? 's' : '') + ' saisi' + (n > 1 ? 's' : '')
+            : 'Aucun chiffre saisi';
+    },
+
+    async _submit() {
+        if (!this.onSubmit) { this.close(); return; }
+        this.errEl.textContent = '';
+        const result = await this.onSubmit(this.buffer);
+        if (result === true) {
+            this.close();
+        } else {
+            this.errEl.textContent = (typeof result === 'string' && result) ? result : 'PIN incorrect.';
+            this.buffer = '';
+            if (this.inputEl) this.inputEl.value = '';
+            this._render();
+            if (this.inputEl) setTimeout(() => this.inputEl.focus(), 60);
+            const box = this.el.querySelector('.pin-modal-box');
+            box.classList.remove('pin-shake');
+            void box.offsetWidth;
+            box.classList.add('pin-shake');
+        }
+    }
+};
+
 // ── Verrou de session : deverrouille un profil a PIN avant d'ecrire (anti-pollution memoire) ──
 async function _ensureUnlocked(userId) {
     if (!userId || _unlockTokens[userId]) return true;
@@ -345,17 +478,28 @@ async function _ensureUnlocked(userId) {
         hasPin = !!(u && u.has_pin);
     } catch (e) { hasPin = false; }
     if (!hasPin) return true;
-    const pin = window.prompt('Code PIN pour la session « ' + userId + ' » :');
-    if (pin === null || pin === '') return false;
-    try {
-        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/unlock', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pin })
+    return new Promise((resolve) => {
+        _pinModal.open({
+            title: '🔒 Déverrouiller',
+            subtitle: 'Code PIN pour « ' + userId + ' »',
+            onCancel: () => resolve(false),
+            onSubmit: async (pin) => {
+                if (!pin) return 'Code requis.';
+                try {
+                    const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/unlock', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pin })
+                    });
+                    if (!r.ok) return 'PIN incorrect.';
+                    _unlockTokens[userId] = (await r.json()).token;
+                    resolve(true);
+                    return true;
+                } catch (e) {
+                    return 'Deverrouillage impossible.';
+                }
+            }
         });
-        if (!r.ok) { window.alert('PIN incorrect.'); return false; }
-        _unlockTokens[userId] = (await r.json()).token;
-        return true;
-    } catch (e) { window.alert('Deverrouillage impossible.'); return false; }
+    });
 }
 
 // Cache masques : id → label (ex: "Glaude 🐺")
@@ -708,22 +852,57 @@ async function _selectUser(user, switchMode = false) {
 
 // ── Tuile admin : verrou PIN + identité Tailscale par profil ──
 async function _setUserPin(userId, hasPin) {
-    let current = '';
+    let currentPin = '';
     if (hasPin) {
-        current = window.prompt('Code PIN actuel de « ' + userId + ' » :');
-        if (current === null) return;
+        currentPin = await new Promise(resolve => {
+            _pinModal.open({
+                title: '🔒 Code PIN actuel',
+                subtitle: 'Entrez votre code PIN actuel pour continuer',
+                onSubmit: async (pin) => { resolve(pin); return true; },
+                onCancel: () => resolve(null),
+            });
+        });
+        if (currentPin === null) return;
     }
-    const np = window.prompt(hasPin ? 'Nouveau code PIN (laisser vide pour RETIRER le PIN) :' : 'Nouveau code PIN pour « ' + userId + ' » :');
-    if (np === null) return;
+    const newPin = await new Promise(resolve => {
+        _pinModal.open({
+            title: hasPin ? '🔒 Nouveau code PIN' : '🔒 Définir un code PIN',
+            subtitle: hasPin ? 'Laissez vide et validez ✓ pour supprimer le PIN' : '',
+            onSubmit: async (pin) => { resolve(pin); return true; },
+            onCancel: () => resolve(null),
+        });
+    });
+    if (newPin === null) return;
     try {
         const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/set-pin', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pin: np, current_pin: current })
+            body: JSON.stringify({ pin: newPin, current_pin: currentPin })
         });
-        if (!r.ok) { window.alert('Échec (code PIN actuel incorrect ?).'); return; }
-        window.alert(np ? 'Code PIN défini.' : 'Code PIN retiré.');
+        if (!r.ok) { _nimm_toast && _nimm_toast('Code PIN actuel incorrect.', 'error'); return; }
+        _nimm_toast && _nimm_toast(newPin ? 'Code PIN défini.' : 'Code PIN supprimé.', 'ok');
         _loadUsersTab();
-    } catch (e) { window.alert('Opération impossible.'); }
+    } catch (e) { _nimm_toast && _nimm_toast('Opération impossible.', 'error'); }
+}
+
+async function _removeUserPin(userId) {
+    const currentPin = await new Promise(resolve => {
+        _pinModal.open({
+            title: '🔓 Supprimer le code PIN',
+            subtitle: 'Entrez votre PIN actuel pour confirmer la suppression',
+            onSubmit: async (pin) => { resolve(pin); return true; },
+            onCancel: () => resolve(null),
+        });
+    });
+    if (currentPin === null) return;
+    try {
+        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/set-pin', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: '', current_pin: currentPin })
+        });
+        if (!r.ok) { _nimm_toast && _nimm_toast('PIN actuel incorrect — suppression annulée.', 'error'); return; }
+        _nimm_toast && _nimm_toast('Code PIN supprimé.', 'ok');
+        _loadUsersTab();
+    } catch (e) { _nimm_toast && _nimm_toast('Opération impossible.', 'error'); }
 }
 
 async function _setUserTs(userId) {
@@ -782,7 +961,8 @@ const isAdmin = me.admin;
             html += `<div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);flex-wrap:wrap">
                 <span style="font-size:1.4rem">${u.emoji || '👤'}</span>
                 <span style="flex:1;font-weight:${u.id === _currentUserId ? '700' : '400'}">${u.name}${u.id === _currentUserId ? ' (moi)' : ''}${u.ts_login ? ' 🔗' : ''}</span>
-                <button onclick="_setUserPin('${u.id}', ${u.has_pin ? 'true' : 'false'})" aria-label="${u.has_pin ? 'Modifier le code PIN de ' + u.name : 'Definir un code PIN pour ' + u.name}" style="padding:3px 10px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.8rem">${u.has_pin ? '🔒' : '🔓'} PIN</button>
+                <button onclick="_setUserPin('${u.id}', ${u.has_pin ? 'true' : 'false'})" aria-label="${u.has_pin ? 'Modifier le code PIN de ' + u.name : 'Définir un code PIN pour ' + u.name}" style="padding:3px 10px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.8rem">${u.has_pin ? '🔒 Modifier PIN' : '🔓 Définir PIN'}</button>
+                ${u.has_pin ? `<button onclick="_removeUserPin('${u.id}')" aria-label="Supprimer le code PIN de ${u.name}" style="padding:3px 10px;border:1px solid #d05050;background:transparent;color:#d05050;border-radius:6px;cursor:pointer;font-size:0.8rem">🔓 Supprimer PIN</button>` : ''}
                 <button onclick="_setUserTs('${u.id}')" aria-label="Lier une identite Tailscale a ${u.name}" style="padding:3px 10px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.8rem">🔗 Tailscale</button>
                 ${u.id !== _currentUserId ? `<button onclick="_deleteUser('${u.id}')" aria-label="Supprimer le profil ${u.name}" style="padding:3px 10px;border:none;background:#e55;color:#fff;border-radius:6px;cursor:pointer;font-size:0.8rem">✕</button>` : ''}
             </div>`;
