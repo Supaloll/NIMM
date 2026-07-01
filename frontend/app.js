@@ -1600,7 +1600,7 @@ function renderSidebar() {
         });
     roots.forEach(t => {
         const div = document.createElement('div');
-        div.className = 'thread-item' + (t.thread_id === currentThreadId ? ' active' : '');
+        div.className = 'thread-item' + (t.thread_id === currentThreadId ? ' active' : ''); div.dataset.tid = t.thread_id;
         const _ouvrir = () => { if (isMobile()) closeSidebar(); selectThread(t.thread_id); };
 
         const name = document.createElement('span');
@@ -1667,7 +1667,7 @@ function renderSidebar() {
         renItem.textContent = 'Renommer';
         renItem.addEventListener('click', async (e) => {
             e.stopPropagation();
-            dropdown.classList.remove('open');
+            dropdown.classList.remove('open'); menuBtn.focus();
             const newName = await promptModal('Renommer le fil', t.name);
             if (!newName || newName.trim() === t.name) return;
             await fetch(`/api/threads/${t.thread_id}`, {
@@ -1686,7 +1686,7 @@ function renderSidebar() {
         expItem.textContent = 'Exporter en Markdown';
         expItem.addEventListener('click', (e) => {
             e.stopPropagation();
-            dropdown.classList.remove('open');
+            dropdown.classList.remove('open'); menuBtn.focus();
             const a = document.createElement('a');
             a.href = `/api/threads/${t.thread_id}/export`;
             a.download = '';
@@ -1703,9 +1703,11 @@ function renderSidebar() {
         pinItem.textContent = isPinned ? 'Désépingler' : 'Épingler';
         pinItem.addEventListener('click', (e) => {
             e.stopPropagation();
-            dropdown.classList.remove('open');
+            dropdown.classList.remove('open'); menuBtn.focus();
             togglePinThread(t.thread_id);
             renderSidebar();
+            const _reFocus = document.querySelector('.thread-item[data-tid="' + t.thread_id + '"] .thread-menu-btn');
+            if (_reFocus) _reFocus.focus();
         });
 
         // Étiquettes
@@ -1715,7 +1717,7 @@ function renderSidebar() {
         tagItem.textContent = 'Étiquettes';
         tagItem.addEventListener('click', async (e) => {
             e.stopPropagation();
-            dropdown.classList.remove('open');
+            dropdown.classList.remove('open'); menuBtn.focus();
             const newTags = await promptModal('Étiquettes (séparées par des virgules)', t.tags || '');
             if (newTags === null) return;
             await fetch(`/api/threads/${t.thread_id}`, {
@@ -1734,7 +1736,7 @@ function renderSidebar() {
         delItem.textContent = 'Supprimer';
         delItem.addEventListener('click', async (e) => {
             e.stopPropagation();
-            dropdown.classList.remove('open');
+            dropdown.classList.remove('open'); menuBtn.focus();
             const action = await deleteThreadModal(t.name);
             if (!action) return;
             if (action === 'archive') await archiveThread(t.thread_id);
@@ -1772,7 +1774,7 @@ function renderSidebar() {
         paramItem.textContent = '⚙️ Paramètres du fil';
         paramItem.addEventListener('click', async (e) => {
             e.stopPropagation();
-            dropdown.classList.remove('open');
+            dropdown.classList.remove('open'); menuBtn.focus();
             await promptThreadParamsModal();
         });
 
@@ -2683,7 +2685,7 @@ function appendUserMessage(content, fileName = null) {
     const actMenu = document.createElement('div');
     actMenu.className = 'copy-menu';
     actMenu.setAttribute('role', 'menu');
-    actMenu.style.display = 'none';
+    actMenu.style.display = 'none'; actBtn.focus();
     actMenu.innerHTML = `
         <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
         <button class="copy-menu-item" role="menuitem" data-action="edit">✏️ Modifier</button>
@@ -2697,21 +2699,21 @@ function appendUserMessage(content, fileName = null) {
             actMenu.style.display = 'flex';
             actBtn.setAttribute('aria-expanded', 'true');
             _menuKeyboard(actBtn, actMenu, () => {
-                actMenu.style.display = 'none';
+                actMenu.style.display = 'none'; actBtn.focus();
                 actBtn.setAttribute('aria-expanded', 'false');
             });
         } else {
-            actMenu.style.display = 'none';
+            actMenu.style.display = 'none'; actBtn.focus();
             actBtn.setAttribute('aria-expanded', 'false');
         }
     });
 
     actMenu.querySelector('[data-action="copy"]').addEventListener('click', () => {
-        actMenu.style.display = 'none';
+        actMenu.style.display = 'none'; actBtn.focus();
         navigator.clipboard.writeText(content).catch(() => {});
     });
     actMenu.querySelector('[data-action="edit"]').addEventListener('click', () => {
-        actMenu.style.display = 'none';
+        actMenu.style.display = 'none'; actBtn.focus();
         editLastUserMessage(div, currentTabId || currentThreadId);
     });
 
@@ -2830,7 +2832,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
 
     const actMenu = document.createElement('div');
     actMenu.className     = 'copy-menu';
-    actMenu.style.display = 'none';
+    actMenu.style.display = 'none'; actBtn.focus();
     actMenu.setAttribute('role', 'menu');
     actMenu.innerHTML = `
         <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
@@ -2852,11 +2854,11 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
             actMenu.style.display = 'flex';
             actBtn.setAttribute('aria-expanded', 'true');
             _menuKeyboard(actBtn, actMenu, () => {
-                actMenu.style.display = 'none';
+                actMenu.style.display = 'none'; actBtn.focus();
                 actBtn.setAttribute('aria-expanded', 'false');
             });
         } else {
-            actMenu.style.display = 'none';
+            actMenu.style.display = 'none'; actBtn.focus();
             actBtn.setAttribute('aria-expanded', 'false');
         }
     });
@@ -2866,24 +2868,24 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
             actBtn.innerHTML = '✓';
             setTimeout(() => actBtn.innerHTML = SVG_ACT, 1500);
         });
-        actMenu.style.display = 'none';
+        actMenu.style.display = 'none'; actBtn.focus();
     });
 
     actMenu.querySelector('[data-action="tab"]').addEventListener('click', () => {
         sendToNewTab(content);
-        actMenu.style.display = 'none';
+        actMenu.style.display = 'none'; actBtn.focus();
     });
 
     actMenu.querySelector('[data-action="regen"]').addEventListener('click', () => {
-        actMenu.style.display = 'none';
+        actMenu.style.display = 'none'; actBtn.focus();
         regenerateMessage(div, currentTabId || currentThreadId);
     });
     actMenu.querySelector('[data-action="fork"]').addEventListener('click', () => {
-        actMenu.style.display = 'none';
+        actMenu.style.display = 'none'; actBtn.focus();
         forkFromMessage(div, currentTabId || currentThreadId);
     });
     actMenu.querySelector('[data-action="mark"]').addEventListener('click', () => {
-        actMenu.style.display = 'none';
+        actMenu.style.display = 'none'; actBtn.focus();
         _toggleExportMark(div, content, 'assistant');
         const btn = actMenu.querySelector('[data-action="mark"]');
         btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
@@ -3455,7 +3457,7 @@ async function _triggerStream(content, conversationId, images = null) {
 
         const actMenu = document.createElement('div');
         actMenu.className     = 'copy-menu';
-        actMenu.style.display = 'none';
+        actMenu.style.display = 'none'; actBtn.focus();
         actMenu.setAttribute('role', 'menu');
         actMenu.innerHTML = `
             <button class="copy-menu-item" role="menuitem" data-action="copy">📋 Copier</button>
@@ -3476,11 +3478,11 @@ async function _triggerStream(content, conversationId, images = null) {
                 actMenu.style.display = 'flex';
                 actBtn.setAttribute('aria-expanded', 'true');
                 _menuKeyboard(actBtn, actMenu, () => {
-                    actMenu.style.display = 'none';
+                    actMenu.style.display = 'none'; actBtn.focus();
                     actBtn.setAttribute('aria-expanded', 'false');
                 });
             } else {
-                actMenu.style.display = 'none';
+                actMenu.style.display = 'none'; actBtn.focus();
                 actBtn.setAttribute('aria-expanded', 'false');
             }
         });
@@ -3817,22 +3819,22 @@ async function _triggerStream(content, conversationId, images = null) {
                 actBtn.innerHTML = '✓';
                 setTimeout(() => actBtn.innerHTML = SVG_ACT, 1500);
             });
-            actMenu.style.display = 'none';
+            actMenu.style.display = 'none'; actBtn.focus();
         });
         actMenu.querySelector('[data-action="tab"]').addEventListener('click', () => {
             sendToNewTab(finalContent);
-            actMenu.style.display = 'none';
+            actMenu.style.display = 'none'; actBtn.focus();
         });
         actMenu.querySelector('[data-action="regen"]').addEventListener('click', () => {
-            actMenu.style.display = 'none';
+            actMenu.style.display = 'none'; actBtn.focus();
             regenerateMessage(div, conversationId);
         });
         actMenu.querySelector('[data-action="fork"]').addEventListener('click', () => {
-            actMenu.style.display = 'none';
+            actMenu.style.display = 'none'; actBtn.focus();
             forkFromMessage(div, conversationId);
         });
         actMenu.querySelector('[data-action="mark"]').addEventListener('click', () => {
-            actMenu.style.display = 'none';
+            actMenu.style.display = 'none'; actBtn.focus();
             _toggleExportMark(div, finalContent, 'assistant');
             const btn = actMenu.querySelector('[data-action="mark"]');
             btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
