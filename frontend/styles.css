@@ -1034,6 +1034,90 @@ body {
 }
 .close-modal:hover { background: var(--bg-input); color: var(--text); }
 
+/* ── MODALE PIN — pavé numérique ── */
+.pin-modal-box {
+    max-width: 320px;
+    align-items: center;
+    text-align: center;
+}
+
+.pin-modal-subtitle {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: -8px;
+}
+
+.pin-dots {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    min-height: 22px;
+    margin: 4px 0;
+}
+
+.pin-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    background: transparent;
+    transition: background 0.1s ease, transform 0.1s ease;
+}
+
+.pin-dot.filled {
+    background: var(--accent);
+    transform: scale(1.1);
+}
+
+.pin-modal-error {
+    color: #d05050;
+    font-size: 0.85rem;
+    min-height: 18px;
+}
+
+.pin-modal-box.pin-shake {
+    animation: pinShake 0.35s ease;
+}
+
+@keyframes pinShake {
+    0%, 100% { transform: translateX(0); }
+    20%      { transform: translateX(-8px); }
+    40%      { transform: translateX(8px); }
+    60%      { transform: translateX(-6px); }
+    80%      { transform: translateX(6px); }
+}
+
+.pin-keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    width: 100%;
+}
+
+.pin-key {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 12px;
+    font-size: 1.3rem;
+    font-weight: 600;
+    padding: 16px 0;
+    cursor: pointer;
+    transition: background 0.12s ease, transform 0.08s ease;
+    user-select: none;
+}
+
+.pin-key:hover { background: var(--bg-hover); }
+.pin-key:active { transform: scale(0.94); background: var(--accent); color: var(--bg); }
+
+.pin-key-action { color: var(--accent); font-size: 1.1rem; }
+.pin-key-ok { color: var(--accent); }
+
+@media (max-width: 480px) {
+    .pin-modal-box { max-width: 100%; }
+    .pin-key { padding: 20px 0; font-size: 1.5rem; }
+}
+
 .setting-group {
     display: flex;
     flex-direction: column;

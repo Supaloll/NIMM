@@ -335,6 +335,95 @@ window.fetch = (url, opts = {}) => {
     return _nimmOrigFetch(url, opts);
 };
 
+// ── Modale PIN — pavé numérique thémé (remplace window.prompt) ──
+const _pinModal = {
+    el: null, dotsEl: null, errEl: null, titleEl: null, subEl: null, keypadEl: null, cancelBtn: null,
+    buffer: '',
+    onSubmit: null,
+    onCancel: null,
+    _keyHandler: null,
+
+    _build() {
+        this.el        = document.getElementById('pin-modal');
+        this.dotsEl    = document.getElementById('pin-modal-dots');
+        this.errEl     = document.getElementById('pin-modal-error');
+        this.titleEl   = document.getElementById('pin-modal-title');
+        this.subEl     = document.getElementById('pin-modal-subtitle');
+        this.keypadEl  = document.getElementById('pin-modal-keypad');
+        this.cancelBtn = document.getElementById('pin-modal-cancel');
+        this.keypadEl.querySelectorAll('.pin-key').forEach(btn => {
+            btn.addEventListener('click', () => this._press(btn.dataset.key));
+        });
+        this.cancelBtn.addEventListener('click', () => this._cancel());
+        this._keyHandler = (e) => {
+            if (e.key >= '0' && e.key <= '9') { this._press(e.key); e.preventDefault(); }
+            else if (e.key === 'Backspace')   { this._press('back'); e.preventDefault(); }
+            else if (e.key === 'Enter')       { this._press('ok'); e.preventDefault(); }
+            else if (e.key === 'Escape')      { this._cancel(); e.preventDefault(); }
+        };
+    },
+
+    // onSubmit(pin) doit retourner true (succes, ferme la modale) ou une chaine/false (erreur, reste ouverte)
+    open({ title, subtitle, onSubmit, onCancel }) {
+        if (!this.el) this._build();
+        this.buffer = '';
+        this.onSubmit = onSubmit || null;
+        this.onCancel = onCancel || null;
+        this.titleEl.textContent = title || '🔒 Code PIN';
+        this.subEl.textContent = subtitle || '';
+        this.errEl.textContent = '';
+        this._render();
+        this.el.classList.remove('hidden');
+        document.addEventListener('keydown', this._keyHandler);
+    },
+
+    close() {
+        if (this.el) this.el.classList.add('hidden');
+        document.removeEventListener('keydown', this._keyHandler);
+        this.buffer = '';
+    },
+
+    _cancel() {
+        const cb = this.onCancel;
+        this.close();
+        if (cb) cb();
+    },
+
+    async _press(key) {
+        if (key === 'back') { this.buffer = this.buffer.slice(0, -1); this._render(); return; }
+        if (key === 'ok')   { await this._submit(); return; }
+        this.buffer += key;
+        this._render();
+    },
+
+    _render() {
+        this.dotsEl.innerHTML = '';
+        const len = Math.max(this.buffer.length, 1);
+        for (let i = 0; i < len; i++) {
+            const d = document.createElement('span');
+            d.className = 'pin-dot' + (i < this.buffer.length ? ' filled' : '');
+            this.dotsEl.appendChild(d);
+        }
+    },
+
+    async _submit() {
+        if (!this.onSubmit) { this.close(); return; }
+        this.errEl.textContent = '';
+        const result = await this.onSubmit(this.buffer);
+        if (result === true) {
+            this.close();
+        } else {
+            this.errEl.textContent = (typeof result === 'string' && result) ? result : 'PIN incorrect.';
+            this.buffer = '';
+            this._render();
+            const box = this.el.querySelector('.pin-modal-box');
+            box.classList.remove('pin-shake');
+            void box.offsetWidth;
+            box.classList.add('pin-shake');
+        }
+    }
+};
+
 // ── Verrou de session : deverrouille un profil a PIN avant d'ecrire (anti-pollution memoire) ──
 async function _ensureUnlocked(userId) {
     if (!userId || _unlockTokens[userId]) return true;
@@ -345,17 +434,28 @@ async function _ensureUnlocked(userId) {
         hasPin = !!(u && u.has_pin);
     } catch (e) { hasPin = false; }
     if (!hasPin) return true;
-    const pin = window.prompt('Code PIN pour la session « ' + userId + ' » :');
-    if (pin === null || pin === '') return false;
-    try {
-        const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/unlock', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pin })
+    return new Promise((resolve) => {
+        _pinModal.open({
+            title: '🔒 Déverrouiller',
+            subtitle: 'Code PIN pour « ' + userId + ' »',
+            onCancel: () => resolve(false),
+            onSubmit: async (pin) => {
+                if (!pin) return 'Code requis.';
+                try {
+                    const r = await fetch('/api/users/' + encodeURIComponent(userId) + '/unlock', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pin })
+                    });
+                    if (!r.ok) return 'PIN incorrect.';
+                    _unlockTokens[userId] = (await r.json()).token;
+                    resolve(true);
+                    return true;
+                } catch (e) {
+                    return 'Deverrouillage impossible.';
+                }
+            }
         });
-        if (!r.ok) { window.alert('PIN incorrect.'); return false; }
-        _unlockTokens[userId] = (await r.json()).token;
-        return true;
-    } catch (e) { window.alert('Deverrouillage impossible.'); return false; }
+    });
 }
 
 // Cache masques : id → label (ex: "Glaude 🐺")
