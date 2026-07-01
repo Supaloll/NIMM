@@ -502,6 +502,8 @@ async def continue_thread_route(thread_id: str):
                 temperature=settings.get('temperature', 0.7),
                 api_keys=api_keys,
             ):
+                if isinstance(token, dict):
+                    continue
                 accumulated += token
                 yield f"data: {token}\n\n"
         except Exception as e:
