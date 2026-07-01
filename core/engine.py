@@ -990,7 +990,8 @@ async def call_llm_stream_with_tools(
             temperature=temperature,
             api_keys=api_keys,
         ):
-            yield {"type": "token", "text": token}
+            if not isinstance(token, dict):
+                yield {"type": "token", "text": token}
         return
 
     # ── Providers OpenAI-compat ──
@@ -1488,4 +1489,4 @@ async def get_provider_credit(provider: str, api_keys: dict) -> dict:
     except Exception as e:
         return {'available': False, 'reason': str(e)[:120]}
 
-    return {'available': False, 'reason': 'unsupported_provider'}
+    return {'available': False, 'reason': 'Provider non reconnu'}
