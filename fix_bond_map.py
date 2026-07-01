@@ -1,35 +1,31 @@
 """
-seed_bond_map.py — Insère la fiche bond "Plan de trajet pédestre (OpenStreetMap)"
-dans la Promptothèque de NIMM.
+fix_bond_map.py — Met à jour le bond "Plan de trajet pédestre" déjà en base.
+
+Corrections :
+- Règle absolue sur le format d'adresse géocodable (plus de "Sortie métro", "angle", etc.)
+- output_format='html' explicitement rappelé comme obligatoire
+- Suppression des références à PDF
 
 Exécuter une seule fois depuis la racine du projet :
-    python bonds/seed_bond_map.py
-
-Prérequis (à installer une fois) :
-    pip install osmnx folium contextily geopandas matplotlib geopy --break-system-packages
+    python fix_bond_map.py
 """
 
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from core.database import save_prompt, list_prompts, get_all_users, set_user_context
 except ImportError as e:
     print(f"Erreur d'import : {e}")
-    print("Lancez ce script depuis la racine du projet NIMM.")
     sys.exit(1)
 
-# Initialiser le contexte utilisateur (requis par la DB multi-profils)
 _users = get_all_users()
 if not _users:
-    print("Aucun utilisateur trouvé dans la base. Lancez NIMM au moins une fois.")
+    print("Aucun utilisateur trouvé.")
     sys.exit(1)
 set_user_context(_users[0]["id"])
-print(f"Contexte utilisateur : {_users[0].get('name', _users[0]['id'])}")
 
-SKILL_LABEL = "Plan de trajet pédestre sur fond OpenStreetMap"
-
-SKILL_TEXT = """Quand utiliser ce bond : quand l'utilisateur décrit un trajet à pied et veut
+NEW_TEXT = """Quand utiliser ce bond : quand l'utilisateur décrit un trajet à pied et veut
 un plan cartographique — avec des tracés colorés, les vrais noms de rue, ses annotations
 personnelles (quel trottoir emprunter, où traverser, quels repères). Rendu : carte HTML
 interactive Leaflet/OpenStreetMap avec zoom dynamique + section textuelle pour lecteur d'écran.
@@ -88,7 +84,7 @@ Règles importantes :
 - Pour les villes françaises : "Ville, France" (ex. "Lyon, France") pour Nominatim optimal.
 """
 
-SKILL_META = {
+NEW_META = {
     "description": (
         "Générer un plan de trajet pédestre sur fond OpenStreetMap réel, "
         "avec tracés colorés, annotations personnelles et carte HTML interactive "
@@ -106,23 +102,27 @@ SKILL_META = {
     "version": 2,
 }
 
+existing = list_prompts("skill")
+found = []
+for sid, sk in (existing.items() if isinstance(existing, dict) else {}):
+    lbl = (sk.get("label") or "").lower()
+    if "carte" in lbl or "trajet" in lbl or "openstreetmap" in lbl or "map" in lbl:
+        found.append((sid, sk))
 
-def main():
-    existing = list_prompts("skill")
-    for sid, sk in (existing.items() if isinstance(existing, dict) else {}):
-        lbl = (sk.get("label") or "").lower()
-        if "carte" in lbl or "trajet" in lbl or "openstreetmap" in lbl or "map" in lbl:
-            print(f"Bond similaire déjà présent (id={sid}) : {sk.get('label')}")
-            print("Supprimez-le d'abord si vous voulez le remplacer.")
-            return
+if not found:
+    print("Aucun bond map trouvé en base. Lancez bonds/seed_bond_map.py pour le créer.")
+    sys.exit(0)
 
-    entry = save_prompt(None, SKILL_LABEL, SKILL_TEXT, type="skill", meta=SKILL_META)
+for sid, sk in found:
+    print(f"Bond trouvé : id={sid}, label={sk.get('label')}")
+    entry = save_prompt(
+        sid,
+        "Plan de trajet pédestre sur fond OpenStreetMap",
+        NEW_TEXT,
+        type="skill",
+        meta=NEW_META,
+    )
     if entry:
-        skill_id = entry.get("id") or entry.get("prompt_id") or "?"
-        print(f"Bond créé (id={skill_id}) : {SKILL_LABEL}")
+        print(f"✓ Bond mis à jour (id={sid})")
     else:
-        print("Erreur lors de la création du bond.")
-
-
-if __name__ == "__main__":
-    main()
+        print(f"✗ Échec mise à jour (id={sid})")
