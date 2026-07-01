@@ -74,7 +74,7 @@ function _bip(freq = 440, duration = 80, gain = 0.08) {
 // ── Accessibilité : Échap ferme les modales + arrête le stream ──
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-        document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
+        document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => _closeModal(m));
         const stopBtn = document.getElementById('stop-btn');
         if (stopBtn && !stopBtn.hidden) stopStream();
     }
@@ -2074,9 +2074,11 @@ async function promptThreadParamsModal() {
     // Déplier toutes les sections
     modal.querySelectorAll('details.settings-section-details').forEach(d => d.open = true);
 
+    const _paramsPrevFocus = document.activeElement;
     return new Promise(resolve => {
         const cleanup = () => {
             modal.classList.add('hidden');
+            setTimeout(() => { _paramsPrevFocus?.focus(); }, 0);
             if (origTitle) origTitle.textContent = savedTitle;
             modeRows.forEach(r => { r.style.display = r._savedDisplay !== undefined ? r._savedDisplay : ''; });
             okBtn.textContent = savedOkText;
@@ -3991,6 +3993,8 @@ function _updateExportBadge() {
 
 function openExportModal() {
     const modal = document.getElementById('export-modal');
+    modal.dataset.prevFocus = null;
+    modal.closest('.modal-overlay').__prevFocus = document.activeElement;
     modal.classList.remove('hidden');
     document.getElementById('export-count').textContent =
         `${_exportItems.length} message${_exportItems.length > 1 ? 's' : ''} marqué${_exportItems.length > 1 ? 's' : ''}.`;
@@ -7039,11 +7043,13 @@ function deleteThreadModal(threadName) {
         const cancel  = document.getElementById('delete-cancel-btn');
         const closes  = modal.querySelectorAll('.close-modal');
 
+        const _delPrevFocus = document.activeElement;
         modal.classList.remove('hidden');
         setTimeout(() => { document.getElementById('delete-cancel-btn')?.focus(); }, 50);
 
         const cleanup = (result) => {
             modal.classList.add('hidden');
+            setTimeout(() => { _delPrevFocus?.focus(); }, 0);
             archive.replaceWith(archive.cloneNode(true));
             confirm.replaceWith(confirm.cloneNode(true));
             cancel.replaceWith(cancel.cloneNode(true));
@@ -7436,6 +7442,7 @@ function confirmModal(message) {
 
         const cleanup = (result) => {
             modal.classList.add('hidden');
+            setTimeout(() => { _pmPrevFocus?.focus(); }, 0);
             okBtn.removeEventListener('click', onOk);
             cancelBtn.removeEventListener('click', onCancel);
             resolve(result);
@@ -7458,6 +7465,7 @@ function promptModal(title, defaultValue = '') {
         const cancelBtn = document.getElementById('prompt-cancel');
         titleEl.textContent = title;
         input.value = defaultValue;
+        const _pmPrevFocus = document.activeElement;
         modal.classList.remove('hidden');
         setTimeout(() => { input.focus(); input.select(); }, 50);
         const cleanup = (result) => {
@@ -7483,14 +7491,47 @@ function promptModal(title, defaultValue = '') {
 // FERMETURE MODALES
 // ══════════════════════════════════════════
 
+// Utilitaire : ouvrir une modal en sauvegardant le focus
+function _openModal(overlayOrModal) {
+    const overlay = overlayOrModal.classList.contains('modal-overlay')
+        ? overlayOrModal : overlayOrModal.closest('.modal-overlay') || overlayOrModal;
+    overlay.__prevFocus = document.activeElement;
+    overlay.classList.remove('hidden');
+}
+function _closeModal(overlayOrModal) {
+    const overlay = overlayOrModal.classList.contains('modal-overlay')
+        ? overlayOrModal : overlayOrModal.closest('.modal-overlay') || overlayOrModal;
+    overlay.classList.add('hidden');
+    setTimeout(() => { overlay.__prevFocus?.focus(); }, 0);
+}
+// MutationObserver : sauvegarder le focus dés qu'une modal-overlay devient visible
+(function() {
+    const _modalObs = new MutationObserver(mutations => {
+        mutations.forEach(m => {
+            if (m.type !== 'attributes' || m.attributeName !== 'class') return;
+            const el = m.target;
+            if (!el.classList.contains('modal-overlay')) return;
+            const wasHidden = m.oldValue && m.oldValue.includes('hidden');
+            const isVisible = !el.classList.contains('hidden');
+            if (wasHidden && isVisible && !el.__prevFocus) {
+                el.__prevFocus = document.activeElement;
+            }
+            if (!isVisible) { el.__prevFocus = null; }
+        });
+    });
+    document.querySelectorAll('.modal-overlay').forEach(el => {
+        _modalObs.observe(el, { attributes: true, attributeOldValue: true });
+    });
+})();
+
 document.querySelectorAll('.close-modal').forEach(btn => {
-    btn.addEventListener('click', () => btn.closest('.modal-overlay').classList.add('hidden'));
+    btn.addEventListener('click', () => _closeModal(btn.closest('.modal-overlay')));
 });
 
 // Clic en dehors de la modal
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', e => {
-        if (e.target === overlay) overlay.classList.add('hidden');
+        if (e.target === overlay) _closeModal(overlay);
     });
 });
 
