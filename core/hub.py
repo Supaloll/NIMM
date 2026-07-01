@@ -1007,6 +1007,15 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               Appeler dès que l\'utilisateur demande à enregistrer, générer ou télécharger\n'
         '                               un document, un export, une version accessible de son texte.\n'
         '                               Répondre avec le lien de téléchargement retourné.\n'
+        '• search_wikipedia(query, lang, sentences) → résumé d\'article Wikipedia.\n'
+        '                               Préférer à search_web pour biographies, définitions, histoire, sciences.\n'
+        '                               lang (défaut fr), sentences = nombre de phrases (défaut 5).\n'
+        '• search_wikidata(query) → propriétés structurées d\'une entité Wikidata\n'
+        '                               (type, pays, dates, profession…). Complémentaire de Wikipedia.\n'
+        '• search_sirene(query) → recherche INSEE Sirene (SIRET, SIREN, nom d\'entreprise/asso).\n'
+        '                               Nécessite clé API INSEE dans Paramètres > Services externes.\n'
+        '• search_datagouv(query) → jeux de données open data français (data.gouv.fr).\n'
+        '                               Retourne titre, organisation, description et URL.\n'
         'Appliquer la règle SONDE du lexique.\n'
     )
 
@@ -1778,6 +1787,103 @@ NIMM_TOOLS = [
                 "required": ["filename", "content", "format"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_wikipedia",
+            "description": (
+                "Recherche un article Wikipedia et retourne un résumé structuré. "
+                "Préférer à search_web pour des questions encyclopédiques, biographies, "
+                "définitions de concepts, histoire, sciences. "
+                "Retourne le résumé, la description et l\'URL de l\'article."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Terme ou sujet à rechercher sur Wikipedia."
+                    },
+                    "lang": {
+                        "type": "string",
+                        "description": "Code langue Wikipedia (fr, en, es…). Défaut : fr.",
+                        "default": "fr"
+                    },
+                    "sentences": {
+                        "type": "integer",
+                        "description": "Nombre de phrases du résumé (1-20). Défaut : 5.",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_wikidata",
+            "description": (
+                "Recherche une entité dans Wikidata et retourne ses propriétés structurées "
+                "(type, pays, dates, profession…). "
+                "Utile pour vérifier des faits précis, des dates, des relations entre entités. "
+                "Complémentaire de search_wikipedia."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Nom ou description de l\'entité à rechercher."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_sirene",
+            "description": (
+                "Recherche une entreprise ou association dans l\'annuaire INSEE Sirene. "
+                "Accepte un SIRET (14 chiffres), un SIREN (9 chiffres) ou un nom d\'entreprise. "
+                "Retourne dénomination, adresse et code NAF. "
+                "Nécessite une clé API INSEE configurée dans Paramètres > Services externes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "SIRET, SIREN ou nom d\'entreprise/association."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_datagouv",
+            "description": (
+                "Recherche des jeux de données open data sur data.gouv.fr. "
+                "Retourne titre, organisation, description courte et URL pour les 5 résultats les plus réutilisés. "
+                "Utile pour trouver des données publiques françaises (statistiques, géographie, santé…)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Sujet ou mots-clés du jeu de données recherché."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
     }
 ]
 
@@ -2295,6 +2401,170 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             return f"\u2705 Fichier cr\u00e9\u00e9\u00a0: [{basename}]({url})\nFormat\u00a0: {fmt.upper()} | {nb_chars} caract\u00e8res"
         except Exception as e:
             return f"[Erreur cr\u00e9ation fichier\u00a0: {e}]"
+
+
+    if name == 'search_wikipedia':
+        _wp_query     = args.get('query', query).strip()
+        _wp_lang      = args.get('lang', 'fr').strip().lower()[:5]
+        _wp_sentences = int(args.get('sentences', 5))
+        try:
+            import httpx as _hx, urllib.parse as _up, re as _re2
+            async with _hx.AsyncClient(timeout=10.0, headers={"User-Agent": "NIMM/1.0"}) as _c:
+                _r = await _c.get(
+                    f"https://{_wp_lang}.wikipedia.org/w/api.php",
+                    params={"action": "query", "list": "search", "srsearch": _wp_query,
+                            "srlimit": "1", "format": "json"})
+                _results = (_r.json().get("query") or {}).get("search") or []
+                if not _results:
+                    return f"Aucun article Wikipedia trouv\u00e9 pour \u00ab\u00a0{_wp_query}\u00a0\u00bb."
+                _title = _results[0]["title"]
+                _r2 = await _c.get(
+                    f"https://{_wp_lang}.wikipedia.org/api/rest_v1/page/summary/{_up.quote(_title.replace(' ', '_'))}",
+                    headers={"User-Agent": "NIMM/1.0"})
+                if _r2.status_code != 200:
+                    return f"Article Wikipedia \u00ab\u00a0{_title}\u00a0\u00bb introuvable."
+                _s = _r2.json()
+            _extract = _s.get("extract") or ""
+            _desc    = _s.get("description") or ""
+            _url_wp  = (_s.get("content_urls") or {}).get("desktop", {}).get("page", "")
+            _sents   = _re2.split(r'(?<=[.!?])\s+', _extract.strip())
+            _n       = max(1, min(_wp_sentences, 20))
+            _text    = " ".join(_sents[:_n])
+            _out     = f"**{_title}**"
+            if _desc: _out += f" ({_desc})"
+            _out += f"\n\n{_text}"
+            if _url_wp: _out += f"\n\nSource\u00a0: {_url_wp}"
+            return _out
+        except Exception as e:
+            return f"[Erreur Wikipedia\u00a0: {e}]"
+
+    if name == 'search_wikidata':
+        _wd_query = args.get('query', query).strip()
+        try:
+            import httpx as _hx2
+            _WD = "https://www.wikidata.org/w/api.php"
+            async with _hx2.AsyncClient(timeout=10.0, headers={"User-Agent": "NIMM/1.0"}) as _c2:
+                _r = await _c2.get(_WD, params={
+                    "action": "wbsearchentities", "search": _wd_query,
+                    "language": "fr", "limit": "3", "format": "json"})
+                _results = _r.json().get("search") or []
+                if not _results:
+                    return f"Aucune entit\u00e9 Wikidata trouv\u00e9e pour \u00ab\u00a0{_wd_query}\u00a0\u00bb."
+                _lines = [f"R\u00e9sultats Wikidata pour \u00ab\u00a0{_wd_query}\u00a0\u00bb\u00a0:"]
+                for _it in _results[:3]:
+                    _qid   = _it.get("id", "")
+                    _label = _it.get("label", _qid)
+                    _d     = _it.get("description", "")
+                    _lines.append(
+                        f"\u2022 {_label} ({_qid})" + (f"\u00a0\u2014 {_d}" if _d else "")
+                        + f"\n  https://www.wikidata.org/wiki/{_qid}")
+                _first_qid = _results[0].get("id")
+                if _first_qid:
+                    _r2 = await _c2.get(_WD, params={
+                        "action": "wbgetentities", "ids": _first_qid,
+                        "languages": "fr|en", "props": "claims", "format": "json"})
+                    _claims = ((_r2.json().get("entities") or {}).get(_first_qid) or {}).get("claims") or {}
+                    _key_props = {
+                        "P31": "Type", "P17": "Pays", "P571": "Fond\u00e9 le",
+                        "P569": "Naissance", "P570": "D\u00e9c\u00e8s",
+                        "P19": "Lieu de naissance", "P106": "Profession",
+                    }
+                    _prop_lines = []
+                    for _pid, _plabel in _key_props.items():
+                        if _pid not in _claims: continue
+                        _sv    = (_claims[_pid][0].get("mainsnak") or {}).get("datavalue") or {}
+                        _vtype = _sv.get("type"); _val = _sv.get("value")
+                        if _vtype == "string":
+                            _prop_lines.append(f"  {_plabel}\u00a0: {_val}")
+                        elif _vtype == "wikibase-entityid":
+                            _prop_lines.append(f"  {_plabel}\u00a0: {(_val or {}).get('id', '?')}")
+                        elif _vtype == "time" and isinstance(_val, dict):
+                            _prop_lines.append(f"  {_plabel}\u00a0: {_val.get('time','')[:11].lstrip('+')}")
+                    if _prop_lines:
+                        _lines.append(f"\nPropri\u00e9t\u00e9s de {_results[0].get('label', _first_qid)}\u00a0:")
+                        _lines.extend(_prop_lines)
+            return "\n".join(_lines)
+        except Exception as e:
+            return f"[Erreur Wikidata\u00a0: {e}]"
+
+    if name == 'search_sirene':
+        _si_query = args.get('query', query).strip()
+        try:
+            from core.database import get_setting as _gset
+            import json as _jsn, httpx as _hx3
+            _bearer = None
+            try:
+                _ext_keys = _jsn.loads(_gset('external_keys', '{}'))
+                _bearer = _ext_keys.get('sirene', '')
+            except Exception:
+                pass
+            if not _bearer:
+                return "[Cl\u00e9 INSEE Sirene non configur\u00e9e \u2014 renseigner dans Param\u00e8tres > Services externes]"
+            _headers_si = {"Authorization": f"Bearer {_bearer}", "Accept": "application/json"}
+            _clean = _si_query.replace(" ", "").replace("\u00a0", "")
+            async with _hx3.AsyncClient(timeout=10.0, headers=_headers_si) as _c3:
+                if _clean.isdigit() and len(_clean) == 14:
+                    _r = await _c3.get(f"https://api.insee.fr/api-sirene/3.11/siret/{_clean}")
+                    if _r.status_code == 404: return f"SIRET {_clean} introuvable."
+                    if _r.status_code != 200: return f"Erreur INSEE\u00a0: {_r.status_code}"
+                    _d = _r.json().get("etablissement", {})
+                    _ul = _d.get("uniteLegale") or {}
+                    _nom = _ul.get("denominationUniteLegale") or _ul.get("nomUniteLegale", "?")
+                    _adr_d = _d.get("adresseEtablissement") or {}
+                    _adr = " ".join(filter(None, [
+                        _adr_d.get("numeroVoieEtablissement",""), _adr_d.get("typeVoieEtablissement",""),
+                        _adr_d.get("libelleVoieEtablissement",""), _adr_d.get("codePostalEtablissement",""),
+                        _adr_d.get("libelleCommuneEtablissement",""),
+                    ]))
+                    return f"**{_nom}**\nSIRET\u00a0: {_clean}\nAdresse\u00a0: {_adr}\nNAF\u00a0: {_ul.get('activitePrincipaleUniteLegale','')}"
+                elif _clean.isdigit() and len(_clean) == 9:
+                    _r = await _c3.get(f"https://api.insee.fr/api-sirene/3.11/siren/{_clean}")
+                    if _r.status_code != 200: return f"SIREN {_clean} introuvable (code {_r.status_code})."
+                    _d = _r.json().get("uniteLegale", {})
+                    _nom = _d.get("denominationUniteLegale") or _d.get("nomUniteLegale","?")
+                    return f"**{_nom}**\nSIREN\u00a0: {_clean}\nNAF\u00a0: {_d.get('activitePrincipaleUniteLegale','')}\nEffectifs\u00a0: {_d.get('trancheEffectifsUniteLegale','')}"
+                else:
+                    _r = await _c3.get("https://api.insee.fr/api-sirene/3.11/siret", params={
+                        "q": f"denominationUniteLegale:{_si_query}* OR nomUniteLegale:{_si_query}*",
+                        "nombre": "5",
+                        "champs": "siret,denominationUniteLegale,nomUniteLegale,activitePrincipaleUniteLegale,codePostalEtablissement,libelleCommuneEtablissement"})
+                    if _r.status_code != 200: return f"Erreur recherche Sirene\u00a0: {_r.status_code}"
+                    _etabs = _r.json().get("etablissements", [])
+                    if not _etabs: return f"Aucune entreprise trouv\u00e9e pour \u00ab\u00a0{_si_query}\u00a0\u00bb."
+                    _lines_si = [f"R\u00e9sultats Sirene pour \u00ab\u00a0{_si_query}\u00a0\u00bb\u00a0:"]
+                    for _e in _etabs[:5]:
+                        _ul2 = _e.get("uniteLegale") or {}
+                        _nom2 = _ul2.get("denominationUniteLegale") or _ul2.get("nomUniteLegale","?")
+                        _lines_si.append(
+                            f"\u2022 {_nom2} \u2014 SIRET {_e.get('siret','')} "
+                            f"\u2014 {_e.get('codePostalEtablissement','')} {_e.get('libelleCommuneEtablissement','')} "
+                            f"\u2014 NAF {_ul2.get('activitePrincipaleUniteLegale','')}")
+                    return "\n".join(_lines_si)
+        except Exception as e:
+            return f"[Erreur Sirene\u00a0: {e}]"
+
+    if name == 'search_datagouv':
+        _dg_query = args.get('query', query).strip()
+        try:
+            import httpx as _hx4
+            async with _hx4.AsyncClient(timeout=10.0, headers={"User-Agent": "NIMM/1.0"}) as _c4:
+                _r = await _c4.get("https://www.data.gouv.fr/api/1/datasets/",
+                                   params={"q": _dg_query, "page_size": "5", "sort": "reuse_count"})
+                if _r.status_code != 200: return f"Erreur data.gouv\u00a0: {_r.status_code}"
+                _datasets = (_r.json().get("data") or [])
+            if not _datasets: return f"Aucun jeu de donn\u00e9es trouv\u00e9 pour \u00ab\u00a0{_dg_query}\u00a0\u00bb."
+            _lines_dg = [f"Jeux de donn\u00e9es data.gouv.fr pour \u00ab\u00a0{_dg_query}\u00a0\u00bb\u00a0:"]
+            for _ds in _datasets[:5]:
+                _org_dg  = (_ds.get("organization") or {}).get("name", _ds.get("owner") or "")
+                _descr   = (_ds.get("description") or "")[:120].replace("\n", " ")
+                _url_dg  = f"https://www.data.gouv.fr/fr/datasets/{_ds.get('id','')}"
+                _reuses  = _ds.get("metrics", {}).get("reuses", 0)
+                _lines_dg.append(
+                    f"\u2022 **{_ds.get('title','?')}**" + (f" ({_org_dg})" if _org_dg else "")
+                    + f"\n  {_descr}...\n  {_url_dg} ({_reuses} r\u00e9utilisations)")
+            return "\n\n".join(_lines_dg)
+        except Exception as e:
+            return f"[Erreur data.gouv\u00a0: {e}]"
 
     return f'[Outil inconnu : {name}]'
 
