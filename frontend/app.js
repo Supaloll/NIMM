@@ -346,6 +346,7 @@ const _pinModal = {
     _build() {
         this.el        = document.getElementById('pin-modal');
         this.dotsEl    = document.getElementById('pin-modal-dots');
+        this.statusEl  = document.getElementById('pin-modal-status');
         this.errEl     = document.getElementById('pin-modal-error');
         this.titleEl   = document.getElementById('pin-modal-title');
         this.subEl     = document.getElementById('pin-modal-subtitle');
@@ -360,7 +361,20 @@ const _pinModal = {
             else if (e.key === 'Backspace')   { this._press('back'); e.preventDefault(); }
             else if (e.key === 'Enter')       { this._press('ok'); e.preventDefault(); }
             else if (e.key === 'Escape')      { this._cancel(); e.preventDefault(); }
+            else if (e.key === 'Tab')         { this._trapTab(e); }
         };
+    },
+
+    _focusableEls() {
+        return Array.from(this.el.querySelectorAll('button')).filter(b => !b.disabled);
+    },
+
+    _trapTab(e) {
+        const els = this._focusableEls();
+        if (!els.length) return;
+        const first = els[0], last = els[els.length - 1];
+        if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+        else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
     },
 
     // onSubmit(pin) doit retourner true (succes, ferme la modale) ou une chaine/false (erreur, reste ouverte)
@@ -375,12 +389,18 @@ const _pinModal = {
         this._render();
         this.el.classList.remove('hidden');
         document.addEventListener('keydown', this._keyHandler);
+        this._lastFocused = document.activeElement;
+        this.cancelBtn.focus();
     },
 
     close() {
         if (this.el) this.el.classList.add('hidden');
         document.removeEventListener('keydown', this._keyHandler);
         this.buffer = '';
+        if (this._lastFocused && typeof this._lastFocused.focus === 'function') {
+            this._lastFocused.focus();
+        }
+        this._lastFocused = null;
     },
 
     _cancel() {
@@ -404,6 +424,10 @@ const _pinModal = {
             d.className = 'pin-dot' + (i < this.buffer.length ? ' filled' : '');
             this.dotsEl.appendChild(d);
         }
+        const n = this.buffer.length;
+        this.statusEl.textContent = n
+            ? n + ' chiffre' + (n > 1 ? 's' : '') + ' saisi' + (n > 1 ? 's' : '')
+            : 'Aucun chiffre saisi';
     },
 
     async _submit() {
