@@ -585,6 +585,7 @@ let threads        = [];
 let tabs           = [];
 let currentThreadId = null;
 let currentTabId    = null;
+const _threadCostMap = new Map(); // Coût cumulé par fil (euros)
 
 // ── Émojis expressifs par dominante ──
 const EMOJI_MOODS = {
@@ -1624,6 +1625,17 @@ function renderSidebar() {
             name.appendChild(tagBadge);
         }
 
+        // Compteur coût cumulé du fil
+        const _costEl = document.createElement('span');
+        _costEl.className = 'thread-cost-badge';
+        _costEl.id = 'thread-cost-' + t.thread_id;
+        const _costVal = _threadCostMap.get(t.thread_id) || 0;
+        if (_costVal > 0.000001) {
+            _costEl.textContent = _formatCostEur(_costVal) || '';
+            _costEl.setAttribute('aria-label', 'Coût cumulé : ' + (_formatCostEur(_costVal) || ''));
+        }
+        name.appendChild(_costEl);
+
         // Menu ...
         const menuBtn = document.createElement('button');
         menuBtn.className = 'thread-menu-btn';
@@ -2592,6 +2604,12 @@ async function loadMessages(conversationId) {
         const r    = await fetch(`/api/threads/${conversationId}/messages`);
         const msgs = await r.json();
         renderMessages(msgs);
+        // Calculer le coût cumulé du fil et mettre à jour le badge de la sidebar
+        const _totalCost = msgs.reduce((s, m) => s + (m.cost_eur || 0), 0);
+        if (_totalCost > 0) {
+            _threadCostMap.set(conversationId, _totalCost);
+            _updateThreadCostBadge(conversationId);
+        }
         document.getElementById('summary-banner').hidden = true;
         document.getElementById('summary-btn').hidden = false;
     } catch(e) {
@@ -2618,14 +2636,6 @@ function renderMessages(messages) {
     messages.forEach(msg => {
         if (msg.role === 'assistant') {
             const { div: _msgDiv } = appendAssistantMessage(msg.content, 'neutre', false);
-            if ((msg.tokens_in || msg.tokens_out) && _msgDiv) {
-                _attachUsageAnnotation(_msgDiv, {
-                    tokens_in:  msg.tokens_in  || 0,
-                    tokens_out: msg.tokens_out || 0,
-                    cost_eur:   msg.cost_eur   || 0,
-                    estimated:  false,
-                });
-            }
         } else {
             appendUserMessage(msg.content);
         }
@@ -2734,6 +2744,15 @@ function _attachUsageAnnotation(msgDiv, usageData) {
     const bottom = msgDiv.querySelector('.msg-bottom');
     if (bottom) msgDiv.insertBefore(p, bottom.nextSibling);
     else msgDiv.appendChild(p);
+}
+
+function _updateThreadCostBadge(tid) {
+    const el = document.getElementById('thread-cost-' + tid);
+    if (!el) return;
+    const cost = _threadCostMap.get(tid) || 0;
+    const str  = cost > 0.000001 ? (_formatCostEur(cost) || '') : '';
+    el.textContent = str;
+    el.setAttribute('aria-label', str ? 'Coût cumulé : ' + str : '');
 }
 
 function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
@@ -3706,10 +3725,18 @@ async function _triggerStream(content, conversationId, images = null) {
                 if (data.startsWith('[USAGE]')) {
                     try {
                         const usage = JSON.parse(data.slice(7));
-                        const allMsgs = messagesDiv.querySelectorAll('.message.assistant');
-                        const lastMsg = allMsgs[allMsgs.length - 1];
-                        if (lastMsg) _attachUsageAnnotation(lastMsg, usage);
+                        const tid = currentTabId || currentThreadId;
+                        if (tid && (usage.cost_eur || 0) > 0) {
+                            _threadCostMap.set(tid, (_threadCostMap.get(tid) || 0) + (usage.cost_eur || 0));
+                            _updateThreadCostBadge(tid);
+                        }
                     } catch(e) { /* silencieux */ }
+                    continue;
+                }
+                if (data.startsWith('[PROVIDER_SWITCH:')) {
+                    const p = data.slice(17).replace(']','');
+                    const labels = {mistral:'Mistral',gemini:'Gemini',anthropic:'Claude'};
+                    _notify('🔀 Recherche web via ' + (labels[p] || p), 'info');
                     continue;
                 }
 
@@ -4312,6 +4339,12 @@ document.addEventListener('keydown', (e) => {
     // Alt+lettre → actions (uniquement si le focus n'est pas dans un champ de saisie)
     const inField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)
         || document.activeElement?.isContentEditable;
+    // Alt+N : toujours accessible même depuis un champ de saisie
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        document.getElementById('new-thread-btn')?.click();
+        return;
+    }
     if (e.altKey && !e.ctrlKey && !e.shiftKey && !inField) {
         switch (e.key.toLowerCase()) {
             case 'r': {   // Alt+R : régénérer le dernier message assistant
@@ -4328,11 +4361,6 @@ document.addEventListener('keydown', (e) => {
             case 'e': {   // Alt+E : ouvrir le modal export
                 e.preventDefault();
                 openExportModal();
-                break;
-            }
-            case 'n': {   // Alt+N : nouveau fil
-                e.preventDefault();
-                document.getElementById('new-thread-btn')?.click();
                 break;
             }
             case 'o': {   // Alt+O : nouvel onglet
