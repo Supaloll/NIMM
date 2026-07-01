@@ -1001,6 +1001,12 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               la génération d\'un fichier (CSV, image, graphique), ou toute tâche\n'
         '                               qui bénéficierait d\'une exécution réelle plutôt qu\'une réponse textuelle.\n'
         '                               Les fichiers générés (images, CSV…) sont automatiquement capturés.\n'
+        '• write_file(filename, content, format, title, lang, voice) → créer un fichier téléchargeable.\n'
+        '                               Formats : txt, md, html, docx, pdf, epub, json, csv,\n'
+        '                               daisy (livre audio DAISY 2.02), daisy_audio (avec synthèse vocale), mp3.\n'
+        '                               Appeler dès que l\'utilisateur demande à enregistrer, générer ou télécharger\n'
+        '                               un document, un export, une version accessible de son texte.\n'
+        '                               Répondre avec le lien de téléchargement retourné.\n'
         'Appliquer la règle SONDE du lexique.\n'
     )
 
@@ -1727,6 +1733,51 @@ NIMM_TOOLS = [
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": (
+                "Crée un fichier à partir du contenu fourni et le sauvegarde dans l'espace de travail NIMM. "
+                "Utilise cet outil quand l'utilisateur demande de générer, sauvegarder, créer ou exporter un fichier. "
+                "Formats disponibles : txt, md, html, docx, pdf, epub, json, csv, daisy (texte seul), "
+                "daisy_audio (texte + voix synthétisée), mp3. "
+                "Après création, retourne l'URL de téléchargement du fichier."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "Nom du fichier à créer (sans extension, ex: 'trajets_paris')"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Contenu complet du fichier (texte brut ou Markdown)"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["txt", "md", "html", "docx", "pdf", "epub",
+                                 "json", "csv", "daisy", "daisy_audio", "mp3"],
+                        "description": "Format de sortie"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Titre du document (utilisé dans les métadonnées et en-tête)"
+                    },
+                    "lang": {
+                        "type": "string",
+                        "description": "Code langue ISO 639-1 (fr, en, es…). Défaut : fr"
+                    },
+                    "voice": {
+                        "type": "string",
+                        "description": "Voix edge-tts pour mp3/daisy_audio (ex: fr-FR-DeniseNeural). Optionnel."
+                    }
+                },
+                "required": ["filename", "content", "format"]
+            }
+        }
     }
 ]
 
@@ -2219,6 +2270,31 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         except Exception as e:
             print(f"[HUB] Erreur op fichier {name} : {e}")
             return f'[Erreur opération fichier : {e}]'
+
+
+    if name == 'write_file':
+        filename = args.get('filename', 'document')
+        content  = args.get('content', '')
+        fmt      = args.get('format', 'txt')
+        title    = args.get('title', filename)
+        lang     = args.get('lang', 'fr')
+        voice    = args.get('voice', '')
+        try:
+            from modules.coanimm import _workspace_dir
+            from modules.file_writer import write_file as _write_file, SUPPORTED_FORMATS
+            import re as _re
+            workdir = _workspace_dir(thread_id)
+            os.makedirs(workdir, exist_ok=True)
+            safe = _re.sub(r'[^\w\-]', '_', filename)[:60]
+            ext = SUPPORTED_FORMATS.get(fmt.lower(), '.txt')
+            filepath = os.path.join(workdir, safe + ext)
+            real_path = _write_file(content, fmt, filepath, title, lang, voice)
+            basename = os.path.basename(real_path)
+            url = f"/api/coanimm/files/{basename}?thread_id={thread_id}"
+            nb_chars = len(content)
+            return f"\u2705 Fichier cr\u00e9\u00e9\u00a0: [{basename}]({url})\nFormat\u00a0: {fmt.upper()} | {nb_chars} caract\u00e8res"
+        except Exception as e:
+            return f"[Erreur cr\u00e9ation fichier\u00a0: {e}]"
 
     return f'[Outil inconnu : {name}]'
 
