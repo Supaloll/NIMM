@@ -30,7 +30,7 @@ EXEMPLES :
 Échange : "J'ai une sœur qui s'appelle Camille. Son mari c'est Julien."
 → {"registre":"neutre","type":"relation","sujet":"{{USER_NAME}}","predicat":"soeur","objet":"Camille","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
 → {"registre":"neutre","type":"relation","sujet":"Camille","predicat":"conjoint","objet":"Julien","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
-→ {"registre":"neutre","type":"relation","sujet":"Camille","predicat":"frere","objet":"{{USER_NAME}}","memoire_type":"famille","profondeur":1,"type_temporal":"permanent","contexte":""}
+(pas de 3ᵉ triplet ici — la réciproque frere/soeur est générée automatiquement par le code, jamais par toi)
 
 Échange : "On est 5 dans la maison."
 → (aucun objet — quantité sans prénom)
