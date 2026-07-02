@@ -239,7 +239,14 @@ async def _security_middleware(request, call_next):
             elif _target and _dbsec.user_has_pin(_target):
                 if not _dbsec.check_unlock_token(_target, request.headers.get('x-unlock-token', '')):
                     return JSONResponse({'detail': 'session_locked', 'user': _target}, status_code=403)
-    return await call_next(request)
+    _resp = await call_next(request)
+    # Headers de sécurité HTTP sur toutes les réponses
+    _resp.headers.setdefault("X-Frame-Options",        "DENY")
+    _resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    _resp.headers.setdefault("X-XSS-Protection",       "1; mode=block")
+    _resp.headers.setdefault("Referrer-Policy",        "strict-origin-when-cross-origin")
+    _resp.headers.setdefault("Permissions-Policy",     "camera=(), microphone=(), geolocation=()")
+    return _resp
 
 # Fichiers statiques
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), 'frontend')
@@ -1766,8 +1773,11 @@ async def coanimm_github_search(req: CoanimmWebSearchRequest):
     return {"status": "ok", "result": (result or "")[:4000]}
 
 @app.get("/api/coanimm/files/{filename}")
-async def coanimm_download_file(filename: str, thread_id: str = None):
-    """Télécharge un fichier produit par CoaNIMM depuis le workspace."""
+async def coanimm_download_file(filename: str, thread_id: str):
+    """Télécharge un fichier produit par CoaNIMM depuis le workspace.
+    thread_id obligatoire : empêche le guessing inter-sessions."""
+    if not thread_id:
+        raise HTTPException(400, "thread_id obligatoire.")
     from modules.coanimm import _workspace_dir
     import mimetypes
     workdir = _workspace_dir(thread_id)
