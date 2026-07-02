@@ -6128,10 +6128,10 @@ async function _loadGhostMode(threadId) {
 (function setupGhostToggle() {
     const btn = document.createElement('button');
     btn.id        = 'ghost-toggle';
-    btn.title     = 'Mode fantôme';
+    btn.title     = 'Mode fantôme (Alt+F) — aucun message, mémoire ou carnet conservé';
     btn.className = 'topbar-icon-btn';
     btn.innerHTML = '<span aria-hidden="true">👻</span>';
-    btn.setAttribute('aria-label', 'Mode fantôme');
+    btn.setAttribute('aria-label', 'Mode fantôme : aucune trace conservée. Alt+F pour activer ou désactiver.');
     btn.setAttribute('aria-keyshortcuts', 'Alt+F');
     btn.setAttribute('aria-pressed', 'false');
     btn.addEventListener('click', async () => {
@@ -6142,9 +6142,12 @@ async function _loadGhostMode(threadId) {
             _ghostMode = d.ghost;
             btn.classList.toggle('active', _ghostMode);
             btn.setAttribute('aria-pressed', _ghostMode ? 'true' : 'false');
-            if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_ghostMode
-                ? 'Mode fantôme activé : ce fil ne laissera aucune trace, ni mémoire, ni carnet.'
-                : 'Mode fantôme désactivé.');
+            const _msg = _ghostMode
+                ? 'Mode fantôme activé — aucun message, mémoire ou carnet ne sera conservé pour ce fil.'
+                : 'Mode fantôme désactivé — les messages seront à nouveau sauvegardés.';
+            if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_msg);
+            // Toast visible
+            if (typeof showToast === 'function') showToast(_msg, _ghostMode ? 'warning' : 'info');
         } catch(e) {}
     });
     const topRight = document.getElementById('top-right');
