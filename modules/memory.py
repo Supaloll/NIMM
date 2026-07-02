@@ -336,6 +336,23 @@ PREDICATS_CANONIQUES = {
     'orientation_sexuelle',
 }
 
+# Prédicats qui expriment un LIEN avec une personne nommée (pas un simple fait).
+# Sert à construire le graphe de connaissance de l'utilisateur : une personne
+# n'apparaît en fiche normale que si elle est reliée à lui par au moins un de
+# ces prédicats, en chaîne directe ou indirecte (ex: toi → Khadija → Nicolas).
+# Volontairement exclus : 'statut_relation' (objet = un statut, pas un nom)
+# et 'membre_association' (objet = le nom de l'association, pas une personne).
+PREDICATS_LIEN_PERSONNE = {
+    # Horizontal — famille et pairs
+    'conjoint', 'enfant', 'parent', 'frere', 'soeur', 'grand_parent', 'petit_enfant',
+    'beau_parent', 'cousin', 'oncle', 'tante', 'neveu', 'niece', 'beau_frere', 'belle_soeur',
+    'ami', 'copain', 'copine', 'connaissance', 'voisin', 'coequipier',
+    # Vertical — rôle ou hiérarchie
+    'collegue', 'chef', 'patron', 'manager', 'subordonne', 'associe', 'client', 'fournisseur',
+    'medecin', 'dentiste', 'kine', 'therapeute', 'avocat', 'notaire', 'banquier',
+    'coach', 'professeur', 'entraineur', 'encadrant', 'mentor', 'relation_sociale',
+}
+
 # Table de normalisation : prédicat libre → prédicat canonique.
 # Le LLM peut inventer n'importe quelle variante — elle est ramenée ici.
 PREDICAT_NORMALISATION = {
@@ -679,6 +696,45 @@ def _est_utilisateur(nom: str) -> bool:
         return bool(un) and un != 'utilisateur' and n == un
     except Exception:
         return False
+
+def sujets_relies(memories: list) -> set:
+    """Calcule l'ensemble des sujets reliés à l'utilisateur (directement ou en
+    chaîne), via les prédicats de PREDICATS_LIEN_PERSONNE. Renvoie des noms
+    normalisés (compatibles avec _normalize()) ; l'utilisateur y figure toujours.
+    Une personne absente de cet ensemble est un "évoqué sans lien" (ex: une
+    célébrité mentionnée en passant, sans rapport avec l'utilisateur)."""
+    edges = {}
+    for m in memories:
+        if m.get('predicat', '') not in PREDICATS_LIEN_PERSONNE:
+            continue
+        sujet = (m.get('sujet') or '').strip()
+        objet = (m.get('objet') or m.get('valeur') or '').strip()
+        if not sujet or not objet or not _is_prenom(objet):
+            continue
+        s, o = _normalize(sujet), _normalize(objet)
+        if not s or not o:
+            continue
+        edges.setdefault(s, set()).add(o)
+        edges.setdefault(o, set()).add(s)
+
+    try:
+        from core.database import get_setting
+        depart = (get_setting('user_name', '') or '').strip()
+    except Exception:
+        depart = ''
+    depart_n = _normalize(depart) if depart else None
+    if not depart_n:
+        return set()
+
+    relies = {depart_n}
+    file_attente = [depart_n]
+    while file_attente:
+        courant = file_attente.pop()
+        for voisin in edges.get(courant, ()):
+            if voisin not in relies:
+                relies.add(voisin)
+                file_attente.append(voisin)
+    return relies
 
 def _genrer_fratrie(predicat_neutre: str) -> str:
     """Genre la réciproque de fratrie selon le genre que la personne a défini

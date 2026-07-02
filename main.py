@@ -831,13 +831,16 @@ async def toggle_ghost_mode(thread_id: str):
 @app.get("/api/memory/triplets")
 async def memory_triplets():
     memories = get_all_memory()
+    from modules.memory import sujets_relies, _normalize
+    relies = sujets_relies(memories)
     # Formater pour le frontend
     result = []
     for m in memories:
+        sujet = m.get('sujet', '')
         result.append({
             'key':           m.get('key'),
             'type_mem':      m.get('type', 'trait').upper(),
-            'sujet':         m.get('sujet', ''),
+            'sujet':         sujet,
             'predicat':      m.get('predicat', ''),
             'valeur':        m.get('valeur', ''),
             'categorie':     m.get('categorie', 'quotidien'),
@@ -846,6 +849,7 @@ async def memory_triplets():
             'confiance':     m.get('confiance', 1.0),
             'poids':         m.get('poids', 1.0),
             'memoire_type':  m.get('memoire_type', 'identite'),
+            'relie':         _normalize(sujet) in relies,
         })
     return result
 

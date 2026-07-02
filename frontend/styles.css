@@ -1480,6 +1480,13 @@ body {
     opacity: 0.85;
 }
 
+.memory-section-title--evoques {
+    margin-top: 24px;
+    color: var(--text-muted);
+    border-bottom-style: dashed;
+    opacity: 0.6;
+}
+
 .memory-card {
     background: var(--bg-input);
     border: 1px solid var(--border);
@@ -1494,6 +1501,15 @@ body {
     margin-bottom: 8px;
     padding-bottom: 6px;
     border-bottom: 1px solid var(--border);
+}
+
+.memory-subsection-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    padding: 10px 2px 4px 2px;
+    opacity: 0.85;
 }
 
 .memory-row {

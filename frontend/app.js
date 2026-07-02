@@ -7310,18 +7310,6 @@ function renderMemory(memories) {
         return;
     }
 
-    // Regrouper par section selon memoire_type ET categorie
-    const identite  = filtered.filter(m => (m.memoire_type || '') === 'identite');
-    const activite  = filtered.filter(m => m.memoire_type === 'activite');
-    // Tous les autres enregistrements → sections par catégorie
-    const reste     = filtered.filter(m => m.memoire_type !== 'identite' && m.memoire_type !== 'activite');
-    const parCateg  = {};
-    reste.forEach(m => {
-        const cat = m.categorie || 'autre';
-        if (!parCateg[cat]) parCateg[cat] = [];
-        parCateg[cat].push(m);
-    });
-
     const CATEGORIE_LABELS = {
         'famille':    '👨‍👩‍👧 Famille',
         'loisirs':    '🎮 Loisirs',
@@ -7330,79 +7318,97 @@ function renderMemory(memories) {
         'sante':      '🏥 Santé',
         'autre':      '📌 Divers',
     };
+    const CATEGORIE_ORDER = ['famille', 'profession', 'loisirs', 'quotidien', 'sante', 'autre'];
 
-    function buildGroups(memories) {
-        const groups = {};
-        memories.forEach(m => {
-            const sujet = m.sujet || '?';
-            if (!groups[sujet]) groups[sujet] = [];
-            groups[sujet].push(m);
-        });
-        Object.values(groups).forEach(items =>
-            items.sort((a, b) => (a.profondeur || 5) - (b.profondeur || 5))
-        );
-        return groups;
+    function sortByProfondeur(items) {
+        return items.slice().sort((a, b) => (a.profondeur || 5) - (b.profondeur || 5));
     }
 
-    function buildCard(sujet, items) {
+    function buildRow(sujet, m) {
+        const typeKey  = (m.type_mem || 'TRAIT');
+        const typeClass = typeKey.toLowerCase();
+        const typeLabel = TYPE_LABEL[typeKey] || typeKey;
+        const profIcon  = PROFONDEUR_ICONS[m.profondeur] || '📌';
+        const isPermanent = m.type_temporal === 'permanent';
+        const poidsBar  = isPermanent ? '⭐' : (m.poids >= 2.0 ? '▓▓▓' : m.poids >= 1.0 ? '▓▓░' : '▓░░');
+        const poidsText = isPermanent ? 'permanent' : (m.poids >= 2.0 ? 'fort' : m.poids >= 1.0 ? 'moyen' : 'faible');
+        const rowLabel  = `${escapeHtml(sujet)} — ${escapeHtml(m.predicat || '')} — ${escapeHtml(m.valeur || '')}, ${poidsText}`;
+        const row = document.createElement('div');
+        row.className   = 'memory-row';
+        row.dataset.key = m.key;
+        row.setAttribute('aria-label', rowLabel);
+        row.innerHTML = `
+            <span class="mem-prof" aria-hidden="true" title="Profondeur ${m.profondeur || 5}">${profIcon}</span>
+            <span class="mem-type mem-type--${typeClass}" aria-hidden="true">${typeLabel}</span>
+            <span class="mem-poids" aria-hidden="true" title="Poids: ${(m.poids||1).toFixed(2)}">${poidsBar}</span>
+            <span class="memory-predicat">${escapeHtml(m.predicat || '')}</span>
+            <span class="memory-valeur">${escapeHtml(m.valeur || '')}</span>
+            <div class="memory-row-actions">
+                <button aria-label="Modifier ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="editMemory('${m.key}', '${escapeAttr(m.valeur)}')">✏️</button>
+                <button aria-label="Supprimer ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="deleteMemory('${m.key}')">🗑️</button>
+            </div>`;
+        return row;
+    }
+
+    function buildPersonCard(sujet, items) {
         const card = document.createElement('div');
         card.className = 'memory-card';
         card.innerHTML = `<div class="memory-card-header"><span aria-hidden="true">👤 </span>${escapeHtml(sujet)}</div>`;
-        items.forEach(m => {
-            const typeKey  = (m.type_mem || 'TRAIT');
-            const typeClass = typeKey.toLowerCase();
-            const typeLabel = TYPE_LABEL[typeKey] || typeKey;
-            const profIcon  = PROFONDEUR_ICONS[m.profondeur] || '📌';
-            const isPermanent = m.type_temporal === 'permanent';
-            const poidsBar  = isPermanent ? '⭐' : (m.poids >= 2.0 ? '▓▓▓' : m.poids >= 1.0 ? '▓▓░' : '▓░░');
-            const poidsText = isPermanent ? 'permanent' : (m.poids >= 2.0 ? 'fort' : m.poids >= 1.0 ? 'moyen' : 'faible');
-            const rowLabel  = `${escapeHtml(sujet)} — ${escapeHtml(m.predicat || '')} — ${escapeHtml(m.valeur || '')}, ${poidsText}`;
-            const row = document.createElement('div');
-            row.className   = 'memory-row';
-            row.dataset.key = m.key;
-            row.setAttribute('aria-label', rowLabel);
-            row.innerHTML = `
-                <span class="mem-prof" aria-hidden="true" title="Profondeur ${m.profondeur || 5}">${profIcon}</span>
-                <span class="mem-type mem-type--${typeClass}" aria-hidden="true">${typeLabel}</span>
-                <span class="mem-poids" aria-hidden="true" title="Poids: ${(m.poids||1).toFixed(2)}">${poidsBar}</span>
-                <span class="memory-predicat">${escapeHtml(m.predicat || '')}</span>
-                <span class="memory-valeur">${escapeHtml(m.valeur || '')}</span>
-                <div class="memory-row-actions">
-                    <button aria-label="Modifier ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="editMemory('${m.key}', '${escapeAttr(m.valeur)}')">✏️</button>
-                    <button aria-label="Supprimer ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="deleteMemory('${m.key}')">🗑️</button>
-                </div>`;
-            card.appendChild(row);
+
+        // Identite — affichee directement en tete de fiche, sans etiquette de sous-categorie
+        const identite = sortByProfondeur(items.filter(m => (m.memoire_type || '') === 'identite'));
+        identite.forEach(m => card.appendChild(buildRow(sujet, m)));
+
+        // Tout le reste (activite incluse — elle a deja sa propre categorie) → sous-sections
+        const reste = items.filter(m => (m.memoire_type || '') !== 'identite');
+        const parCateg = {};
+        reste.forEach(m => {
+            const cat = m.categorie || 'autre';
+            if (!parCateg[cat]) parCateg[cat] = [];
+            parCateg[cat].push(m);
         });
+
+        const catsPresentes = Object.keys(parCateg).sort((a, b) => {
+            const ia = CATEGORIE_ORDER.indexOf(a);
+            const ib = CATEGORIE_ORDER.indexOf(b);
+            return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+        });
+
+        catsPresentes.forEach(cat => {
+            const label = CATEGORIE_LABELS[cat] || `📌 ${cat}`;
+            const [icon, ...rest] = label.split(' ');
+            const titre = rest.join(' ') || label;
+            const sub = document.createElement('div');
+            sub.className = 'memory-subsection-title';
+            sub.innerHTML = `<span aria-hidden="true">${icon}</span> ${escapeHtml(titre)}`;
+            card.appendChild(sub);
+            sortByProfondeur(parCateg[cat]).forEach(m => card.appendChild(buildRow(sujet, m)));
+        });
+
         return card;
     }
 
-    function buildSection(label, icon, memories) {
-        if (!memories.length) return null;
-        const section = document.createElement('div');
-        section.className = 'memory-section';
-        section.innerHTML = `<div class="memory-section-title">${icon} ${label}</div>`;
-        const groups = buildGroups(memories);
-        Object.entries(groups).forEach(([sujet, items]) => {
-            section.appendChild(buildCard(sujet, items));
-        });
-        return section;
-    }
-
-    const secIdentite = buildSection('Qui ils sont', '🧍', identite);
-    const secActivite = buildSection('Ce qu\'ils font', '⚡', activite);
-
-    if (secIdentite) list.appendChild(secIdentite);
-    if (secActivite) list.appendChild(secActivite);
-
-    // Sections dynamiques pour le reste
-    Object.entries(parCateg).forEach(([cat, items]) => {
-        const label = CATEGORIE_LABELS[cat] || `📌 ${cat}`;
-        const [icon, titre] = label.split(' ').length > 1
-            ? [label.split(' ')[0], label.split(' ').slice(1).join(' ')]
-            : ['📌', label];
-        const sec = buildSection(titre, icon, items);
-        if (sec) list.appendChild(sec);
+    // Regroupement par personne — une fiche par sujet, triee alphabetiquement
+    const parSujet = {};
+    filtered.forEach(m => {
+        const sujet = m.sujet || '?';
+        if (!parSujet[sujet]) parSujet[sujet] = [];
+        parSujet[sujet].push(m);
     });
+
+    const sujetsTries     = Object.keys(parSujet).sort((a, b) => a.localeCompare(b, 'fr'));
+    const sujetsRelies    = sujetsTries.filter(s => parSujet[s].some(m => m.relie));
+    const sujetsOrphelins = sujetsTries.filter(s => !parSujet[s].some(m => m.relie));
+
+    sujetsRelies.forEach(sujet => list.appendChild(buildPersonCard(sujet, parSujet[sujet])));
+
+    if (sujetsOrphelins.length) {
+        const sep = document.createElement('div');
+        sep.className = 'memory-section-title memory-section-title--evoques';
+        sep.innerHTML = '🌐 Évoqués sans lien';
+        list.appendChild(sep);
+        sujetsOrphelins.forEach(sujet => list.appendChild(buildPersonCard(sujet, parSujet[sujet])));
+    }
 }
 
 async function editMemory(key, currentVal) {
