@@ -241,24 +241,23 @@ PREDICATS_INVERSES = {
     'compagnon':   'compagne',
     'compagne':    'compagnon',
     'partenaire':  'partenaire',
-    # Relations parent-enfant (liste fermée)
-    'enfant_1':    'enfant_de',
-    'enfant_2':    'enfant_de',
-    'enfant_3':    'enfant_de',
-    'enfant_4':    'enfant_de',
-    # Relations parent-enfant (libres)
-    'fils':        'enfant_de',
-    'fille':       'enfant_de',
-    'enfant':      'enfant_de',
-    'parent':      'enfant_de',
-    'enfant_de':   'parent',
-    # Ascendants
-    'pere':        'enfant_de',
-    'mere':        'enfant_de',
-    'prenom_pere': 'enfant_de',
-    'prenom_mere': 'enfant_de',
+    # Relations parent-enfant (sens parent -> enfant) — inverse toujours 'parent'
+    'enfant_1':    'parent',
+    'enfant_2':    'parent',
+    'enfant_3':    'parent',
+    'enfant_4':    'parent',
+    'fils':        'parent',
+    'fille':       'parent',
+    'enfant':      'parent',
     'prenom_fils': 'parent',
     'prenom_fille':'parent',
+    # Relations parent-enfant (sens enfant -> parent) — inverse toujours 'enfant'
+    'parent':      'enfant',
+    'enfant_de':   'enfant',
+    'pere':        'enfant',
+    'mere':        'enfant',
+    'prenom_pere': 'enfant',
+    'prenom_mere': 'enfant',
     # Fratrie
     'frere':       'frere_ou_soeur',
     'soeur':       'frere_ou_soeur',
@@ -357,10 +356,13 @@ PREDICAT_NORMALISATION = {
     'femme': 'conjoint', 'mari': 'conjoint', 'epoux': 'conjoint',
     'epouse': 'conjoint', 'partenaire': 'conjoint', 'compagnon': 'conjoint',
     'compagne': 'conjoint', 'marie_a': 'conjoint', 'en_couple_avec': 'conjoint',
-    # Enfant
-    'fils': 'enfant', 'fille': 'enfant', 'enfant_de': 'enfant',
+    # Enfant (sens parent -> enfant)
+    'fils': 'enfant', 'fille': 'enfant',
     'enfant_1': 'enfant', 'enfant_2': 'enfant', 'enfant_3': 'enfant', 'enfant_4': 'enfant',
     'a_une_fille': 'enfant', 'a_un_fils': 'enfant', 'a_des_filles': 'enfant',
+    # Parent (sens enfant -> parent) — ne jamais collapser vers 'enfant' : direction opposee
+    'enfant_de': 'parent', 'pere': 'parent', 'mere': 'parent',
+    'prenom_pere': 'parent', 'prenom_mere': 'parent',
     # Domicile
     'adresse': 'domicile', 'ville': 'domicile', 'residence': 'domicile',
     'habitation': 'domicile', 'maison': 'domicile', 'habite': 'domicile',
@@ -537,8 +539,8 @@ for _canon, _syns in PREDICAT_SYNONYMES.items():
 # Pour ces prédicats, sujet+prédicat ne suffit pas à identifier un doublon :
 # l'objet doit aussi correspondre.
 PREDICATS_MULTI_VALEUR = {
-    # Enfants
-    'fils', 'fille', 'enfant', 'enfant_de',
+    # Enfants / parents — un sujet peut avoir plusieurs enfants ET plusieurs parents
+    'fils', 'fille', 'enfant', 'parent',
     'enfant_1', 'enfant_2', 'enfant_3', 'enfant_4',
     # Fratrie
     'frere', 'soeur', 'frere_ou_soeur',
@@ -718,13 +720,11 @@ def _purger_partenaires_concurrents(sujet: str, nouvel_objet: str, existing: lis
 
 def _save_symmetric(record: dict, existing: list):
     """Cree le souvenir symetrique d'une relation si applicable.
-    Seules les relations horizontales (symetriques) generent une reciproque.
-    Les relations verticales (chirales) sont ignorees - le LLM extrait les deux sens."""
+    Toute relation presente dans PREDICATS_INVERSES genere sa reciproque,
+    horizontale (conjoint, ami...) comme verticale (parent/enfant...) —
+    le LLM n'extrait plus jamais les deux sens, c'est le code qui s'en charge seul."""
     predicat = record.get('predicat', '')
     if predicat not in PREDICATS_INVERSES:
-        return
-    if predicat not in PREDICATS_SYMETRIQUES:
-        print(f"[MEMORY] ↕️ Relation verticale ignorée : '{predicat}' (chirale, pas de réciproque)")
         return
     sujet = record.get('sujet', '').strip()
     objet = record.get('objet', '').strip()
@@ -1404,7 +1404,9 @@ def run_inference_engine(user_id: str = None):
                     _add(obj, inv, subj, r)
 
         # ── Règle 2 : Transitivité parent → grand-parent ──
-        _PARENT_PREDS = {'parent', 'pere', 'mere', 'enfant_de'}
+        # 'parent' est le seul predicat canonique (sens enfant -> parent) — pere/mere/enfant_de
+        # sont deja rangés dedans par normalize_predicat() avant meme d'arriver ici.
+        _PARENT_PREDS = {'parent'}
         parent_rels = [r for r in source_data if r.get('predicat', '') in _PARENT_PREDS]
 
         for r1 in parent_rels:
