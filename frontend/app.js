@@ -7638,6 +7638,19 @@ function _positionMenu(btn, menu) {
 }
 
 function _copyToClipboard(text) {
+    // Copie riche : text/html (sémantique markdown conservée — titres, listes,
+    // liens…) + text/plain en repli. Permet de coller la mise en forme dans
+    // Word, un mail, etc., tout en gardant le texte brut ailleurs.
+    if (navigator.clipboard && window.ClipboardItem && window.marked) {
+        try {
+            const html = _safeHTML(marked.parse(_linkifyBareUrls(text)));
+            return navigator.clipboard.write([new ClipboardItem({
+                'text/html':  new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([text], { type: 'text/plain' }),
+            })]).catch(() => navigator.clipboard.writeText(text))
+               .catch(() => _copyFallback(text));
+        } catch(e) { /* repli texte simple ci-dessous */ }
+    }
     if (navigator.clipboard && navigator.clipboard.writeText) {
         return navigator.clipboard.writeText(text).catch(() => _copyFallback(text));
     }

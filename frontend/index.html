@@ -1406,7 +1406,7 @@ Analyse les sentiments de : ..."
 
         <!-- ── ROUTAGE AVANCÉ ── -->
         <details class="settings-section-details" style="margin-bottom:14px;">
-        <summary class="settings-section-title" style="font-size:0.85rem;">⚙️ Routage avancé</summary>
+        <summary class="settings-section-title" style="font-size:0.85rem;">⚙️ Options avancées</summary>
         <div class="settings-section" style="padding-top:8px;">
             <span class="routing-label">🧠 Mémoire</span>
             <select id="new-thread-routing-memory" class="routing-select" aria-label="Fournisseur pour l'extraction mémoire de ce fil">
@@ -1444,16 +1444,6 @@ Analyse les sentiments de : ..."
                 <option value="ollama">🟢 Ollama (local)</option>
             </select>
 
-            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;">
-                Pré-rempli avec la configuration en cours. Modifie si ce fil doit utiliser un autre fournisseur ou modèle.
-            </div>
-        </div>
-        </details>
-
-        <!-- ====== ROUTING AVANCE + VOIX TTS ====== -->
-        <details class="settings-section-details" style="margin-bottom:14px;">
-        <summary class="settings-section-title" style="font-size:0.85rem;">🔊 Voix TTS &amp; routing avancé</summary>
-        <div class="settings-section" style="padding-top:8px;">
 
             <span class="routing-label">🔊 Voix TTS</span>
             <select id="new-thread-tts-voice" class="routing-select" aria-label="Voix TTS pour ce fil">
@@ -1492,7 +1482,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;">
-                Ces paramètres s'appliquent globalement. “↙ Même que le fil” conserve le réglage par défaut.
+                Par défaut, NIMM applique les réglages définis dans les Paramètres (⚙️). « ↩ Même que le fil » et « Voix par défaut » conservent ces réglages : ne modifie ces options que si ce fil doit se comporter autrement.
             </div>
         </div>
         </details>
