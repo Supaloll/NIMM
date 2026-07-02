@@ -153,19 +153,20 @@ let _agentMode = '';
 
 function _setAgentMode(mode, save) {
     if (save === undefined) save = true;
+    var _prevMode = _agentMode;
     _agentMode = mode || '';
     document.querySelectorAll('.agent-mode-btn').forEach(function(btn) {
         var active = btn.dataset.mode === _agentMode;
         btn.classList.toggle('agent-mode-active', active);
         btn.setAttribute('aria-pressed', String(active));
     });
-    // Afficher/masquer option Document Vibe dans le menu +
+    // Option Document Vibe dans le menu + : visible uniquement en mode Vibe
     var _vdb = document.getElementById('plus-vibe-doc');
-    if (_vdb) _vdb.hidden = true;
+    if (_vdb) _vdb.hidden = (_agentMode !== 'vibe');
 
-    if (mode !== 'vibe') {
-        // Réinitialiser la recherche web seulement si on quitte CoaNIMM ou autre mode
-        if (mode !== _agentMode) _setWebSearch(false);
+    if (_agentMode !== 'vibe' && _agentMode !== _prevMode) {
+        // Réinitialiser la recherche web quand on quitte le mode Vibe
+        _setWebSearch(false);
     }
     if (mode === 'coanimm') {
         var panel = document.getElementById('coanimm-panel');
@@ -3621,9 +3622,26 @@ async function _triggerStream(content, conversationId, images = null) {
                     continue;
                 }
 
+                if (data.startsWith('[VIBE_INACTIF]')) {
+                    const vMsg = 'Mode Vibe inactif : sélectionne le LLM Mistral dans les réglages. Message envoyé en chat normal.';
+                    if (typeof showToast === 'function') showToast(vMsg, 'warning');
+                    _srAnnounce(vMsg);
+                    continue;
+                }
+
+                if (data.startsWith('[VIBE_TOOL]')) {
+                    try {
+                        const vt = JSON.parse(data.slice(11));
+                        const vLbl = (vt.label || vt.tool || 'Outil Vibe') + ' en cours…';
+                        if (typeof showToast === 'function') showToast(vLbl, 'info');
+                        _srAnnounce(vLbl);
+                    } catch(e) {}
+                    continue;
+                }
+
                 if (data.startsWith('[CITATIONS]')) {
                     try {
-                        const cits = JSON.parse(data.slice(12));
+                        const cits = JSON.parse(data.slice(11));
                         if (Array.isArray(cits) && cits.length) {
                             _renderCitations(assistantDiv, cits);
                         }

@@ -2030,6 +2030,296 @@ async def _search_via_mistral(query: str, api_keys: dict) -> str:
         _content += f'\n\n[NIMM_CITATIONS]{_jc.dumps(_cits, ensure_ascii=False)}'
     return _content or '[Aucun resultat]'
 
+
+# ══════════════════════════════════════════
+# MODE VIBE — Mistral natif (/v1/conversations, sans état)
+# ══════════════════════════════════════════
+
+# Outils natifs Mistral activés en mode Vibe. Le modèle décide seul de les
+# utiliser ou non (tool_choice auto côté Conversations API).
+VIBE_TOOLS = [
+    {'type': 'web_search'},
+    {'type': 'code_interpreter'},
+    {'type': 'image_generation'},
+]
+
+_VIBE_INSTRUCTIONS = (
+    "Tu es Vibe, l'assistant Mistral natif intégré à NIMM. Réponds en français, "
+    "de façon claire, structurée et concise. Tu disposes des outils natifs : "
+    "web_search (informations à jour — cite tes sources), code_interpreter "
+    "(exécution de code Python : calculs, analyses, fichiers, graphiques) et "
+    "image_generation (création d'images). Utilise-les quand c'est pertinent, "
+    "sans demander la permission. L'utilisateur lit tes réponses avec un lecteur "
+    "d'écran et un afficheur braille : présente le code dans des blocs markdown, "
+    "décris textuellement tout résultat visuel ou graphique, et garde une "
+    "structure linéaire simple (pas de tableaux complexes)."
+)
+
+_VIBE_TOOL_LABELS = {
+    'web_search':         '🌐 Recherche web',
+    'web_search_premium': '🌐 Recherche web',
+    'code_interpreter':   '💻 Exécution de code',
+    'image_generation':   "🎨 Génération d'image",
+}
+
+
+def _vibe_files_dir(thread_id: str) -> str:
+    """Dossier local des fichiers produits par Vibe pour un fil. Créé au besoin."""
+    import os as _os
+    _safe = re.sub(r'[^A-Za-z0-9_-]', '_', str(thread_id or 'sans_fil'))[:64]
+    _base = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                          'data', 'vibe_files', _safe)
+    _os.makedirs(_base, exist_ok=True)
+    return _base
+
+
+async def _vibe_download_file(file_id: str, api_key: str) -> bytes:
+    """Télécharge un fichier généré (image, CSV…) depuis l'API Files Mistral."""
+    import httpx as _hx
+    async with _hx.AsyncClient(timeout=60, follow_redirects=True) as _c:
+        _r = await _c.get(
+            f'https://api.mistral.ai/v1/files/{file_id}/content',
+            headers={'Authorization': f'Bearer {api_key}'},
+        )
+        _r.raise_for_status()
+        return _r.content
+
+
+async def _vibe_describe_image(image_bytes: bytes, mime: str, settings: dict) -> str:
+    """Description accessible (alt WCAG) d'une image générée — routage vision NIMM."""
+    import base64 as _b64
+    try:
+        from core.engine import call_vision
+        _prov = settings.get('provider_routing', {}).get('vision', 'gemini')
+        _pm = None
+        if _prov == 'mistral':
+            _pm = get_setting('pixtral_model', 'pixtral-12b-2409')
+        _desc = await call_vision(
+            _b64.b64encode(image_bytes).decode('ascii'), mime,
+            "Décris cette image de façon précise et concise, comme un texte "
+            "alternatif accessible (attribut alt WCAG), en français.",
+            _prov, settings.get('api_keys', {}), vision_model=_pm,
+        )
+        return (_desc or '').strip()
+    except Exception as _e:
+        print(f'[HUB] 🤖 Vibe : description image échouée : {_e}')
+        return ''
+
+
+async def _vibe_stream(thread_id: str, user_message: str, settings: dict, images: list = None):
+    """
+    Tour de chat en mode Vibe : appel direct de l'API Conversations Mistral
+    (/v1/conversations) en mode SANS ÉTAT — l'historique reste local (NIMM),
+    store=false garantit qu'aucune conversation n'est conservée chez Mistral.
+    Outils natifs : web_search, code_interpreter, image_generation.
+    Émet le même protocole SSE que process_message_stream.
+    """
+    import httpx as _hx
+    import json as _j
+    import base64 as _b64
+
+    _mkey = (settings.get('api_keys', {}).get('mistral') or '').strip()
+    _model = (settings.get('model') or '').strip() or 'mistral-medium-latest'
+
+    # Historique local → inputs (le fil complet est renvoyé à chaque tour)
+    _history = get_messages(thread_id, limit=40)
+    _inputs = [
+        {'role': m['role'], 'content': m['content']}
+        for m in _sanitize_history([{'role': m['role'], 'content': m['content']} for m in _history])
+        if m.get('role') in ('user', 'assistant')
+    ]
+    if images:
+        _content = [{'type': 'text', 'text': user_message}]
+        for _im in images:
+            _content.append({
+                'type': 'image_url',
+                'image_url': f"data:{_im.get('media_type', 'image/jpeg')};base64,{_im.get('data', '')}",
+            })
+        _inputs.append({'role': 'user', 'content': _content})
+    else:
+        _inputs.append({'role': 'user', 'content': user_message})
+
+    # Sauvegarde du message utilisateur avant le stream (résistance aux interruptions)
+    _add_msg(thread_id, 'user', user_message)
+
+    _payload = {
+        'model':    _model,
+        'inputs':   _inputs,
+        'instructions': _VIBE_INSTRUCTIONS,
+        'tools':    list(VIBE_TOOLS),
+        'completion_args': {
+            'temperature': settings.get('temperature', 0.7),
+            'max_tokens':  settings.get('max_tokens', 2048),
+        },
+        'store':  False,
+        'stream': True,
+    }
+
+    full_text = ''
+    citations = []          # [{'title','url','source'}]
+    files_meta = []         # [{'file_id','file_name','file_type','tool'}]
+    _usage = None
+
+    def _esc(txt: str) -> str:
+        return txt.replace('\r', '').replace('\n', '\\n')
+
+    def _eat_chunk(_ck):
+        """Traite un chunk de contenu (text / tool_reference / tool_file). Retourne le texte à émettre."""
+        nonlocal citations, files_meta
+        if isinstance(_ck, str):
+            return _ck
+        if not isinstance(_ck, dict):
+            return ''
+        _ct = _ck.get('type', 'text')
+        if _ct == 'text':
+            return _ck.get('text', '') or ''
+        if _ct == 'tool_reference':
+            _url = _ck.get('url', '')
+            if _url and not any(c.get('url') == _url for c in citations):
+                citations.append({
+                    'title':  _ck.get('title', '') or _url,
+                    'url':    _url,
+                    'source': _ck.get('source', ''),
+                })
+            return ''
+        if _ct == 'tool_file':
+            files_meta.append({
+                'file_id':   _ck.get('file_id', ''),
+                'file_name': _ck.get('file_name', '') or 'fichier',
+                'file_type': (_ck.get('file_type', '') or '').lower(),
+                'tool':      _ck.get('tool', ''),
+            })
+            return ''
+        return ''
+
+    try:
+        async with _hx.AsyncClient(timeout=180) as _c:
+            async with _c.stream(
+                'POST', 'https://api.mistral.ai/v1/conversations',
+                headers={
+                    'Authorization': f'Bearer {_mkey}',
+                    'Content-Type':  'application/json',
+                    'Accept':        'text/event-stream',
+                },
+                json=_payload,
+            ) as _r:
+                if _r.status_code != 200:
+                    _body = (await _r.aread()).decode(errors='replace')[:300]
+                    raise RuntimeError(f'Erreur Mistral Conversations (HTTP {_r.status_code}) : {_body}')
+
+                async for _line in _r.aiter_lines():
+                    if not _line or not _line.startswith('data:'):
+                        continue
+                    _data = _line[5:].strip()
+                    if not _data or _data == '[DONE]':
+                        continue
+                    try:
+                        _obj = _j.loads(_data)
+                    except Exception:
+                        continue
+                    _t = _obj.get('type', '')
+
+                    if _t == 'message.output.delta':
+                        _content = _obj.get('content')
+                        _pieces = _content if isinstance(_content, list) else [_content]
+                        for _p in _pieces:
+                            _txt = _eat_chunk(_p)
+                            if _txt:
+                                full_text += _txt
+                                yield f"data: {_esc(_txt)}\n\n"
+
+                    elif _t.startswith('tool.execution') and _t.endswith('started'):
+                        _tname = _obj.get('name', '')
+                        _lbl = _VIBE_TOOL_LABELS.get(_tname, _tname or 'Outil')
+                        yield f"data: [VIBE_TOOL]{_j.dumps({'tool': _tname, 'label': _lbl}, ensure_ascii=False)}\n\n"
+                        print(f'[HUB] 🤖 Vibe outil : {_tname}')
+
+                    elif _t == 'conversation.response.done':
+                        _u = _obj.get('usage') or {}
+                        _usage = {
+                            'tokens_in':  _u.get('prompt_tokens', 0) or 0,
+                            'tokens_out': _u.get('completion_tokens', 0) or 0,
+                        }
+
+                    elif _t in ('conversation.response.error', 'error'):
+                        raise RuntimeError(_obj.get('message', 'Erreur Mistral Conversations'))
+
+    except Exception as _e:
+        print(f'[HUB] 🤖 Erreur Vibe stream : {_e}')
+        if full_text:
+            _add_msg(thread_id, 'assistant', full_text + '\n\n[Réponse interrompue]')
+        else:
+            _add_msg(thread_id, 'assistant', f'[Erreur Vibe : {_e}]')
+        yield f"data: [ERREUR: {str(_e)}]\n\n"
+        return
+
+    # ── Fichiers générés (images et autres) ──
+    _IMG_EXTS = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
+    for _fm in files_meta:
+        if not _fm['file_id']:
+            continue
+        try:
+            _raw = await _vibe_download_file(_fm['file_id'], _mkey)
+        except Exception as _fe:
+            print(f"[HUB] 🤖 Vibe : téléchargement fichier {_fm['file_id']} échoué : {_fe}")
+            continue
+        _ext = _fm['file_type'] or _fm['file_name'].rsplit('.', 1)[-1].lower()
+        if _ext in _IMG_EXTS:
+            _mime = f"image/{'jpeg' if _ext in ('jpg', 'jpeg') else _ext}"
+            _desc = await _vibe_describe_image(_raw, _mime, settings) or 'Image générée par Vibe'
+            _img_payload = _j.dumps({
+                'b64':            _b64.b64encode(_raw).decode('ascii'),
+                'prompt':         _desc,
+                'revised_prompt': _desc,
+            }, ensure_ascii=False)
+            yield f"data: [IMAGE_GEN]{_img_payload}\n\n"
+            _img_note = f"\n\n🎨 Image générée — description : {_desc}"
+            full_text += _img_note
+            yield f"data: {_esc(_img_note)}\n\n"
+        else:
+            import os as _os
+            _safe_name = _os.path.basename(_fm['file_name']) or f"vibe_{_fm['file_id'][:8]}.{_ext or 'bin'}"
+            _dest = _os.path.join(_vibe_files_dir(thread_id), _safe_name)
+            try:
+                with open(_dest, 'wb') as _fh:
+                    _fh.write(_raw)
+                from urllib.parse import quote as _q
+                _link = f"/api/vibe/files/{_q(_safe_name)}?thread_id={_q(str(thread_id))}"
+                _note = f"\n\n📎 Fichier généré : [{_safe_name}]({_link})"
+                full_text += _note
+                yield f"data: {_esc(_note)}\n\n"
+            except Exception as _we:
+                print(f'[HUB] 🤖 Vibe : sauvegarde fichier échouée : {_we}')
+
+    # ── Citations web ──
+    if citations:
+        yield f"data: [CITATIONS]{_j.dumps(citations, ensure_ascii=False)}\n\n"
+
+    # ── Persistance (respecte le mode fantôme via _add_msg) ──
+    _add_msg(thread_id, 'assistant', full_text.strip() or '[Réponse vide]')
+
+    # ── Usage / coût ──
+    if _usage:
+        try:
+            import core.database as _db_u
+            _rates = _db_u.get_conn().execute(
+                'SELECT rate_in, rate_out FROM cost_wallets WHERE provider = ?',
+                ('mistral',)
+            ).fetchone()
+            _cost_eur = 0.0
+            if _rates:
+                _cost_eur = (_usage['tokens_in'] * _rates[0] +
+                             _usage['tokens_out'] * _rates[1]) / 1_000_000 * 0.92
+            update_last_message_usage(thread_id, _usage['tokens_in'],
+                                      _usage['tokens_out'], round(_cost_eur, 6))
+            yield f"data: [USAGE]{_j.dumps({'tokens_in': _usage['tokens_in'], 'tokens_out': _usage['tokens_out'], 'cost_eur': round(_cost_eur, 6), 'estimated': False}, ensure_ascii=False)}\n\n"
+        except Exception as _eu:
+            print(f'[HUB] Erreur stockage usage Vibe : {_eu}')
+
+    yield 'data: [META]{"dominant": "neutre", "radar": "🤖"}\n\n'
+    yield 'data: [DONE]\n\n'
+
+
 async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     """
     Exécute un outil demandé par le LLM et retourne le résultat en texte.
@@ -3528,6 +3818,23 @@ async def process_message_stream(
             yield f"data: [META]{{\"dominant\": \"neutre\", \"radar\": \"⚪\"}}\n\n"
             yield "data: [DONE]\n\n"
             return
+
+    # ── Mode agent 🤖 Vibe — Mistral natif via /v1/conversations ──
+    # Uniquement si le LLM Mistral est sélectionné : sinon, fallback silencieux
+    # vers le pipeline normal + marqueur [VIBE_INACTIF] (toast + annonce aria).
+    try:
+        from core.database import get_thread_agent_mode as _gtam
+        _vibe_mode = _gtam(thread_id)
+    except Exception:
+        _vibe_mode = ''
+    if _vibe_mode == 'vibe':
+        if provider == 'mistral' and (api_keys.get('mistral') or '').strip():
+            print(f'[HUB] 🤖 Mode Vibe natif (fil {thread_id})')
+            async for _vev in _vibe_stream(thread_id, user_message, settings, images=images):
+                yield _vev
+            return
+        print(f'[HUB] 🤖 Mode Vibe demandé mais provider={provider!r} — fallback chat normal')
+        yield "data: [VIBE_INACTIF]\n\n"
 
     # 2. Filtre d'intention (IntentGate) — streaming
     try:

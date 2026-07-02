@@ -1793,6 +1793,27 @@ async def coanimm_download_file(filename: str, thread_id: str):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
+@app.get("/api/vibe/files/{filename}")
+async def vibe_download_file(filename: str, thread_id: str):
+    """Télécharge un fichier produit par le mode Vibe (code_interpreter…).
+    thread_id obligatoire : empêche le guessing inter-sessions."""
+    if not thread_id:
+        raise HTTPException(400, "thread_id obligatoire.")
+    from core.hub import _vibe_files_dir
+    import mimetypes
+    filepath = os.path.join(_vibe_files_dir(thread_id), os.path.basename(filename))
+    if not os.path.isfile(filepath):
+        raise HTTPException(404, f"Fichier introuvable : {filename}")
+    mime, _ = mimetypes.guess_type(filepath)
+    mime = mime or "application/octet-stream"
+    return FileResponse(
+        filepath,
+        media_type=mime,
+        filename=os.path.basename(filename),
+        headers={"Content-Disposition": f'attachment; filename="{os.path.basename(filename)}"'},
+    )
+
 class CoanimmAxeAuditRequest(BaseModel):
     url: str
     thread_id: Optional[str] = None
