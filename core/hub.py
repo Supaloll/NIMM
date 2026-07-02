@@ -2524,12 +2524,12 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             import json as _jsn, httpx as _hx3
             _bearer = None
             try:
-                _ext_keys = _jsn.loads(_gset('external_keys', '{}'))
-                _bearer = _ext_keys.get('sirene', '')
+                from core.database import get_external_key as _gek_si
+                _bearer = _gek_si('sirene')
             except Exception:
                 pass
             if not _bearer:
-                return "[Cl\u00e9 INSEE Sirene non configur\u00e9e \u2014 renseigner dans Param\u00e8tres > Services externes]"
+                return "[Clé INSEE Sirene non configurée — renseigner dans Paramètres > Services externes]"
             _headers_si = {"Authorization": f"Bearer {_bearer}", "Accept": "application/json"}
             _clean = _si_query.replace(" ", "").replace("\u00a0", "")
             async with _hx3.AsyncClient(timeout=10.0, headers=_headers_si) as _c3:
@@ -2605,12 +2605,24 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             return "[describe_image] URL manquante."
         try:
             import httpx as _hxdi, base64 as _b64di
-            async with _hxdi.AsyncClient(timeout=30.0, follow_redirects=True,
+            from modules.net_guard import assert_public_url as _ng_di
+            try:
+                _ng_di(_di_url)
+            except ValueError as _nge:
+                return f"[describe_image] URL refusée (anti-SSRF) : {_nge}"
+            async with _hxdi.AsyncClient(timeout=20.0, follow_redirects=False,
                                          headers={"User-Agent": "NIMM/1.0"}) as _cdi:
                 _ri = await _cdi.get(_di_url)
-            if _ri.status_code != 200:
-                return f"[describe_image] Impossible de t\xc3\xa9l\xc3\xa9charger l\'image (HTTP {_ri.status_code})."
-            _mime_di = _ri.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+            if _ri.status_code not in (200,):
+                return f"[describe_image] Impossible de télécharger l'image (HTTP {_ri.status_code})."
+            _mime_di = _ri.headers.get("content-type", "image/jpeg").split(";")[0].strip().lower()
+            if not _mime_di.startswith("image/"):
+                return f"[describe_image] Réponse non-image ({_mime_di}) — URL refusée."
+            _img_size = int(_ri.headers.get("content-length", 0) or 0)
+            if _img_size > 10 * 1024 * 1024:
+                return f"[describe_image] Image trop volumineuse ({_img_size // 1024 // 1024} Mo > 10 Mo)."
+            if len(_ri.content) > 10 * 1024 * 1024:
+                return "[describe_image] Image trop volumineuse (> 10 Mo)."
             _b64_di  = _b64di.b64encode(_ri.content).decode("ascii")
             from core.engine import call_vision
             _di_settings = load_settings(thread_id)
@@ -2667,6 +2679,15 @@ def _is_ghost_thread(thread_id: str) -> bool:
         return thread_id in set(_gj.loads(get_setting('ghost_threads', '[]')))
     except Exception:
         return False
+
+
+def _add_msg(thread_id: str, role: str, content: str) -> None:
+    """Sauvegarde le message SAUF si le fil est en mode fant\xc3\xb4me (confidentiel).
+    En mode fant\xc3\xb4me, aucune trace n'est persist\xc3\xa9e en base."""
+    if _is_ghost_thread(thread_id):
+        return
+    add_message(thread_id, role, content)
+
 
 
 async def maybe_generate_carnet_note(thread_id: str, settings: dict):
@@ -3192,15 +3213,15 @@ async def process_message(
     }
     if not provider:
         _msg = "T'as cru que tu pouvais chatter gratuitement ? Tout se paye mon ami. 😄\n\nVa te prendre une clé API — DeepSeek, Anthropic, OpenAI, tu as le choix — et reviens quand elle sera configurée. C'est dans les réglages ⚙️, section **Clés API**."
-        add_message(thread_id, 'user', user_message)
-        add_message(thread_id, 'assistant', _msg)
+        _add_msg(thread_id, 'user', user_message)
+        _add_msg(thread_id, 'assistant', _msg)
         return {'reply': _msg, 'dominant': 'neutre', 'radar': '⚪'}
     if provider not in _LOCAL:
         _key_name = _KEY_MAP.get(provider)
         if _key_name and not api_keys.get(_key_name):
             _msg = f"Clé API manquante pour **{provider}**. 🔑\n\nOuvre les réglages ⚙️, section **Clés API**, et entre ta clé. Après ça on peut vraiment commencer."
-            add_message(thread_id, 'user', user_message)
-            add_message(thread_id, 'assistant', _msg)
+            _add_msg(thread_id, 'user', user_message)
+            _add_msg(thread_id, 'assistant', _msg)
             return {'reply': _msg, 'dominant': 'neutre', 'radar': '⚪'}
 
     # 2. Filtre d'intention (IntentGate)
@@ -3209,8 +3230,8 @@ async def process_message(
         intent_reply = await intent_gate_filter(user_message)
         if intent_reply:
             # Sauvegarder le message utilisateur
-            add_message(thread_id, 'user', user_message)
-            add_message(thread_id, 'assistant', intent_reply)
+            _add_msg(thread_id, 'user', user_message)
+            _add_msg(thread_id, 'assistant', intent_reply)
             return {
                 'reply': intent_reply,
                 'dominant': 'neutre',
@@ -3409,8 +3430,8 @@ async def process_message(
     # 14. Sauvegarder les messages
     if _doc_titles:
         reply = (reply or "") + "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
-    add_message(thread_id, 'user',      user_message)
-    add_message(thread_id, 'assistant', reply)
+    _add_msg(thread_id, 'user',      user_message)
+    _add_msg(thread_id, 'assistant', reply)
 
     # Mood — stocker le dominant pour le prochain tour
     if dominant:
@@ -3466,8 +3487,8 @@ async def process_message_stream(
         if _mod_result['blocked']:
             _cats_txt = ', '.join(_mod_result['violated'])
             _block_msg = f"Message bloqu\xe9 par le filtre de mod\xe9ration ({_cats_txt})."
-            add_message(thread_id, 'user', user_message)
-            add_message(thread_id, 'assistant', _block_msg)
+            _add_msg(thread_id, 'user', user_message)
+            _add_msg(thread_id, 'assistant', _block_msg)
             yield f"data: {_block_msg}\n\n"
             yield 'data: [META]{"dominant":"neutre"}\n\n'
             yield "data: [DONE]\n\n"
@@ -3491,8 +3512,8 @@ async def process_message_stream(
     }
     if not provider:
         _msg = "⚙️ Aucun provider configuré. Ouvre les réglages (⚙️), choisis un provider et entre ta clé API."
-        add_message(thread_id, 'user', user_message)
-        add_message(thread_id, 'assistant', _msg)
+        _add_msg(thread_id, 'user', user_message)
+        _add_msg(thread_id, 'assistant', _msg)
         yield f"data: {_msg}\n\n"
         yield f"data: [META]{{\"dominant\": \"neutre\", \"radar\": \"⚪\"}}\n\n"
         yield "data: [DONE]\n\n"
@@ -3501,8 +3522,8 @@ async def process_message_stream(
         _key_name = _KEY_MAP.get(provider)
         if _key_name and not api_keys.get(_key_name):
             _msg = f"⚙️ Clé API manquante pour **{provider}**. Ouvre les réglages (⚙️) et entre ta clé API."
-            add_message(thread_id, 'user', user_message)
-            add_message(thread_id, 'assistant', _msg)
+            _add_msg(thread_id, 'user', user_message)
+            _add_msg(thread_id, 'assistant', _msg)
             yield f"data: {_msg}\n\n"
             yield f"data: [META]{{\"dominant\": \"neutre\", \"radar\": \"⚪\"}}\n\n"
             yield "data: [DONE]\n\n"
@@ -3514,8 +3535,8 @@ async def process_message_stream(
         intent_reply = await intent_gate_filter(user_message)
         if intent_reply:
             # Sauvegarder les messages
-            add_message(thread_id, 'user', user_message)
-            add_message(thread_id, 'assistant', intent_reply)
+            _add_msg(thread_id, 'user', user_message)
+            _add_msg(thread_id, 'assistant', intent_reply)
             # Envoyer la réponse en un seul chunk
             yield f"data: {intent_reply}\n\n"
             # Métadonnées
@@ -3593,7 +3614,7 @@ async def process_message_stream(
     messages.append({'role': 'user', 'content': final_user_msg})
 
     # Sauvegarder le message utilisateur avant le stream (résistance aux interruptions)
-    add_message(thread_id, 'user', user_message)
+    _add_msg(thread_id, 'user', user_message)
 
     # 6. Stream des tokens — les tags %%...%% sont filtrés avant le yield
     full_reply  = ''
@@ -3714,9 +3735,9 @@ async def process_message_stream(
         print(f"[HUB] Erreur stream : {e}")
         if full_reply:
             partial, _, _, _, _, _, _ = extract_all_tags(full_reply)
-            add_message(thread_id, 'assistant', partial or "[Réponse interrompue]")
+            _add_msg(thread_id, 'assistant', partial or "[Réponse interrompue]")
         else:
-            add_message(thread_id, 'assistant', "[Réponse interrompue — erreur de connexion]")
+            _add_msg(thread_id, 'assistant', "[Réponse interrompue — erreur de connexion]")
         yield f"data: [ERREUR: {str(e)}]\n\n"
         return
 
@@ -3778,7 +3799,7 @@ async def process_message_stream(
         _doc_footer = "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
         reply = (reply or "") + _doc_footer
         yield f"data: {_doc_footer}\n\n"
-    add_message(thread_id, 'assistant', reply)
+    _add_msg(thread_id, 'assistant', reply)
 
     # Stocker les tokens/coût et émettre [USAGE] vers le frontend
     if _last_usage:
@@ -3848,7 +3869,7 @@ async def process_message_stream(
             _img_revised = _img_result.get('revised_prompt', image_prompt)
             # Sauvegarder en DB pour que le LLM voie l'image dans l'historique
             _img_assistant_content = f"[Système — image générée]\nPrompt : {_img_revised}"
-            add_message(thread_id, 'assistant', _img_assistant_content)
+            _add_msg(thread_id, 'assistant', _img_assistant_content)
             # Envoyer l'event image au frontend
             _img_payload = _json_img.dumps({
                 'url':            _img_url,
