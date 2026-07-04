@@ -1311,19 +1311,33 @@ def _match_documents(user_message: str):
     Complète l'outil search_documents (pull) par une injection (push)."""
     try:
         msg = (user_message or '').strip()
-        if len(msg) < 4:
+        if len(msg) < 12:
             return '', []
         from modules.enrichissement import search_documents
         passages = search_documents(msg, k=3)
         if not passages:
             return '', []
+        # Seuils resserrés (évitent les faux positifs sur des messages faiblement liés).
+        # Le seuil sémantique est réglable via le paramètre 'rag_seuil_documents' (défaut 0.5).
+        try:
+            _seuil_sem = float(get_setting('rag_seuil_documents', '0.5'))
+        except Exception:
+            _seuil_sem = 0.5
+        import re as _re_doc
+        _mots_utiles = set(m for m in _re_doc.findall(r'\w+', msg.lower())
+                           if len(m) > 2 and m not in _MOTS_VIDES)
+        _n_mots = max(1, len(_mots_utiles))
         retenus = []
         for pp in passages:
             sc = pp.get('score', 0) or 0
             if pp.get('mode') == 'keyword':
-                if sc >= 2:
+                # Mode mots-clés : recouvrement des mots UTILES (hors mots vides) dans le
+                # passage — exige au moins 2 mots ET une couverture >= 60 % des mots utiles.
+                _hay = (pp.get('passage') or '').lower()
+                _hits = sum(1 for m in _mots_utiles if m in _hay)
+                if _hits >= 2 and _hits >= 0.6 * _n_mots:
                     retenus.append(pp)
-            elif sc >= 0.32:
+            elif sc >= _seuil_sem:
                 retenus.append(pp)
         if not retenus:
             return '', []
@@ -2123,7 +2137,49 @@ async def _vibe_describe_image(image_bytes: bytes, mime: str, settings: dict) ->
         return ''
 
 
-async def _vibe_stream(thread_id: str, user_message: str, settings: dict, images: list = None):
+async def _vibe_signed_url(file_id: str, api_key: str, expiry: int = 1) -> str:
+    """URL signee temporaire d'un fichier Mistral (pour l'attacher a une conversation Vibe)."""
+    if not file_id:
+        return ''
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=30) as _c:
+            _r = await _c.get(
+                f'https://api.mistral.ai/v1/files/{file_id}/url?expiry={expiry}',
+                headers={'Authorization': f'Bearer {api_key}'},
+            )
+            if _r.status_code == 200:
+                return _r.json().get('url', '') or ''
+    except Exception as _e:
+        print(f'[HUB] Vibe : URL signee echouee ({file_id}) : {_e}')
+    return ''
+
+
+async def _vibe_ocr_text(signed_url: str, api_key: str) -> str:
+    """Repli : extrait le texte d'un document via l'OCR Mistral depuis son URL signee."""
+    if not signed_url:
+        return ''
+    import httpx as _hx
+    _low = signed_url.lower()
+    _is_img = any(e in _low for e in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff', '.tif'))
+    _dt = 'image_url' if _is_img else 'document_url'
+    _payload = {'model': 'mistral-ocr-latest', 'document': {'type': _dt, _dt: signed_url}}
+    try:
+        async with _hx.AsyncClient(timeout=120) as _c:
+            _r = await _c.post(
+                'https://api.mistral.ai/v1/ocr',
+                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                json=_payload,
+            )
+            if _r.status_code == 200:
+                _pages = _r.json().get('pages', []) or []
+                return "\n\n".join((p.get('markdown') or p.get('text') or '') for p in _pages).strip()
+    except Exception as _e:
+        print(f'[HUB] Vibe : OCR repli echoue : {_e}')
+    return ''
+
+
+async def _vibe_stream(thread_id: str, user_message: str, settings: dict, images: list = None, documents: list = None, _skip_user_save: bool = False, _ocr_augment: str = ''):
     """
     Tour de chat en mode Vibe : appel direct de l'API Conversations Mistral
     (/v1/conversations) en mode SANS ÉTAT — l'historique reste local (NIMM),
@@ -2145,19 +2201,34 @@ async def _vibe_stream(thread_id: str, user_message: str, settings: dict, images
         for m in _sanitize_history([{'role': m['role'], 'content': m['content']} for m in _history])
         if m.get('role') in ('user', 'assistant')
     ]
-    if images:
-        _content = [{'type': 'text', 'text': user_message}]
-        for _im in images:
-            _content.append({
-                'type': 'image_url',
-                'image_url': f"data:{_im.get('media_type', 'image/jpeg')};base64,{_im.get('data', '')}",
-            })
-        _inputs.append({'role': 'user', 'content': _content})
+    if _ocr_augment:
+        # Repli OCR : le dernier tour user (deja dans l'historique) recoit le texte augmente
+        if _inputs and _inputs[-1].get('role') == 'user':
+            _inputs[-1]['content'] = _ocr_augment
+        else:
+            _inputs.append({'role': 'user', 'content': _ocr_augment})
     else:
-        _inputs.append({'role': 'user', 'content': user_message})
+        _doc_signed = []
+        for _doc in (documents or []):
+            _su = await _vibe_signed_url((_doc or {}).get('file_id', ''), _mkey)
+            if _su:
+                _doc_signed.append(_su)
+        if images or _doc_signed:
+            _content = [{'type': 'text', 'text': user_message}]
+            for _im in (images or []):
+                _content.append({
+                    'type': 'image_url',
+                    'image_url': f"data:{_im.get('media_type', 'image/jpeg')};base64,{_im.get('data', '')}",
+                })
+            for _su in _doc_signed:
+                _content.append({'type': 'document_url', 'document_url': _su})
+            _inputs.append({'role': 'user', 'content': _content})
+        else:
+            _inputs.append({'role': 'user', 'content': user_message})
 
     # Sauvegarde du message utilisateur avant le stream (résistance aux interruptions)
-    _add_msg(thread_id, 'user', user_message)
+    if not _skip_user_save:
+        _add_msg(thread_id, 'user', user_message)
 
     _payload = {
         'model':    _model,
@@ -2262,7 +2333,22 @@ async def _vibe_stream(thread_id: str, user_message: str, settings: dict, images
                         raise RuntimeError(_obj.get('message', 'Erreur Mistral Conversations'))
 
     except Exception as _e:
-        print(f'[HUB] 🤖 Erreur Vibe stream : {_e}')
+        print(f'[HUB] Erreur Vibe stream : {_e}')
+        # Repli : document(s) attache(s) via document_url refuse/echoue -> OCR texte, 1 essai
+        if documents and not _ocr_augment and not full_text:
+            _ocr_parts = []
+            for _doc in documents:
+                _su = await _vibe_signed_url((_doc or {}).get('file_id', ''), _mkey)
+                _t = await _vibe_ocr_text(_su, _mkey) if _su else ''
+                if _t:
+                    _ocr_parts.append(_t)
+            _aug = user_message
+            if _ocr_parts:
+                _aug = user_message + "\n\n[Contenu des documents joints]\n\n" + "\n\n---\n\n".join(_ocr_parts)
+            print('[HUB] Vibe : repli OCR texte pour le(s) document(s).')
+            async for _ev in _vibe_stream(thread_id, user_message, settings, images=None, documents=None, _skip_user_save=True, _ocr_augment=_aug):
+                yield _ev
+            return
         if full_text:
             _add_msg(thread_id, 'assistant', full_text + '\n\n[Réponse interrompue]')
         else:
@@ -3771,6 +3857,7 @@ async def process_message_stream(
     images: list = None,
     web_search: bool = False,
     location: str = '',
+    vibe_docs: list = None,
 ):
     """
     Version streaming de process_message.
@@ -3847,7 +3934,7 @@ async def process_message_stream(
     if _vibe_mode == 'vibe':
         if provider == 'mistral' and (api_keys.get('mistral') or '').strip():
             print(f'[HUB] 🤖 Mode Vibe natif (fil {thread_id})')
-            async for _vev in _vibe_stream(thread_id, user_message, settings, images=images):
+            async for _vev in _vibe_stream(thread_id, user_message, settings, images=images, documents=vibe_docs):
                 yield _vev
             return
         print(f'[HUB] 🤖 Mode Vibe demandé mais provider={provider!r} — fallback chat normal')
