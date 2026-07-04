@@ -35,6 +35,18 @@ _pending_citations: _ContextVar = _ContextVar('nimm_pending_citations', default=
 # ASSAINISSEUR D'HISTORIQUE (correctif 400 Mistral)
 # ══════════════════════════════════════════
 
+_DOCS_FOOTER_RE = re.compile(r'\n{0,2}—?[ \t]*\U0001f4c4[ \t]*Documents consult[^\n]*')
+
+
+def _strip_docs_footer(text):
+    """Retire le pied « — 📄 Documents consultés : … » d'un contenu.
+    Empêche sa réinjection dans l'historique envoyé au modèle (sinon le
+    modèle le recopie et le pied apparaît en double)."""
+    if not text or not isinstance(text, str):
+        return text
+    return _DOCS_FOOTER_RE.sub('', text)
+
+
 def _sanitize_history(messages: list) -> list:
     """
     Nettoie l'historique avant envoi à un fournisseur OpenAI-compat (Mistral
@@ -48,6 +60,8 @@ def _sanitize_history(messages: list) -> list:
     cleaned = []
     for m in messages:
         content = m.get('content')
+        if isinstance(content, str):
+            content = _strip_docs_footer(content)
         if not content and not m.get('tool_calls'):
             continue
         if cleaned and cleaned[-1]['role'] == m['role'] and not m.get('tool_calls') and not cleaned[-1].get('tool_calls'):
@@ -55,7 +69,10 @@ def _sanitize_history(messages: list) -> list:
             prev_content = cleaned[-1].get('content') or ''
             cleaned[-1]['content'] = (prev_content + '\n\n' + (content or '')).strip()
         else:
-            cleaned.append(dict(m))
+            _mm = dict(m)
+            if isinstance(content, str):
+                _mm['content'] = content
+            cleaned.append(_mm)
 
     # Le premier message doit être 'user' (sinon Mistral râle)
     while cleaned and cleaned[0]['role'] != 'user':
@@ -3719,7 +3736,7 @@ async def process_message(
 
     # 14. Sauvegarder les messages
     if _doc_titles:
-        reply = (reply or "") + "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
+        reply = _strip_docs_footer(reply or "").rstrip() + "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
     _add_msg(thread_id, 'user',      user_message)
     _add_msg(thread_id, 'assistant', reply)
 
@@ -4103,9 +4120,9 @@ async def process_message_stream(
                 print(f"[HUB] Erreur sauvegarde anecdote (stream): {e}")
 
     if _doc_titles:
-        _doc_footer = "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
-        reply = (reply or "") + _doc_footer
-        yield f"data: {_doc_footer}\n\n"
+        _doc_line = "— 📄 Documents consultés : " + ", ".join(_doc_titles)
+        reply = _strip_docs_footer(reply or "").rstrip() + "\n\n" + _doc_line
+        yield f"data: \\n\\n{_doc_line}\n\n"
     _add_msg(thread_id, 'assistant', reply)
 
     # Stocker les tokens/coût et émettre [USAGE] vers le frontend
