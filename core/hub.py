@@ -2708,14 +2708,15 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         try:
             from modules.coanimm import _workspace_dir
             from modules.file_writer import write_file as _write_file, SUPPORTED_FORMATS
+            import os as _os_write
             import re as _re
             workdir = _workspace_dir(thread_id)
-            os.makedirs(workdir, exist_ok=True)
+            _os_write.makedirs(workdir, exist_ok=True)
             safe = _re.sub(r'[^\w\-]', '_', filename)[:60]
             ext = SUPPORTED_FORMATS.get(fmt.lower(), '.txt')
-            filepath = os.path.join(workdir, safe + ext)
+            filepath = _os_write.path.join(workdir, safe + ext)
             real_path = _write_file(content, fmt, filepath, title, lang, voice)
-            basename = os.path.basename(real_path)
+            basename = _os_write.path.basename(real_path)
             url = f"/api/coanimm/files/{basename}?thread_id={thread_id}"
             nb_chars = len(content)
             return f"\u2705 Fichier cr\u00e9\u00e9\u00a0: [{basename}]({url})\nFormat\u00a0: {fmt.upper()} | {nb_chars} caract\u00e8res"
@@ -3644,6 +3645,10 @@ async def process_message(
                             'content':      tool_result,
                         })
                     # Phase 2 : réponse finale avec contexte enrichi
+                    # Même logique qu'en streaming (bloc #01) : seul Anthropic a besoin des
+                    # outils ici. Les repasser aux providers OpenAI-compatible les inviterait
+                    # à retenter un appel d'outil au lieu de répondre en texte.
+                    _phase2_tools = NIMM_TOOLS if settings['provider'] == 'anthropic' else None
                     raw_reply = await call_llm(
                         messages=messages,
                         provider=settings['provider'],
@@ -3652,7 +3657,7 @@ async def process_message(
                         max_tokens=settings['max_tokens'],
                         temperature=settings['temperature'],
                         api_keys=settings['api_keys'],
-                        tools=NIMM_TOOLS,  # requis par Anthropic : l'historique contient des blocs tool_use/tool_result
+                        tools=_phase2_tools,
                     )
 
     except Exception as e:
@@ -4019,6 +4024,13 @@ async def process_message_stream(
                         })
 
                     # Phase 2 : stream de la réponse finale avec contexte enrichi
+                    # Ne repasser les outils qu'à Anthropic (seul provider qui l'exige
+                    # structurellement quand l'historique contient des blocs tool_use/tool_result).
+                    # Pour DeepSeek/Mistral/OpenAI/OpenRouter, repasser les outils ici permet au
+                    # modèle de retenter un appel d'outil au lieu de répondre en texte — et ce
+                    # chemin (call_llm_stream) ne sait pas traiter un deuxième tool_calls, d'où
+                    # un flux silencieux ou coupé en pleine phrase.
+                    _phase2_tools = NIMM_TOOLS if settings['provider'] == 'anthropic' else None
                     async for token in call_llm_stream(
                         messages=messages,
                         provider=settings['provider'],
@@ -4027,7 +4039,7 @@ async def process_message_stream(
                         max_tokens=settings['max_tokens'],
                         temperature=settings['temperature'],
                         api_keys=settings['api_keys'],
-                        tools=NIMM_TOOLS,  # requis par Anthropic : l'historique contient des blocs tool_use/tool_result
+                        tools=_phase2_tools,
                     ):
                         if isinstance(token, dict):
                             if token.get('type') == 'usage':
