@@ -1848,6 +1848,7 @@ function renderSidebar() {
 }
 
 async function selectThread(threadId) {
+    if (threadId !== currentThreadId) _purgeVibeDocs();
     currentThreadId = threadId;
     currentTabId    = null;
     localStorage.setItem('last-thread-id', threadId);
@@ -3369,7 +3370,7 @@ async function _getLocation() {
 // STREAM — MOTEUR COMMUN
 // ══════════════════════════════════════════
 
-async function _triggerStream(content, conversationId, images = null) {
+async function _triggerStream(content, conversationId, images = null, vibeDocs = null) {
     // Capturer la position de l'emoji précédent AVANT que showLoader() scrolle
     const _preEmojis = messagesDiv.querySelectorAll('.message.assistant:not(#thinking-loader) .bubble-emoji');
     const _preEmojiRect = _preEmojis.length
@@ -3397,6 +3398,7 @@ async function _triggerStream(content, conversationId, images = null) {
                 thread_id:  conversationId,
                 web_search: _webSearchActive,
                 ...(images ? { images } : {}),
+                ...(vibeDocs ? { vibe_docs: vibeDocs } : {}),
                 ...(_location ? { location: _location } : {}),
             })
         });
@@ -4212,7 +4214,7 @@ async function requestSummary(conversationId) {
 
 async function sendMessage() {
     const content = userInput.value.trim();
-    if (!content && !_pendingFile) return;
+    if (!content && !_pendingFile && !_pendingVibeDoc) return;
     if (!(await _ensureUnlocked(_currentUserId))) return;  // session a PIN : deverrouiller avant d'ecrire
 
     userInput.value = '';
@@ -4326,15 +4328,24 @@ async function sendMessage() {
     }
 
     const pendingFile = _pendingFile;
-    appendUserMessage(content, pendingFile ? pendingFile.name : null);
+    const pendingVibeDoc = _pendingVibeDoc;
+    appendUserMessage(content, (pendingFile && pendingFile.name) || (pendingVibeDoc && pendingVibeDoc.name) || null);
     _pendingFile = null;
+    _pendingVibeDoc = null;
     document.getElementById('file-chip').style.display = 'none';
     // Scroll initial à l'envoi — montre le bas du fil
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
+    let _vibeDocsPayload = null;
+    if (pendingVibeDoc && pendingVibeDoc.file_id) {
+        _vibeDocsPayload = [{ file_id: pendingVibeDoc.file_id, name: pendingVibeDoc.name }];
+        _vibeSentDocs.push(pendingVibeDoc.file_id);
+    }
     await _triggerStream(
         pendingFile ? content + '\n\n' + pendingFile.text : content,
-        conversationId
+        conversationId,
+        null,
+        _vibeDocsPayload
     );
 }
 
@@ -7899,6 +7910,21 @@ window._onSttStateChange = () => { if (_isMobile) _updateMicPanelState(); };
 // UPLOAD — Fichier / Image / PDF
 // ══════════════════════════════════════════
 let _pendingFile = null; // { text, name, b64?, mime_type? }
+let _pendingVibeDoc = null; // { file_id, name } — document Vibe (API Files Mistral)
+let _vibeSentDocs = []; // file_ids envoyes dans le fil courant (suppression RGPD au changement de fil)
+function _purgeVibeDocs() {
+    var ids = _vibeSentDocs.slice();
+    if (_pendingVibeDoc && _pendingVibeDoc.file_id) {
+        ids.push(_pendingVibeDoc.file_id);
+        var _c = document.getElementById('file-chip');
+        if (_c) _c.style.display = 'none';
+    }
+    _vibeSentDocs = [];
+    _pendingVibeDoc = null;
+    ids.forEach(function(fid) {
+        if (fid) fetch('/api/vibe/file/' + encodeURIComponent(fid), { method: 'DELETE' }).catch(function(){});
+    });
+}
 
 function setupUpload() {
     const btn    = document.getElementById('upload-btn');
@@ -8056,26 +8082,27 @@ function setupUpload() {
             btn.innerHTML = SVG_LOADING;
             btn.disabled = true;
             _buildChip(file);
-            _srAnnounce('Analyse du document en cours…');
+            _srAnnounce('Envoi du document en cours…');
             try {
                 var fd = new FormData();
                 fd.append('file', file);
-                var r = await fetch('/api/mistral/ocr', { method: 'POST', body: fd });
+                var r = await fetch('/api/vibe/upload-doc', { method: 'POST', body: fd });
                 if (!r.ok) throw new Error(await r.text());
                 var d = await r.json();
-                if (d.text) {
-                    _pendingFile = { text: d.text, name: file.name, b64: null, mime_type: null };
-                    _srAnnounce('Document analysé : ' + file.name);
-                } else {
+                if (d.file_id) {
                     _pendingFile = null;
+                    _pendingVibeDoc = { file_id: d.file_id, name: file.name };
+                    _srAnnounce('Document joint : ' + file.name);
+                } else {
+                    _pendingVibeDoc = null;
                     chip.style.display = 'none';
-                    _srAnnounce('Erreur : document non analysé.');
+                    _srAnnounce('Erreur : document non joint.');
                 }
             } catch(e) {
-                console.error('[NIMM] Erreur OCR Vibe :', e);
-                _pendingFile = null;
+                console.error('[NIMM] Erreur upload doc Vibe :', e);
+                _pendingVibeDoc = null;
                 chip.style.display = 'none';
-                _srAnnounce("Erreur lors de l'analyse OCR.");
+                _srAnnounce("Erreur lors de l'envoi du document.");
             } finally {
                 btn.textContent = '+';
                 btn.disabled = false;
@@ -8092,7 +8119,11 @@ function setupUpload() {
 
     // Retirer le fichier
     chipRm?.addEventListener('click', () => {
+        if (_pendingVibeDoc && _pendingVibeDoc.file_id) {
+            fetch('/api/vibe/file/' + encodeURIComponent(_pendingVibeDoc.file_id), { method: 'DELETE' }).catch(()=>{});
+        }
         _pendingFile       = null;
+        _pendingVibeDoc    = null;
         chip.style.display = 'none';
         preview.innerHTML  = '';
     });

@@ -522,10 +522,23 @@ def _strip_accents_lower(s: str) -> str:
 def _norm_query(q: str) -> str:
     return " ".join(_strip_accents_lower(q).split())
 
+def _est_ephemere(query: str) -> bool:
+    """Vrai si la requête porte sur une information éphémère (météo, score,
+    actualité immédiate…).
+
+    Dans ce cas on NE lit PAS le cache : on relance une recherche fraîche à
+    chaque fois. Le cache compare les requêtes par similarité de sens (≥ 0.85)
+    SANS tenir compte de la date ; tant qu'on reste dans la fenêtre d'expiration
+    (1 jour pour l'éphémère), « matchs de ce soir » et « scores du 6 juillet »
+    sont vus comme une même question et le vieux texte serait resservi hors de
+    son contexte temporel. Pour l'éphémère, redemander = vouloir savoir si la
+    situation a évolué, pas relire une réponse gardée en mémoire."""
+    n = _norm_query(query)
+    return any(mot in n for mot in _MOTS_EPHEMERES)
+
 def _ttl_jours(query: str) -> int:
     """Durée de vie (jours) selon la périssabilité estimée de la requête."""
-    n = _norm_query(query)
-    if any(mot in n for mot in _MOTS_EPHEMERES):
+    if _est_ephemere(query):
         return WEBCACHE_TTL_EPHEMERE
     return WEBCACHE_TTL_DEFAULT
 
@@ -639,10 +652,17 @@ async def search_with_cache(query: str, max_results: int = 5, classify=None) -> 
     norm = _norm_query(query)
     qvec = _query_vector(query)
 
-    cached = _cache_lookup(norm, qvec)
-    if cached is not None:
-        print("[WEBCACHE] ♻️ Réutilisation d'une recherche mémorisée.")
-        return cached
+    # Information éphémère (météo, score, actualité immédiate…) : on saute
+    # complètement la lecture du cache et on repart sur une recherche fraîche à
+    # chaque fois. On mémorise quand même le résultat en arrière-plan (trace +
+    # repli hors-ligne), avec une expiration courte. Voir _est_ephemere().
+    if _est_ephemere(query):
+        print("[WEBCACHE] ⏱️ Requête éphémère → recherche fraîche (cache ignoré).")
+    else:
+        cached = _cache_lookup(norm, qvec)
+        if cached is not None:
+            print("[WEBCACHE] ♻️ Réutilisation d'une recherche mémorisée.")
+            return cached
 
     result = await search(query, max_results)
 
