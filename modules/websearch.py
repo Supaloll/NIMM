@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 
 from modules import net_guard
+from core.database import get_setting
 
 BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_TIMEOUT = 8  # secondes
@@ -614,6 +615,11 @@ async def search_with_cache(query: str, max_results: int = 5, classify=None) -> 
         (gain de temps, mémoire des recherches passées) ;
       - mémorise les nouveaux résultats EN ARRIÈRE-PLAN (zéro latence ajoutée),
         avec une expiration fonction de la périssabilité estimée.
+      - EXCEPTION : pour les requêtes jugées éphémères (météo, scores, actualité
+        immédiate...), le cache est entièrement court-circuité. Si la question est
+        reposée, c'est précisément pour savoir si la situation a évolué — donc pas
+        de réutilisation possible, recherche fraîche à chaque fois, et inutile de
+        mémoriser un résultat qui ne resservira jamais.
 
     `classify` (optionnel) : coroutine `classify(query, content) -> jours | 0 | None`.
       jours > 0 = durée de vie ; 0 = permanent ; None = indéterminé (repli
@@ -624,6 +630,10 @@ async def search_with_cache(query: str, max_results: int = 5, classify=None) -> 
     requête. Tout échec du cache laisse la recherche normale se poursuivre.
     """
     if not WEBCACHE_ENABLED:
+        return await search(query, max_results)
+
+    if _ttl_jours(query) == WEBCACHE_TTL_EPHEMERE:
+        print("[WEBCACHE] ⏱️ Requête éphémère — recherche fraîche (cache ignoré).")
         return await search(query, max_results)
 
     norm = _norm_query(query)
