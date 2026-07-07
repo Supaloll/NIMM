@@ -326,6 +326,7 @@ class ChatRequest(BaseModel):
     message:    str
     thread_id:  str
     images:     Optional[List[dict]] = None
+    vibe_docs:  Optional[List[dict]] = None
     web_search: Optional[bool] = False
     location:   Optional[str] = None
     user_id:    Optional[str] = None
@@ -422,6 +423,7 @@ async def chat_stream(req: ChatRequest):
             thread_id=req.thread_id,
             user_message=req.message,
             images=req.images,
+            vibe_docs=req.vibe_docs,
             web_search=req.web_search or False,
             location=req.location or '',
         ),
@@ -4393,65 +4395,6 @@ async def coanimm_mistral_list_agents():
 # ══════════════════════════════════════════
 # UPLOAD — Image / PDF
 # ══════════════════════════════════════════
-@app.post("/api/mistral/ocr")
-async def mistral_ocr(file: UploadFile = File(...)):
-    """OCR/extraction de document via Mistral (mode Vibe). Supporte PDF et images."""
-    import base64 as _b64
-    import httpx as _httpx
-    data = await file.read()
-    filename = (file.filename or '').lower()
-    try:
-        from core.database import get_api_keys as _gak
-        _mkey = (_gak().get('mistral') or '').strip()
-        if not _mkey:
-            from core.database import _load_users, set_user_context
-            _us = _load_users()
-            if _us:
-                set_user_context(_us[0]['id'])
-            _mkey = (_gak().get('mistral') or '').strip()
-    except Exception:
-        _mkey = ''
-    if not _mkey:
-        raise HTTPException(400, "Clé API Mistral non configurée.")
-
-    # Choix du type de document
-    _is_pdf = filename.endswith('.pdf')
-    _is_img = filename.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif'))
-    if not (_is_pdf or _is_img):
-        # Fichiers texte : retour direct
-        try:
-            txt = data.decode('utf-8', errors='replace')
-        except Exception:
-            txt = data.decode('latin-1', errors='replace')
-        return {"text": txt[:8000], "name": file.filename, "method": "text"}
-
-    _b64_str = _b64.b64encode(data).decode()
-    _mime = file.content_type or ('application/pdf' if _is_pdf else 'image/jpeg')
-    _doc_url = f"data:{_mime};base64,{_b64_str}"
-    if _is_pdf:
-        _payload = {"model": "mistral-ocr-latest", "document": {"type": "document_url", "document_url": _doc_url}}
-    else:
-        _payload = {"model": "mistral-ocr-latest", "document": {"type": "image_url", "image_url": _doc_url}}
-
-    async with _httpx.AsyncClient(timeout=60) as client:
-        _r = await client.post(
-            "https://api.mistral.ai/v1/ocr",
-            headers={"Authorization": f"Bearer {_mkey}", "Content-Type": "application/json"},
-            json=_payload
-        )
-        if _r.status_code != 200:
-            raise HTTPException(_r.status_code, f"Erreur OCR Mistral : {_r.text[:200]}")
-        _res = _r.json()
-
-    # Extraire le texte des pages
-    _pages = _res.get("pages") or []
-    if _pages:
-        _text = "\n\n".join(p.get("markdown") or p.get("text") or '' for p in _pages)
-    else:
-        _text = _res.get("text") or _res.get("markdown") or ""
-
-    return {"text": _text[:8000], "name": file.filename, "method": "mistral_ocr"}
-
 # ── MISTRAL BATCH ───────────────────────────────────────────────────────────────────────────────
 
 class MistralBatchSubmitReq(BaseModel):
@@ -4744,11 +4687,22 @@ async def mistral_ocr(file: UploadFile = File(None), url: str = Form(default="")
     """
     OCR via mistral-ocr-latest.
     Accepte un fichier upload (PDF ou image) OU une URL distante.
+    Les fichiers texte sont renvoyés directement (sans appel OCR).
     Retourne le texte extrait en Markdown.
     """
     import base64 as _b64, httpx as _httpx
     from core.database import get_api_keys as _gak
     _mkey = (_gak().get("mistral") or "").strip()
+    if not _mkey:
+        # Repli : contexte utilisateur non initialisé (ex. appel hors session active)
+        try:
+            from core.database import _load_users, set_user_context
+            _us = _load_users()
+            if _us:
+                set_user_context(_us[0]['id'])
+                _mkey = (_gak().get("mistral") or "").strip()
+        except Exception:
+            pass
     if not _mkey:
         raise HTTPException(400, "Clé API Mistral non configurée.")
 
@@ -4765,7 +4719,12 @@ async def mistral_ocr(file: UploadFile = File(None), url: str = Form(default="")
             _doc_type = "image_url"
             _doc_key = "image_url"
         else:
-            raise HTTPException(400, "Format non supporté : PDF ou image (jpg, png, webp, gif, bmp, tiff).")
+            # Fichier texte / code : retour direct sans OCR
+            try:
+                _txt = _data.decode("utf-8", errors="replace")
+            except Exception:
+                _txt = _data.decode("latin-1", errors="replace")
+            return {"text": _txt, "name": file.filename, "pages": 0, "method": "text"}
         _b64_str = _b64.b64encode(_data).decode()
         _doc_url = f"data:{_mime};base64,{_b64_str}"
     elif url.strip():
@@ -4797,9 +4756,70 @@ async def mistral_ocr(file: UploadFile = File(None), url: str = Form(default="")
             raise HTTPException(_r.status_code, f"Erreur OCR Mistral : {_r.text[:300]}")
         _res = _r.json()
 
-    _pages = _res.get("pages", [])
-    _text = "\n\n".join(p.get("markdown", "") for p in _pages).strip()
-    return {"text": _text, "pages": len(_pages), "model": "mistral-ocr-latest"}
+    _pages = _res.get("pages", []) or []
+    _text = "\n\n".join((p.get("markdown") or p.get("text") or "") for p in _pages).strip()
+    if not _text:
+        _text = (_res.get("text") or _res.get("markdown") or "").strip()
+    _name_out = file.filename if (file and file.filename) else url.strip()
+    return {"text": _text, "name": _name_out, "pages": len(_pages), "model": "mistral-ocr-latest", "method": "mistral_ocr"}
+
+
+@app.post("/api/vibe/upload-doc")
+async def vibe_upload_doc(file: UploadFile = File(...)):
+    """Mode Vibe : upload d'un document vers l'API Files de Mistral (purpose=ocr).
+    Retourne file_id + filename ; le fichier est attache a la conversation via une
+    URL signee. Supprimable via DELETE /api/vibe/file/{file_id} (RGPD)."""
+    import httpx as _httpx
+    from core.database import get_api_keys as _gak
+    _mkey = (_gak().get("mistral") or "").strip()
+    if not _mkey:
+        try:
+            from core.database import _load_users, set_user_context
+            _us = _load_users()
+            if _us:
+                set_user_context(_us[0]['id'])
+                _mkey = (_gak().get("mistral") or "").strip()
+        except Exception:
+            pass
+    if not _mkey:
+        raise HTTPException(400, "Cle API Mistral non configuree.")
+    _data = await file.read()
+    _fname = file.filename or "document"
+    try:
+        async with _httpx.AsyncClient(timeout=180) as _c:
+            _r = await _c.post(
+                "https://api.mistral.ai/v1/files",
+                headers={"Authorization": f"Bearer {_mkey}"},
+                files={"file": (_fname, _data, file.content_type or "application/octet-stream")},
+                data={"purpose": "ocr"},
+            )
+        if _r.status_code != 200:
+            raise HTTPException(_r.status_code, f"Erreur upload Mistral : {_r.text[:300]}")
+        _j = _r.json()
+    except HTTPException:
+        raise
+    except Exception as _e:
+        raise HTTPException(502, f"Erreur upload Mistral : {_e}")
+    return {"file_id": _j.get("id", ""), "filename": _fname}
+
+
+@app.delete("/api/vibe/file/{file_id}")
+async def vibe_delete_file(file_id: str):
+    """Mode Vibe : supprime un document uploade chez Mistral (RGPD)."""
+    import httpx as _httpx
+    from core.database import get_api_keys as _gak
+    _mkey = (_gak().get("mistral") or "").strip()
+    if not _mkey:
+        return {"deleted": False, "reason": "no_key"}
+    try:
+        async with _httpx.AsyncClient(timeout=30) as _c:
+            _r = await _c.delete(
+                f"https://api.mistral.ai/v1/files/{file_id}",
+                headers={"Authorization": f"Bearer {_mkey}"},
+            )
+        return {"deleted": _r.status_code == 200, "status": _r.status_code}
+    except Exception as _e:
+        return {"deleted": False, "reason": str(_e)[:200]}
 
 
 @app.post("/api/upload")
