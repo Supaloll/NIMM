@@ -187,11 +187,22 @@ async function _loadAgentMode(threadId) {
         var d = await r.json();
         _setAgentMode(d.agent_mode || '', false);
     } catch (e) { _setAgentMode('', false); }
+    _refreshVibeButtonVisibility();
 }
 
 document.querySelectorAll('.agent-mode-btn').forEach(function(btn) {
     btn.addEventListener('click', function() { _setAgentMode(btn.dataset.mode); });
 });
+
+// Le bouton Vibe n'est visible que si une clé Mistral est enregistrée (Vibe = Mistral cloud européen).
+async function _refreshVibeButtonVisibility(keys) {
+    var btn = document.getElementById('agent-btn-vibe');
+    if (!btn) return;
+    try {
+        if (!keys) keys = await fetch('/api/settings/api-keys').then(function(r) { return r.json(); });
+        btn.hidden = !(keys && keys.mistral);
+    } catch (e) { btn.hidden = true; }
+}
 
 function _splitSentences(text) {
     // 1. Convertir les \n littéraux en vrais sauts de ligne
@@ -4553,6 +4564,8 @@ function _updatePixtralModelVisibility(visionProvider) {
 }
 
 function _applyProviderConstraints(keys) {
+    // Bouton Vibe visible uniquement si une clé Mistral est enregistrée.
+    _refreshVibeButtonVisibility(keys);
     // 1. Désactiver les options sans clé
     document.querySelectorAll('.routing-select option[data-needs-key]').forEach(opt => {
         const needed  = opt.dataset.needsKey;
@@ -11211,3 +11224,4 @@ init();
         } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
     });
 })();
+          
