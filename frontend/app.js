@@ -8241,19 +8241,18 @@ async function loadCosts() {
             grid.innerHTML = '<p style="color:var(--text-muted);padding:12px;">Aucun fournisseur configuré.</p>';
             return;
         }
-        grid.innerHTML = d.wallets.map(w => _renderWalletCard(w)).join('');
+        _ensureCostTableStyle();
+        grid.innerHTML = _renderCostTable(d.wallets);
         _setupCostActions();
 
         // Crédit restant en temps réel — chargement non bloquant, en plus
         fetch('/api/costs/credits').then(r => r.json()).then(cd => {
             const credits = cd.credits || {};
             for (const [provider, info] of Object.entries(credits)) {
-                const card = grid.querySelector(`.cost-card[data-provider="${provider}"]`);
-                if (!card || !info.available) continue;
-                const detail = document.createElement('div');
-                detail.className = 'cost-detail';
-                detail.innerHTML = `Crédit restant : <strong>${info.balance} ${info.currency}</strong>`;
-                card.appendChild(detail);
+                const cell = grid.querySelector(`td.cost-credit[data-provider="${provider}"]`);
+                if (!cell || !info.available) continue;
+                cell.innerHTML = `<strong>${info.balance} ${info.currency}</strong>`;
+                cell.setAttribute('aria-label', `Crédit API restant : ${info.balance} ${info.currency}`);
             }
         }).catch(() => {});
     } catch(e) {
@@ -8261,55 +8260,93 @@ async function loadCosts() {
     }
 }
 
-function _renderWalletCard(w) {
-    const icons = {
-        anthropic: '🔴', deepseek: '🟢', gemini: '🟡', openai: '🔴',
-        openrouter: '🟠', mistral: '🔵', ollama: '🟢', brave: '🔵'
-    };
-    const icon = icons[w.provider] || '⚪';
-    let content = '';
+const _COST_ICONS = {
+    anthropic: '🔴', deepseek: '🟢', gemini: '🟡', openai: '🔴',
+    openrouter: '🟠', mistral: '🔵', ollama: '🟢', brave: '🔵', tavily: '🟣'
+};
 
-    if (w.wallet_type === 'tirelire') {
-        const pct     = w.solde_depart > 0 ? Math.min(100, Math.round((w.solde_restant / w.solde_depart) * 100)) : 0;
-        const restant = (w.solde_restant || 0).toFixed(2);
-        const depart  = (w.solde_depart  || 0).toFixed(2);
-        const color   = pct > 50 ? 'var(--accent)' : pct > 20 ? '#f0a500' : '#e05555';
-        content = `
-            <div class="cost-bar-wrap">
-                <div class="cost-bar" style="width:${pct}%;background:${color};"></div>
-            </div>
-            <div class="cost-detail">Solde : <strong>${restant} €</strong> / ${depart} €</div>
-            <div class="cost-detail">Tokens : ${_fmtNum(w.tokens_in_total)} in · ${_fmtNum(w.tokens_out_total)} out</div>
-            <div class="cost-actions">
-                <button class="cost-btn" data-action="solde" data-provider="${w.provider}" data-solde="${w.solde_depart}">✏️ Solde</button>
-                <button class="cost-btn" data-action="rates" data-provider="${w.provider}" data-rate-in="${w.rate_in}" data-rate-out="${w.rate_out}">✏️ Tarifs</button>
-                <button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}">🔄 Reset</button>
-            </div>`;
+// Injecte une seule fois le style du tableau des coûts (évite de toucher styles.css).
+function _ensureCostTableStyle() {
+    if (document.getElementById('cost-table-style')) return;
+    const st = document.createElement('style');
+    st.id = 'cost-table-style';
+    st.textContent = `
+        .cost-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+        .cost-table caption { text-align:left; color:var(--text-muted); font-size:0.8rem; padding:0 0 8px; }
+        .cost-table th, .cost-table td { border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top; }
+        .cost-table thead th { background:var(--bg-secondary); }
+        .cost-table tbody th[scope="row"] { font-weight:600; white-space:nowrap; }
+        .cost-table td { white-space:nowrap; }
+        .cost-table .cost-num { text-align:right; font-variant-numeric:tabular-nums; }
+        .cost-table .cost-btn { font-size:0.75rem; padding:2px 6px; margin:1px; border:1px solid var(--border); border-radius:5px; background:var(--bg-input); color:var(--text); cursor:pointer; }`;
+    document.head.appendChild(st);
+}
 
-    } else if (w.wallet_type === 'compteur_tokens') {
-        content = `
-            <div class="cost-detail">Tokens : ${_fmtNum(w.tokens_in_total)} in · ${_fmtNum(w.tokens_out_total)} out</div>
-            <div class="cost-detail cost-muted">Depuis le ${_fmtDate(w.last_reset)}</div>
-            <div class="cost-actions">
-                <button class="cost-btn" data-action="rates" data-provider="${w.provider}" data-rate-in="${w.rate_in}" data-rate-out="${w.rate_out}">✏️ Tarifs</button>
-                <button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}">🔄 Reset</button>
-            </div>`;
+// Coût estimé € = (tokens_in × tarif_in + tokens_out × tarif_out) / 1M.
+function _walletEstCost(w) {
+    return ((w.tokens_in_total || 0) * (w.rate_in || 0)
+          + (w.tokens_out_total || 0) * (w.rate_out || 0)) / 1_000_000;
+}
 
-    } else {
-        // compteur_requetes (Gemini, Brave)
-        content = `
-            <div class="cost-detail">Requêtes : <strong>${_fmtNum(w.requests_total)}</strong></div>
-            <div class="cost-detail cost-muted">Depuis le ${_fmtDate(w.last_reset)}</div>
-            <div class="cost-actions">
-                <button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}">🔄 Reset</button>
-            </div>`;
-    }
+function _renderCostTable(wallets) {
+    const rows = wallets.map(w => {
+        const icon   = _COST_ICONS[w.provider] || '⚪';
+        const estStr = _formatCostEur(_walletEstCost(w)) || '0 €';
+        const solde  = w.wallet_type === 'tirelire'
+            ? `${(w.solde_restant || 0).toFixed(2).replace('.', ',')} € / ${(w.solde_depart || 0).toFixed(2).replace('.', ',')} €`
+            : '—';
+        const toks   = `${_fmtNum(w.tokens_in_total)} / ${_fmtNum(w.tokens_out_total)}`;
+        const reqs   = w.wallet_type === 'compteur_requetes' ? _fmtNum(w.requests_total) : '—';
+        const rates  = `${(w.rate_in || 0)} / ${(w.rate_out || 0)}`;
+        const depuis = _fmtDate(w.last_reset);
+
+        let actions = '';
+        if (w.wallet_type === 'tirelire') {
+            actions =
+                `<button class="cost-btn" data-action="solde" data-provider="${w.provider}" data-solde="${w.solde_depart}" aria-label="Modifier le solde de ${w.display_name}">✏️ Solde</button> ` +
+                `<button class="cost-btn" data-action="rates" data-provider="${w.provider}" data-rate-in="${w.rate_in}" data-rate-out="${w.rate_out}" aria-label="Modifier les tarifs de ${w.display_name}">✏️ Tarifs</button> ` +
+                `<button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}" aria-label="Réinitialiser les compteurs de ${w.display_name}">🔄 Reset</button>`;
+        } else if (w.wallet_type === 'compteur_tokens') {
+            actions =
+                `<button class="cost-btn" data-action="rates" data-provider="${w.provider}" data-rate-in="${w.rate_in}" data-rate-out="${w.rate_out}" aria-label="Modifier les tarifs de ${w.display_name}">✏️ Tarifs</button> ` +
+                `<button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}" aria-label="Réinitialiser les compteurs de ${w.display_name}">🔄 Reset</button>`;
+        } else {
+            actions =
+                `<button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}" aria-label="Réinitialiser les compteurs de ${w.display_name}">🔄 Reset</button>`;
+        }
+
+        return `
+            <tr data-provider="${w.provider}">
+                <th scope="row">${icon} ${w.display_name}</th>
+                <td class="cost-num">${estStr}</td>
+                <td class="cost-num">${solde}</td>
+                <td class="cost-credit cost-num" data-provider="${w.provider}">—</td>
+                <td class="cost-num">${toks}</td>
+                <td class="cost-num">${reqs}</td>
+                <td class="cost-num">${rates}</td>
+                <td>${depuis}</td>
+                <td>${actions}</td>
+            </tr>`;
+    }).join('');
 
     return `
-        <div class="cost-card" data-provider="${w.provider}">
-            <div class="cost-card-header">${icon} <strong>${w.display_name}</strong></div>
-            ${content}
-        </div>`;
+        <table class="cost-table">
+            <caption>Dépenses estimées par fournisseur. Tokens et tarifs au format « entrée / sortie » ; tarifs en dollars par million de tokens.</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Fournisseur</th>
+                    <th scope="col">Coût estimé</th>
+                    <th scope="col">Solde</th>
+                    <th scope="col">Crédit API</th>
+                    <th scope="col">Tokens (entrée / sortie)</th>
+                    <th scope="col">Requêtes</th>
+                    <th scope="col">Tarifs $/1M (entrée / sortie)</th>
+                    <th scope="col">Depuis</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>`;
 }
 
 function _fmtNum(n) {
@@ -11224,4 +11261,3 @@ init();
         } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
     });
 })();
-          
