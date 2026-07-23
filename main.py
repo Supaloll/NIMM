@@ -1621,6 +1621,30 @@ async def coanimm_repair(req: CoanimmRepairRequest):
         return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
 
 
+class CoanimmCritiqueRequest(BaseModel):
+    consigne: str = ""
+    code: str = ""
+    stdout: str = ""
+    stderr: str = ""
+    returncode: int = 0
+    files: Optional[List[str]] = None
+    thread_id: Optional[str] = None
+    override_provider: Optional[str] = None
+
+@app.post("/api/coanimm/critique")
+async def coanimm_critique(req: CoanimmCritiqueRequest):
+    """Critique le RÉSULTAT d'une exécution réussie : répond-il à la consigne ?
+    Utilisé par la boucle agentique côté interface après un returncode nul.
+    Fail-open : verdict "ok" si la critique est indisponible."""
+    from modules.coanimm import critique_result
+    if not (req.consigne or "").strip():
+        return {"verdict": "ok", "motif": "", "conseil": ""}
+    result = {"status": "ok", "stdout": req.stdout or "", "stderr": req.stderr or "",
+              "returncode": req.returncode or 0, "files_list": req.files or []}
+    return await critique_result(req.consigne, req.code or "", result,
+                                 req.thread_id, provider_override=req.override_provider)
+
+
 @app.post("/api/coanimm/generate_image")
 async def coanimm_generate_image_endpoint(req: CoanimmGenerateImageRequest):
     """Génère une image via le provider configuré et la sauvegarde dans le workspace CoaNIMM."""
