@@ -9444,6 +9444,13 @@ function _renderCoanimmSkills(prompts) {
             desc.textContent = meta.description;
             li.appendChild(desc);
         }
+        const _rok = parseInt(meta.runs_ok || 0, 10), _rerr = parseInt(meta.runs_err || 0, 10);
+        if (_rok + _rerr > 0) {
+            const fiab = document.createElement('div');
+            fiab.style.cssText = 'color:var(--text-muted);font-size:0.8rem;margin:2px 0;';
+            fiab.textContent = 'Fiabilité : ' + _rok + ' réussite' + (_rok > 1 ? 's' : '') + ', ' + _rerr + ' échec' + (_rerr > 1 ? 's' : '') + '.';
+            li.appendChild(fiab);
+        }
         const actions = document.createElement('div');
         actions.style.cssText = 'display:flex;gap:8px;margin-top:4px;';
         const edit = document.createElement('button');
@@ -10199,6 +10206,57 @@ function _coanimmShowPreview(code, confirmScope) {
     setTimeout(() => { if (title) title.focus(); }, 60);
 }
 
+// ── Critique du résultat (boucle agentique) : après un run réussi, vérifie que le
+// résultat répond à la consigne ; si insuffisant, corrige et relance (borné par
+// COANIMM_MAX_REPAIR). Renvoie true si une relance a été lancée (l'appelant s'arrête).
+async function _coanimmCritiqueAndRetry(code, stdoutText, filesList, repairAttempt, confirmScope) {
+    if (!_coanimmCurrentConsigne || !_coanimmCurrentConsigne.trim()) return false; // exécution directe : pas de critique
+    const statusEl = document.getElementById('coanimm-result-status');
+    try {
+        const r = await fetch('/api/coanimm/critique', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                consigne: _coanimmCurrentConsigne,
+                code,
+                stdout: (stdoutText || '').slice(-4000),
+                returncode: 0,
+                files: (filesList || []).map(f => (f.filename || '') + ' (' + (f.size || 0) + ' octets)'),
+                thread_id: currentThreadId || null,
+                override_provider: _coanimmOverrideProvider || null,
+            }),
+        });
+        const d = await r.json();
+        if (!d || d.verdict !== 'insuffisant') return false;
+        const motif = d.motif || 'le résultat semble incomplet par rapport à la consigne';
+        if (repairAttempt >= COANIMM_MAX_REPAIR) {
+            _coanimmAnnounce('Vérification du résultat : ' + motif + '. Limite de corrections automatiques atteinte, résultat conservé tel quel.');
+            return false;
+        }
+        if (statusEl) statusEl.textContent = '🐸 Résultat jugé insuffisant — correction (' + (repairAttempt + 1) + '/' + COANIMM_MAX_REPAIR + ')…';
+        _coanimmAnnounce('Vérification du résultat : ' + motif + '. Correction automatique en cours, tentative ' + (repairAttempt + 1) + ' sur ' + COANIMM_MAX_REPAIR + '.');
+        const rr = await fetch('/api/coanimm/repair', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                code,
+                error_output: "Le script s'est exécuté sans erreur (code retour 0) mais le résultat ne répond pas à la consigne : " + motif + (d.conseil ? ' Conseil : ' + d.conseil : ''),
+                consigne: _coanimmCurrentConsigne,
+                thread_id: currentThreadId || null,
+                override_provider: _coanimmOverrideProvider || null,
+            }),
+        });
+        const dr = await rr.json();
+        if (dr.status === 'ok' && dr.code && dr.code.trim()) {
+            const ce = document.getElementById('coanimm-result-code');
+            if (ce) { ce.value = dr.code; document.getElementById('coanimm-result-code-box')?.classList.remove('hidden'); }
+            await runCoanimmExecuteCode(dr.code, confirmScope || 'once', repairAttempt + 1);
+            return true;
+        }
+    } catch (e) { console.error('[COANIMM] Critique du résultat ignorée :', e); }
+    return false;
+}
+
 async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allowRisky = false, onceCaps = null, skipPreview = false) {
     document.getElementById('coanimm-permission').classList.add('hidden');
     if (!skipPreview && repairAttempt === 0) {
@@ -10429,6 +10487,8 @@ async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allo
                             setTimeout(() => { if (ann) ann.setAttribute('aria-live','polite'); }, 3000);
                         } else {
                             _coanimmAnnounce(evt.summary || 'Terminé avec succès.');
+                            const _critiqueRelance = await _coanimmCritiqueAndRetry(code, stdoutEl.value, evt.files_list || [], repairAttempt, confirmScope);
+                            if (_critiqueRelance) return;
                         }
                         _coanimmMaybeShowSavePanel(code, rc === 0);
                         _coanimmSetBusy(false);
