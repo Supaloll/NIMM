@@ -9745,12 +9745,47 @@ async function _runCoanimmWorkflow(wfId, label) {
     if (!resultDiv) return;
     resultDiv.style.display = 'block';
     resultDiv.textContent = `Exécution du ricochet « ${label} »…`;
+    _coanimmAnnounce(`Lancement du ricochet ${label}.`);
 
     try {
-        const r = await fetch(`/api/coanimm/workflows/${wfId}/run?thread_id=${encodeURIComponent(currentThreadId || '')}`, {
+        const r = await fetch(`/api/coanimm/workflows/${wfId}/run_stream?thread_id=${encodeURIComponent(currentThreadId || '')}`, {
             method: 'POST',
         });
-        const data = await r.json();
+        if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let finalData = null;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const parts = buf.split('\n\n');
+            buf = parts.pop();
+            for (const part of parts) {
+                const line = part.trim();
+                if (!line.startsWith('data: ')) continue;
+                const payload = line.slice(6);
+                if (payload === '[DONE]') continue;
+                let evt;
+                try { evt = JSON.parse(payload); } catch (_e) { continue; }
+                if (evt.type === 'step_start') {
+                    resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} : ${evt.label}…`;
+                    _coanimmAnnounce(`Étape ${evt.index} sur ${evt.total} : ${evt.label}.`);
+                } else if (evt.type === 'step_repair') {
+                    resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} : échec, correction automatique…`;
+                    _coanimmAnnounce(`Étape ${evt.index} : le script a échoué, correction automatique en cours.`);
+                } else if (evt.type === 'step_critique') {
+                    resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} : résultat insuffisant, correction…`;
+                    _coanimmAnnounce(`Étape ${evt.index} : résultat jugé insuffisant${evt.motif ? ' (' + evt.motif + ')' : ''}. Correction automatique en cours.`);
+                } else if (evt.type === 'step_done' && evt.status === 'ok') {
+                    _coanimmAnnounce(`Étape ${evt.index} sur ${evt.total} terminée.`);
+                } else if (evt.type === 'done') {
+                    finalData = evt;
+                }
+            }
+        }
+        const data = finalData || { status: 'error', message: 'Flux interrompu sans résultat final.' };
         let html = `<strong>${data.status === 'ok' ? '✓' : '✗'} ${_escHtml(data.message || '')}</strong>`;
         if (Array.isArray(data.steps) && data.steps.length) {
             html += '<ul style="margin:6px 0 0;padding-left:1.2em;">';
@@ -9765,8 +9800,10 @@ async function _runCoanimmWorkflow(wfId, label) {
         }
         if (data.files_info) html += `<p style="margin:6px 0 0;font-size:0.82rem;">${_escHtml(data.files_info)}</p>`;
         resultDiv.innerHTML = html;
+        _coanimmAnnounce(data.status === 'ok' ? (data.message || 'Ricochet terminé.') : ('Échec du ricochet : ' + (data.message || '')));
     } catch (e) {
         resultDiv.textContent = `Erreur réseau lors de l'exécution du ricochet.`;
+        _coanimmAnnounce("Erreur réseau lors de l'exécution du ricochet.");
     }
 }
 
