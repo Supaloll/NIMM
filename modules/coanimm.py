@@ -1745,15 +1745,42 @@ def list_workflows() -> list:
     return out
 
 
+async def adapt_step_code(code: str, consigne: str, parametre: str,
+                          thread_id: str = None, provider_override: str = None) -> str:
+    """Adapte un script de bond validé à l'ENTRÉE fournie au lancement du workflow
+    (sujet, chemin de fichier, URL, texte libre) SANS changer la méthode.
+
+    Réutilise generate_code (nettoyage + filet anti-troncature). Le script adapté
+    n'est jamais persisté, et _execute re-classifie ses capacités : une adaptation
+    qui introduirait une capacité non accordée serait refusée à l'exécution."""
+    message = (
+        "Voici un script Python VALIDÉ qui réalise la tâche suivante :\n"
+        f"{(consigne or '').strip()}\n\n"
+        "Script validé :\n"
+        f"{code}\n\n"
+        "L'utilisateur relance cette tâche avec l'ENTRÉE suivante (sujet, chemin de "
+        "fichier, URL ou texte libre) :\n"
+        f"{(parametre or '').strip()[:2000]}\n\n"
+        "Adapte le script pour traiter CETTE entrée, en conservant strictement la même "
+        "méthode et les mêmes fonctions nimm_*. N'ajoute AUCUN nouvel import ni aucune "
+        "nouvelle capacité (réseau, sous-processus, e-mail). Si le script traite déjà "
+        "cette entrée telle quelle, renvoie-le inchangé. "
+        "Ne réexplique pas : renvoie seulement le script Python complet."
+    )
+    return await generate_code(message, thread_id, provider_override)
+
+
 WORKFLOW_STEP_MAX_ITERATIONS = 2  # exécutions max d'une même étape (1 essai + 1 réparation)
 
 
-async def run_workflow_stream(workflow_id: str, thread_id: str = None):
+async def run_workflow_stream(workflow_id: str, thread_id: str = None,
+                              parametre: str = ''):
     """Moteur de workflow STREAMÉ : générateur async d'événements (dicts).
 
     Événements émis :
       {'type':'start', 'label', 'total'}
       {'type':'step_start', 'index', 'total', 'label'}
+      {'type':'step_adapt', 'index', 'total', 'label'}               (adaptation à l'entrée)
       {'type':'step_repair', 'index', 'total', 'label', 'attempt'}   (échec → réparation)
       {'type':'step_critique', 'index', 'total', 'label', 'motif'}   (résultat insuffisant → correction)
       {'type':'step_done', 'index', 'total', 'label', 'status', 'files_count'}
@@ -1833,6 +1860,20 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None):
             except Exception as _ae:
                 print(f"[COANIMM-WF] Auto-audit ignoré étape {i + 1} : {_ae}")
 
+        # ── Adaptation du script à l'entrée fournie au lancement (facultative) ──
+        consigne_effective = consigne
+        if (parametre or '').strip():
+            consigne_effective = f"{consigne} (entrée fournie : {parametre.strip()[:500]})"
+            yield {'type': 'step_adapt', 'index': i + 1, 'total': total, 'label': elabel}
+            try:
+                adapted = await adapt_step_code(code, consigne, parametre, thread_id)
+                if adapted.strip() and _check_syntax(adapted) is None:
+                    code = adapted
+                else:
+                    print(f"[COANIMM-WF] Adaptation invalide étape {i + 1} : script d'origine conservé.")
+            except Exception as _ad_err:
+                print(f"[COANIMM-WF] Adaptation ignorée étape {i + 1} : {_ad_err}")
+
         # ── Boucle agentique bornée pour CETTE étape ──
         result = None
         step_files = []
@@ -1864,7 +1905,7 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None):
                                             'size': os.path.getsize(_f.get('path', ''))})
                     except OSError:
                         _files_desc.append({'filename': _f.get('filename', ''), 'size': 0})
-                critique = await critique_result(consigne, code,
+                critique = await critique_result(consigne_effective, code,
                                                  dict(result, files_list=_files_desc), thread_id)
                 result['critique'] = critique
                 if critique.get('verdict') != 'insuffisant' or attempt >= WORKFLOW_STEP_MAX_ITERATIONS:
@@ -1876,7 +1917,7 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None):
                        'label': elabel, 'motif': critique.get('motif', '')}
 
             try:
-                new_code = await repair_code(code, feedback, consigne, thread_id)
+                new_code = await repair_code(code, feedback, consigne_effective, thread_id)
             except Exception as _rep_err:
                 print(f"[COANIMM-WF] Réparation impossible étape {i + 1} : {_rep_err}")
                 break
@@ -1919,14 +1960,15 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None):
            'files_count': len(all_new_files)}
 
 
-async def run_workflow(workflow_id: str, thread_id: str = None) -> dict:
+async def run_workflow(workflow_id: str, thread_id: str = None,
+                       parametre: str = '') -> dict:
     """Exécute un workflow et retourne le résultat final complet (non streamé).
 
     Simple enveloppe de run_workflow_stream : même moteur, mêmes garanties
     (réparation/critique par étape, arrêt-sur-erreur, capacités pré-accordées).
     Conservée pour la route POST /api/coanimm/workflows/{id}/run et les tests."""
     final = {'status': 'error', 'message': 'Workflow non exécuté.'}
-    async for evt in run_workflow_stream(workflow_id, thread_id):
+    async for evt in run_workflow_stream(workflow_id, thread_id, parametre=parametre):
         if evt.get('type') == 'done':
             final = {k: v for k, v in evt.items() if k != 'type'}
     return final

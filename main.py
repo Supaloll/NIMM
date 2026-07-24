@@ -3219,23 +3219,34 @@ async def coanimm_workflows_save(req: CoanimmWorkflowRequest):
     return save_workflow(req.label or "", req.etapes or [])
 
 @app.post("/api/coanimm/workflows/{workflow_id}/run")
-async def coanimm_workflows_run(workflow_id: str, thread_id: str = ""):
-    """Exécute un workflow pas à pas."""
+async def coanimm_workflows_run(workflow_id: str, thread_id: str = "", parametre: str = ""):
+    """Exécute un workflow pas à pas (non streamé). `parametre` facultatif :
+    entrée injectée dans chaque étape par adaptation du script validé."""
     from modules.coanimm import run_workflow
-    return await run_workflow(workflow_id, thread_id or None)
+    return await run_workflow(workflow_id, thread_id or None, parametre=parametre or "")
+
+class CoanimmWfRunReq(BaseModel):
+    thread_id: Optional[str] = None
+    parametre: Optional[str] = None  # entrée facultative : sujet, fichier, URL, texte libre
 
 @app.post("/api/coanimm/workflows/{workflow_id}/run_stream")
-async def coanimm_workflows_run_stream(workflow_id: str, thread_id: str = ""):
+async def coanimm_workflows_run_stream(workflow_id: str, thread_id: str = "",
+                                       req: Optional[CoanimmWfRunReq] = None):
     """Exécute un workflow en diffusant la progression étape par étape (SSE) :
-    step_start / step_repair / step_critique / step_done / done. Même moteur et
-    mêmes garanties que POST /run (qui reste disponible)."""
+    step_start / step_adapt / step_repair / step_critique / step_done / done.
+    Body JSON facultatif {thread_id, parametre} : l'entrée est injectée dans
+    chaque étape par adaptation LLM du script validé (jamais persistée).
+    Même moteur et mêmes garanties que POST /run (qui reste disponible)."""
     from fastapi.responses import StreamingResponse as SR
     from modules.coanimm import run_workflow_stream
     import json as _json
 
+    _tid = (req.thread_id if req and req.thread_id else thread_id) or None
+    _param = (req.parametre if req and req.parametre else "") or ""
+
     async def _gen():
         try:
-            async for evt in run_workflow_stream(workflow_id, thread_id or None):
+            async for evt in run_workflow_stream(workflow_id, _tid, parametre=_param):
                 yield "data: " + _json.dumps(evt, ensure_ascii=False) + "\n\n"
         except Exception as e:
             yield "data: " + _json.dumps({"type": "done", "status": "error",
