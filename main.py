@@ -3224,6 +3224,27 @@ async def coanimm_workflows_run(workflow_id: str, thread_id: str = ""):
     from modules.coanimm import run_workflow
     return await run_workflow(workflow_id, thread_id or None)
 
+@app.post("/api/coanimm/workflows/{workflow_id}/run_stream")
+async def coanimm_workflows_run_stream(workflow_id: str, thread_id: str = ""):
+    """Exécute un workflow en diffusant la progression étape par étape (SSE) :
+    step_start / step_repair / step_critique / step_done / done. Même moteur et
+    mêmes garanties que POST /run (qui reste disponible)."""
+    from fastapi.responses import StreamingResponse as SR
+    from modules.coanimm import run_workflow_stream
+    import json as _json
+
+    async def _gen():
+        try:
+            async for evt in run_workflow_stream(workflow_id, thread_id or None):
+                yield "data: " + _json.dumps(evt, ensure_ascii=False) + "\n\n"
+        except Exception as e:
+            yield "data: " + _json.dumps({"type": "done", "status": "error",
+                                          "message": f"Erreur interne : {e}"},
+                                         ensure_ascii=False) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    return SR(_gen(), media_type="text/event-stream")
+
 @app.delete("/api/coanimm/workflows/{workflow_id}")
 async def coanimm_workflows_delete(workflow_id: str):
     """Supprime un workflow."""
