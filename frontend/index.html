@@ -1097,6 +1097,11 @@ Analyse les sentiments de : ..."
             <!-- Liste des workflows existants -->
             <ul id="coanimm-workflows-list" style="list-style:none;padding:0;margin:0 0 10px;font-size:0.82rem;" aria-label="Ricochets enregistrés"></ul>
             <!-- Résultat d'exécution d'un workflow -->
+            <div style="margin:0 0 8px;">
+                <label for="coanimm-wf-input" style="display:block;font-size:0.82rem;margin-bottom:4px;">Entrée du ricochet (facultatif : sujet, fichier, lien ou texte — appliquée au prochain lancement)</label>
+                <input type="text" id="coanimm-wf-input" autocomplete="off"
+                       style="width:100%;box-sizing:border-box;font-size:0.85rem;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);" />
+            </div>
             <div id="coanimm-wf-result" role="status" aria-live="polite" style="display:none;margin-bottom:8px;"></div>
             <!-- Composer un nouveau workflow -->
             <details id="coanimm-wf-compose-details" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
@@ -1778,7 +1783,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260724-wf-stream"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260724-wf-param"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
