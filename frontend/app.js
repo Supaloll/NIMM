@@ -9185,6 +9185,21 @@ function _renderCoanimmHistory(list) {
         });
         li.appendChild(cb);
         li.appendChild(btn);
+        if (item.kind === 'workflow' && item.workflow_id) {
+            const rerun = document.createElement('button');
+            rerun.type = 'button';
+            rerun.textContent = '↻ Relancer';
+            const entree = (item.parametre || '').trim();
+            rerun.setAttribute('aria-label', 'Relancer ce ricochet' + (entree ? ' avec la même entrée : ' + entree.slice(0, 80) : ''));
+            rerun.style.cssText = 'font-size:0.78rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;white-space:nowrap;';
+            rerun.addEventListener('click', () => {
+                const inp = document.getElementById('coanimm-wf-input');
+                if (inp) inp.value = entree;
+                const wfLabel = (item.consigne || '').replace(/^\[Ricochet\]\s*/, '').split(' — entrée :')[0];
+                _runCoanimmWorkflow(item.workflow_id, wfLabel || 'ricochet');
+            });
+            li.appendChild(rerun);
+        }
         ul.appendChild(li);
     });
 }

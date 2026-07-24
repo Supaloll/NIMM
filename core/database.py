@@ -2193,8 +2193,10 @@ def list_coanimm_history() -> list:
         return []
 
 def add_coanimm_history(consigne: str, status: str = 'ok', summary: str = '',
-                        returncode=None, files_count: int = 0) -> list:
-    """Ajoute une tâche au journal CoaNIMM. Retourne la liste à jour (plafonnée)."""
+                        returncode=None, files_count: int = 0, extra: dict = None) -> list:
+    """Ajoute une tâche au journal CoaNIMM. Retourne la liste à jour (plafonnée).
+    `extra` : champs additionnels fusionnés dans l'entrée (ex. workflow_id, parametre
+    pour permettre de relancer un ricochet depuis l'historique)."""
     consigne = (consigne or '').strip()
     if not consigne:
         return list_coanimm_history()
@@ -2208,6 +2210,8 @@ def add_coanimm_history(consigne: str, status: str = 'ok', summary: str = '',
         'returncode': returncode,
         'files_count': int(files_count or 0),
     }
+    for k, v in (extra or {}).items():
+        entry.setdefault(k, v)
     hist.insert(0, entry)
     hist = hist[:_COANIMM_HISTORY_MAX]
     set_setting('coanimm_history', json.dumps(hist, ensure_ascii=False))
