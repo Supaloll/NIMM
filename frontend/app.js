@@ -9783,6 +9783,7 @@ async function _runCoanimmWorkflow(wfId, label) {
                     resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} terminée.`;
                 } else if (evt.type === 'done') {
                     finalData = evt;
+                    loadCoanimmHistory().catch(() => {});
                 }
             }
         }

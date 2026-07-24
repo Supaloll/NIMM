@@ -1773,6 +1773,34 @@ async def adapt_step_code(code: str, consigne: str, parametre: str,
 WORKFLOW_STEP_MAX_ITERATIONS = 2  # exécutions max d'une même étape (1 essai + 1 réparation)
 
 
+def _log_workflow_run(wf: dict, parametre: str, status: str, message: str,
+                      files_count: int = 0, returncode=None) -> None:
+    """Journalise une exécution de ricochet dans l'historique des tâches ET le
+    journal de sécurité. Silencieux : ne casse jamais l'exécution."""
+    label = (wf or {}).get('label', '') or 'ricochet'
+    try:
+        consigne = f"[Ricochet] {label}"
+        if (parametre or '').strip():
+            consigne += f" — entrée : {parametre.strip()[:150]}"
+        db.add_coanimm_history(consigne, status, (message or '')[:400],
+                               returncode=returncode, files_count=files_count)
+    except Exception as e:
+        print(f"[COANIMM-WF] Historique ignoré : {e}")
+    try:
+        import modules.coanimm_safety as _safety
+        caps = (wf or {}).get('meta', {}).get('capacites', [])
+        db.add_coanimm_security_log({
+            'status': 'ok' if status == 'ok' else 'erreur',
+            'workflow': label,
+            'steps': len((wf or {}).get('meta', {}).get('etapes', [])),
+            'capabilities': [_safety.CAPABILITY_LABELS.get(c, c) for c in caps],
+            'files': files_count,
+            'reasons': [] if status == 'ok' else [(message or '')[:200]],
+        })
+    except Exception as e:
+        print(f"[COANIMM-WF] Journal de sécurité ignoré : {e}")
+
+
 async def run_workflow_stream(workflow_id: str, thread_id: str = None,
                               parametre: str = ''):
     """Moteur de workflow STREAMÉ : générateur async d'événements (dicts).
@@ -1809,10 +1837,12 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None,
     _wf_caps = set(wf.get('meta', {}).get('capacites', [])) & {'reseau', 'programme', 'email'}
     _missing_caps = _wf_caps - _granted
     if _missing_caps:
+        _msg_caps = ("Ce workflow requiert des capacités non autorisées : "
+                     + ', '.join(sorted(_missing_caps))
+                     + ". Autorise-les dans « Capacités autorisées en exécution » avant de le lancer.")
+        _log_workflow_run(wf, parametre, 'error', _msg_caps)
         yield {'type': 'done', 'status': 'error',
-               'message': ("Ce workflow requiert des capacités non autorisées : "
-                           + ', '.join(sorted(_missing_caps))
-                           + ". Autorise-les dans « Capacités autorisées en exécution » avant de le lancer."),
+               'message': _msg_caps,
                'missing_capabilities': sorted(_missing_caps)}
         return
 
@@ -1831,6 +1861,8 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None,
         if sid not in skills:
             steps_results.append({'label': elabel, 'status': 'error',
                                    'error': f"Skill introuvable : {sid}"})
+            _log_workflow_run(wf, parametre, 'error',
+                              f"Arrêt sur l'étape « {elabel} » : skill introuvable.")
             yield {'type': 'done', 'status': 'error',
                    'message': f"Arrêt sur l'étape « {elabel} » : skill introuvable.",
                    'steps': steps_results}
@@ -1843,6 +1875,8 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None,
         if not code.strip():
             steps_results.append({'label': elabel, 'status': 'error',
                                    'error': "Ce skill n'a pas de script exécutable enregistré."})
+            _log_workflow_run(wf, parametre, 'error',
+                              f"Arrêt sur l'étape « {elabel} » : skill sans script exécutable.")
             yield {'type': 'done', 'status': 'error',
                    'message': (f"Arrêt sur l'étape « {elabel} » : ce skill n'a pas de script "
                                f"exécutable enregistré (recrée-le pour l'utiliser dans un workflow)."),
@@ -1939,6 +1973,8 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None,
                         'steps': steps_results}
             if result.get('missing_capabilities'):
                 done_evt['missing_capabilities'] = result['missing_capabilities']
+            _log_workflow_run(wf, parametre, 'error', done_evt['message'],
+                              returncode=result.get('returncode'))
             yield done_evt
             return
 
@@ -1952,6 +1988,9 @@ async def run_workflow_stream(workflow_id: str, thread_id: str = None,
     if all_new_files:
         files_info, files_list = _route_new_files(all_new_files, thread_id)
 
+    _log_workflow_run(wf, parametre,
+                      'ok', f"Terminé ({total} étapes).",
+                      files_count=len(all_new_files), returncode=0)
     yield {'type': 'done', 'status': 'ok',
            'message': f"Workflow « {wf.get('label', '')} » terminé ({total} étapes).",
            'steps': steps_results,
