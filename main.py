@@ -1624,6 +1624,71 @@ async def coanimm_repair(req: CoanimmRepairRequest):
         return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
 
 
+# ── Serveurs MCP distants (connecteur Anthropic) ──
+
+class McpServerReq(BaseModel):
+    name: str = ""
+    url: str = ""
+    jeton: Optional[str] = None
+
+@app.get("/api/mcp/servers")
+async def mcp_servers_list():
+    """Serveurs MCP configurés. Les jetons ne sont JAMAIS renvoyés (seul un
+    booléen indique qu'un jeton est enregistré)."""
+    import core.database as _db
+    return {"servers": _db.list_mcp_servers(), "is_owner": _db.is_current_user_admin()}
+
+@app.post("/api/mcp/servers")
+async def mcp_servers_add(req: McpServerReq):
+    """Ajoute un serveur MCP distant (réservé au propriétaire : un serveur MCP
+    peut exposer des outils qui agissent au nom de l'utilisateur)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut ajouter un serveur MCP.")
+    url = (req.url or "").strip()
+    if not url.startswith("https://"):
+        raise HTTPException(400, "L'adresse doit commencer par https:// (connexion chiffrée exigée).")
+    return {"status": "ok", "servers": _db.add_mcp_server(req.name or "", url, req.jeton or "")}
+
+@app.post("/api/mcp/servers/{server_id}/toggle")
+async def mcp_servers_toggle(server_id: str):
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut modifier un serveur MCP.")
+    return {"status": "ok", "servers": _db.toggle_mcp_server(server_id)}
+
+@app.delete("/api/mcp/servers/{server_id}")
+async def mcp_servers_delete(server_id: str):
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut supprimer un serveur MCP.")
+    return {"status": "ok", "servers": _db.remove_mcp_server(server_id)}
+
+class CoanimmPdfVisualReq(BaseModel):
+    path: str = ""
+    question: Optional[str] = None
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/read_pdf_visual")
+async def coanimm_read_pdf_visual(req: CoanimmPdfVisualReq):
+    """Lecture VISUELLE d'un PDF par Claude (mise en page, tableaux, figures, pages
+    scannées) — complète l'extraction de texte locale, qui ne voit que le texte."""
+    import core.database as _db, os as _os
+    if "read_pdf_visual" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil « lire un PDF visuellement » désactivé dans le catalogue.]"}
+    p = _os.path.abspath(_os.path.expanduser((req.path or "").strip()))
+    if not p or not _os.path.isfile(p):
+        return {"result": f"[PDF introuvable : {req.path}]"}
+    if _os.path.getsize(p) > 32 * 1024 * 1024:
+        return {"result": "[PDF trop volumineux (> 32 Mo) : découpe-le avec nimm_split_pdf.]"}
+    from core.engine import analyze_pdf_anthropic
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    with open(p, "rb") as fh:
+        data = fh.read()
+    return {"result": await analyze_pdf_anthropic(data, req.question or "",
+                                                  api_keys=settings.get("api_keys", {}))}
+
 @app.get("/api/models/{provider}")
 async def models_list(provider: str, force: bool = False):
     """Modèles réellement disponibles chez le fournisseur (interrogation + cache 1 h).
@@ -2431,6 +2496,7 @@ _COANIMM_TOOLS = [
     {"tool": "read_url", "label": "Lire une page web", "category": "Recherche & web"},
     {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
+    {"tool": "read_pdf_visual", "label": "Lire un PDF visuellement (mise en page, tableaux, scans)", "category": "Documents"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},
@@ -4663,6 +4729,123 @@ async def mistral_batch_submit(req: MistralBatchSubmitReq):
         job_r.raise_for_status()
         job = job_r.json()
     return {"job_id": job["id"], "status": job.get("status"), "file_id": file_id}
+
+# ── Traitement par lots Anthropic (−50 % sur les tokens, résultat différé) ──
+
+class AnthropicBatchSubmitReq(BaseModel):
+    prompts: list
+    model: Optional[str] = None
+    max_tokens: int = 1024
+    temperature: float = 0.7
+    system: Optional[str] = None
+
+def _anthropic_batch_headers():
+    from core.database import get_api_keys
+    key = (get_api_keys().get('anthropic') or '').strip()
+    if not key:
+        raise HTTPException(400, "Clé Anthropic non configurée")
+    return {"x-api-key": key, "anthropic-version": "2023-06-01",
+            "content-type": "application/json"}
+
+@app.post("/api/anthropic/batch/submit")
+async def anthropic_batch_submit(req: AnthropicBatchSubmitReq):
+    """Soumet un lot de requêtes à l'API Message Batches (moitié prix, traitement
+    asynchrone). Chaque élément de `prompts` est une chaîne ou {system, user}."""
+    import httpx
+    from core.engine import _PROVIDER_DEFAULT_MODEL
+    if not req.prompts:
+        raise HTTPException(400, "Aucune requête à envoyer.")
+    modele = req.model or _PROVIDER_DEFAULT_MODEL['anthropic']
+    requetes = []
+    for i, p in enumerate(req.prompts):
+        sys_p, user_p = req.system or "", p
+        if isinstance(p, dict):
+            sys_p = p.get("system") or sys_p
+            user_p = p.get("user", "")
+        params = {"model": modele, "max_tokens": req.max_tokens,
+                  "temperature": req.temperature,
+                  "messages": [{"role": "user", "content": str(user_p)}]}
+        if sys_p:
+            params["system"] = sys_p
+        requetes.append({"custom_id": f"req_{i}", "params": params})
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post("https://api.anthropic.com/v1/messages/batches",
+                              headers=_anthropic_batch_headers(),
+                              json={"requests": requetes})
+        r.raise_for_status()
+        data = r.json()
+    return {"batch_id": data.get("id"), "status": data.get("processing_status"),
+            "total": len(requetes)}
+
+@app.get("/api/anthropic/batch/status/{batch_id}")
+async def anthropic_batch_status(batch_id: str):
+    """Avancement d'un lot Anthropic."""
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(f"https://api.anthropic.com/v1/messages/batches/{batch_id}",
+                             headers=_anthropic_batch_headers())
+        r.raise_for_status()
+        data = r.json()
+    c = data.get("request_counts", {}) or {}
+    return {"batch_id": batch_id, "status": data.get("processing_status"),
+            "succeeded": c.get("succeeded", 0), "errored": c.get("errored", 0),
+            "processing": c.get("processing", 0), "canceled": c.get("canceled", 0),
+            "expired": c.get("expired", 0), "results_url": data.get("results_url")}
+
+@app.get("/api/anthropic/batch/results/{batch_id}")
+async def anthropic_batch_results(batch_id: str):
+    """Résultats d'un lot terminé. L'ordre n'est PAS garanti : on réordonne
+    d'après custom_id pour retrouver l'ordre des requêtes soumises."""
+    import httpx, json as _json
+    async with httpx.AsyncClient(timeout=120) as client:
+        s = await client.get(f"https://api.anthropic.com/v1/messages/batches/{batch_id}",
+                             headers=_anthropic_batch_headers())
+        s.raise_for_status()
+        info = s.json()
+        if info.get("processing_status") != "ended":
+            return {"status": info.get("processing_status"), "results": [],
+                    "message": "Le lot est encore en cours de traitement."}
+        url = info.get("results_url")
+        if not url:
+            return {"status": "ended", "results": [], "message": "Aucun résultat disponible."}
+        r = await client.get(url, headers=_anthropic_batch_headers())
+        r.raise_for_status()
+        brut = r.text
+    sorties = []
+    for ligne in brut.splitlines():
+        ligne = ligne.strip()
+        if not ligne:
+            continue
+        try:
+            o = _json.loads(ligne)
+        except Exception:
+            continue
+        res = o.get("result", {}) or {}
+        texte, erreur = "", ""
+        if res.get("type") == "succeeded":
+            msg = res.get("message", {}) or {}
+            texte = "".join(b.get("text", "") for b in msg.get("content", [])
+                            if b.get("type") == "text")
+        else:
+            erreur = str((res.get("error") or {}).get("message") or res.get("type") or "échec")
+        sorties.append({"custom_id": o.get("custom_id", ""), "text": texte, "error": erreur})
+    def _rang(e):
+        try:
+            return int(str(e["custom_id"]).rsplit("_", 1)[-1])
+        except (ValueError, KeyError):
+            return 1 << 30
+    sorties.sort(key=_rang)
+    return {"status": "ended", "results": sorties}
+
+@app.delete("/api/anthropic/batch/{batch_id}")
+async def anthropic_batch_cancel(batch_id: str):
+    """Annule un lot en cours."""
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(f"https://api.anthropic.com/v1/messages/batches/{batch_id}/cancel",
+                              headers=_anthropic_batch_headers())
+        r.raise_for_status()
+        return {"status": "ok", "batch": r.json().get("processing_status")}
 
 @app.get("/api/mistral/batch/status/{job_id}")
 async def mistral_batch_status(job_id: str):

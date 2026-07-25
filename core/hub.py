@@ -2027,6 +2027,62 @@ async def _check_moderation(text: str, api_keys: dict) -> dict:
         print(f'[HUB] Moderation check failed: {_e}')
         return {'blocked': False, 'categories': {}, 'violated': []}
 
+async def _search_via_anthropic(query: str, api_keys: dict) -> str:
+    """Recherche web via l'outil serveur natif d'Anthropic.
+
+    Anthropic exécute lui-même les recherches et cite ses sources. Les citations
+    sont ré-encodées au format `[NIMM_CITATIONS]` de la voie Mistral, ce qui permet
+    de réutiliser telle quelle la plomberie SSE et l'affichage accessible.
+    """
+    import httpx as _httpx
+    _akey = (api_keys.get('anthropic') or '').strip()
+    if not _akey:
+        raise ValueError("Clé API Anthropic manquante pour la recherche web.")
+    from core.engine import _PROVIDER_DEFAULT_MODEL
+    _payload = {
+        'model': _PROVIDER_DEFAULT_MODEL['anthropic'],
+        'max_tokens': 2048,
+        'messages': [{'role': 'user', 'content': query}],
+        'tools': [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 5}],
+    }
+    async with _httpx.AsyncClient(timeout=60) as _c:
+        _r = await _c.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={'x-api-key': _akey, 'anthropic-version': '2023-06-01',
+                     'content-type': 'application/json'},
+            json=_payload)
+        _r.raise_for_status()
+        _data = _r.json()
+
+    _texte, _cits, _vus = [], [], set()
+    for _b in _data.get('content', []):
+        if _b.get('type') != 'text':
+            continue
+        _texte.append(_b.get('text', ''))
+        for _c2 in (_b.get('citations') or []):
+            _url = _c2.get('url', '')
+            if _url and _url not in _vus:
+                _vus.add(_url)
+                _cits.append({'url': _url, 'title': _c2.get('title') or _url,
+                              'snippet': (_c2.get('cited_text') or '')[:200]})
+    try:
+        from core.engine import _log, _anthropic_billable_input
+        _u = _data.get('usage', {})
+        _log('anthropic', _payload['model'], _anthropic_billable_input(_u),
+             _u.get('output_tokens', 0), 'websearch')
+        _nb = (_u.get('server_tool_use') or {}).get('web_search_requests', 0)
+        if _nb:
+            print(f"[HUB] Recherche web Anthropic : {_nb} requete(s) serveur facturee(s).")
+    except Exception:
+        pass
+
+    _content = '\n'.join(t for t in _texte if t).strip()
+    if _cits:
+        import json as _jc
+        _content += f'\n\n[NIMM_CITATIONS]{_jc.dumps(_cits, ensure_ascii=False)}'
+    return _content or '[Aucun resultat]'
+
+
 async def _search_via_mistral(query: str, api_keys: dict) -> str:
     """
     Recherche web via l'outil natif Mistral web_search.
@@ -2479,14 +2535,17 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             # Vérifier le routing : Mistral ou Brave/Tavily
             _ws_routing = _load_provider_routing().get('web_search', {})
             _ws_provider = _ws_routing.get('provider', '') if isinstance(_ws_routing, dict) else ''
-            if _ws_provider == 'mistral':
+            if _ws_provider in ('mistral', 'anthropic'):
                 try:
                     from core.database import get_api_keys as _gak
                     _ws_keys = _gak()
                 except Exception:
                     _ws_keys = {}
-                result = await _search_via_mistral(query, _ws_keys)
-                print(f"[HUB] 🔵 Tool search_web (Mistral) {query!r} → {len(result or '')} chars")
+                if _ws_provider == 'anthropic':
+                    result = await _search_via_anthropic(query, _ws_keys)
+                else:
+                    result = await _search_via_mistral(query, _ws_keys)
+                print(f"[HUB] 🔵 Tool search_web ({_ws_provider}) {query!r} → {len(result or '')} chars")
                 # Extraire les citations encodees et les stocker pour SSE
                 import re as _re_cit, json as _jc2
                 _m = _re_cit.search(r'\[NIMM_CITATIONS\](.*)', result or '')

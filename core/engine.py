@@ -23,6 +23,29 @@ def _anthropic_cache_enabled() -> bool:
         return True
 
 
+def _anthropic_mcp_servers() -> list:
+    """Serveurs MCP distants actifs, au format attendu par le connecteur.
+
+    Anthropic se connecte lui-même aux serveurs et expose leurs outils au modèle.
+    Renvoie [] si aucun n'est configuré : dans ce cas AUCUN champ n'est ajouté au
+    payload, et rien ne change pour les autres fournisseurs.
+    """
+    try:
+        from core.database import list_mcp_servers
+        out = []
+        for s in list_mcp_servers(inclure_jeton=True):
+            if not s.get('actif', True) or not s.get('url'):
+                continue
+            srv = {'type': 'url', 'url': s['url'], 'name': s.get('name', 'mcp')}
+            if s.get('jeton'):
+                srv['authorization_token'] = s['jeton']
+            out.append(srv)
+        return out
+    except Exception as e:
+        print(f"[ENGINE] Serveurs MCP ignorés : {e}")
+        return []
+
+
 def _anthropic_billable_input(usage: dict) -> int:
     """Tokens d'entrée FACTURABLES, exprimés en équivalent « tokens plein tarif ».
 
@@ -148,6 +171,50 @@ async def count_tokens(provider: str, text: str, model: str = None, api_keys: di
             print(f"[ENGINE] Comptage de tokens Gemini indisponible : {e}")
             return -1
     return -1
+
+
+async def analyze_pdf_anthropic(pdf_bytes: bytes, question: str = '', model: str = None,
+                                api_keys: dict = None, max_tokens: int = 4000) -> str:
+    """Envoie un PDF NATIVEMENT à Claude (compréhension VISUELLE de la page).
+
+    Différent de l'extraction de texte locale : le modèle voit la mise en page, les
+    tableaux, les schémas et le texte des pages scannées. Précieux pour décrire un
+    document à quelqu'un qui ne le voit pas. Anthropic uniquement.
+    """
+    api_key = get_api_key('anthropic', api_keys)
+    if not api_key:
+        return "[PDF : cle Anthropic non configuree — utilise l'extraction locale ou l'OCR.]"
+    import base64 as _b64
+    model = _resolve_model('anthropic', model)
+    consigne = (question or '').strip() or (
+        "Décris ce document de façon structurée et accessible : titre, plan, contenu des "
+        "tableaux et des figures. Sois factuel et complet.")
+    payload = {
+        'model': model,
+        'max_tokens': max_tokens,
+        'messages': [{'role': 'user', 'content': [
+            {'type': 'document',
+             'source': {'type': 'base64', 'media_type': 'application/pdf',
+                        'data': _b64.standard_b64encode(pdf_bytes).decode()}},
+            {'type': 'text', 'text': consigne},
+        ]}],
+    }
+    if _anthropic_cache_enabled():
+        payload['cache_control'] = {'type': 'ephemeral'}
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post(
+                'https://api.anthropic.com/v1/messages',
+                headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+                         'content-type': 'application/json'},
+                json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return f"[PDF : lecture visuelle impossible ({e})]"
+    usage = data.get('usage', {})
+    _log('anthropic', model, _anthropic_billable_input(usage), usage.get('output_tokens', 0), 'pdf')
+    return ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
 
 
 async def count_tokens_anthropic(messages: list, model: str = None, system_prompt: str = None,
@@ -396,6 +463,9 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
         payload['tools'] = _oai_tools_to_anthropic(tools)
     if _anthropic_cache_enabled():
         payload['cache_control'] = {'type': 'ephemeral'}
+    _mcp = _anthropic_mcp_servers()
+    if _mcp:
+        payload['mcp_servers'] = _mcp
     if output_schema:
         # Décodage contraint : la réponse est un JSON valide conforme au schéma.
         payload['output_config'] = {'format': {'type': 'json_schema', 'schema': output_schema}}
@@ -412,6 +482,7 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
                 'x-api-key':         api_key,
                 'anthropic-version': '2023-06-01',
                 'content-type':      'application/json',
+                **({'anthropic-beta': 'mcp-client-2025-11-20'} if _mcp else {}),
             },
             json=payload
         )
