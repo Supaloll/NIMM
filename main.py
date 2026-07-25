@@ -3318,6 +3318,22 @@ async def coanimm_schedules_toggle(sched_id: str):
                     "schedules": _db.update_coanimm_schedule(sched_id, actif=not s.get('actif', True))}
     raise HTTPException(404, "Planification introuvable.")
 
+@app.post("/api/coanimm/schedules/notifications")
+async def coanimm_schedules_notifications():
+    """Exécutions planifiées terminées et pas encore annoncées. Les marque comme
+    annoncées (lecture unique) : l'interface les lit à voix haute une seule fois.
+    POST car la lecture consomme les notifications."""
+    import core.database as _db
+    pending = []
+    for s in _db.list_coanimm_schedules():
+        if s.get('notifie') is False and s.get('dernier_statut') not in ('', 'en cours', None):
+            pending.append({"label": s.get('label', ''),
+                            "statut": s.get('dernier_statut', ''),
+                            "message": s.get('dernier_message', ''),
+                            "quand": s.get('dernier_run', '')})
+            _db.update_coanimm_schedule(s.get('id', ''), notifie=True)
+    return {"notifications": pending}
+
 @app.delete("/api/coanimm/schedules/{sched_id}")
 async def coanimm_schedules_delete(sched_id: str):
     """Supprime une planification (réservé au propriétaire)."""

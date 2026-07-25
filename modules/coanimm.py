@@ -1911,10 +1911,13 @@ async def schedule_worker():
                 try:
                     res = await run_workflow(s.get('workflow_id', ''), None,
                                              parametre=s.get('parametre', '') or '')
-                    db.update_coanimm_schedule(sid, dernier_statut=res.get('status', 'error'))
+                    db.update_coanimm_schedule(sid, dernier_statut=res.get('status', 'error'),
+                                               dernier_message=(res.get('message') or '')[:300],
+                                               notifie=False)
                 except Exception as e:
                     print(f"[COANIMM-SCHED] Erreur d'exécution : {e}")
-                    db.update_coanimm_schedule(sid, dernier_statut='error')
+                    db.update_coanimm_schedule(sid, dernier_statut='error',
+                                               dernier_message=str(e)[:300], notifie=False)
         except Exception as e:
             print(f"[COANIMM-SCHED] Tick ignoré : {e}")
         await _asyncio.sleep(SCHEDULER_TICK_SECONDS)

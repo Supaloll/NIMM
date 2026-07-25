@@ -9696,6 +9696,28 @@ async function _toggleCoanimmCapability(cap, grant) {
 
 let _coanimmWfSteps = []; // [{skill_id, label}]
 
+// ── Annonce des ricochets planifiés qui se sont exécutés en arrière-plan ──
+// La zone aria-live est hors du panneau CoaNIMM : l'annonce fonctionne même
+// panneau fermé. Lecture unique côté serveur (les notifications sont consommées).
+const _COANIMM_NOTIF_INTERVAL_MS = 90000;
+
+async function _coanimmPollScheduleNotifications() {
+    try {
+        const r = await fetch('/api/coanimm/schedules/notifications', { method: 'POST' });
+        const d = await r.json();
+        (d.notifications || []).forEach(n => {
+            const quand = (n.quand || '').replace('T', ' à ').slice(0, 16);
+            const verdict = n.statut === 'ok' ? 'a réussi' : 'a échoué';
+            _coanimmAnnounce(`Ricochet planifié « ${n.label} » ${verdict}`
+                + (quand ? ` (${quand})` : '') + '.'
+                + (n.statut !== 'ok' && n.message ? ' ' + n.message : ''));
+        });
+        if ((d.notifications || []).length) loadCoanimmSchedules().catch(() => {});
+    } catch (e) { /* silencieux : pas de bruit si le serveur ne répond pas */ }
+}
+setInterval(_coanimmPollScheduleNotifications, _COANIMM_NOTIF_INTERVAL_MS);
+setTimeout(_coanimmPollScheduleNotifications, 5000);
+
 // ── Ricochets planifiés ──
 const _JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 
