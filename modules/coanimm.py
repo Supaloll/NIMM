@@ -1338,6 +1338,11 @@ async def critique_result(consigne: str, code: str, result: dict,
     (la critique ne doit jamais bloquer un résultat).
     Retourne {'verdict': 'ok'|'insuffisant', 'motif': str, 'conseil': str}.
     """
+    try:
+        if str(db.get_setting('coanimm_critique_active', '1')) in ('0', 'false', 'False'):
+            return {'verdict': 'ok', 'motif': '', 'conseil': '', 'desactive': True}
+    except Exception:
+        pass
     import core.engine as engine
     import core.hub as hub
     try:
@@ -1803,6 +1808,15 @@ def _log_workflow_run(wf: dict, parametre: str, status: str, message: str,
         })
     except Exception as e:
         print(f"[COANIMM-WF] Journal de sécurité ignoré : {e}")
+    try:
+        if workflow_id:
+            meta = dict((wf or {}).get('meta') or {})
+            key = 'runs_ok' if status == 'ok' else 'runs_err'
+            meta[key] = int(meta.get(key, 0)) + 1
+            db.save_prompt(workflow_id, (wf or {}).get('label', ''), (wf or {}).get('text', ''),
+                           type='workflow', meta=meta)
+    except Exception as e:
+        print(f"[COANIMM-WF] Fiabilité ricochet ignorée : {e}")
 
 
 async def run_workflow_stream(workflow_id: str, thread_id: str = None,

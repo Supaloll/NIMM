@@ -1621,6 +1621,21 @@ async def coanimm_repair(req: CoanimmRepairRequest):
         return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
 
 
+class CoanimmCritiqueToggleReq(BaseModel):
+    active: bool = True
+
+@app.get("/api/settings/coanimm-critique")
+async def coanimm_critique_get():
+    """Réglage : vérification du résultat après chaque exécution CoaNIMM (1 appel IA en plus)."""
+    import core.database as _db
+    return {"active": str(_db.get_setting("coanimm_critique_active", "1")) not in ("0", "false", "False")}
+
+@app.post("/api/settings/coanimm-critique")
+async def coanimm_critique_set(req: CoanimmCritiqueToggleReq):
+    import core.database as _db
+    _db.set_setting("coanimm_critique_active", "1" if req.active else "0")
+    return {"status": "ok", "active": req.active}
+
 class CoanimmCritiqueRequest(BaseModel):
     consigne: str = ""
     code: str = ""
