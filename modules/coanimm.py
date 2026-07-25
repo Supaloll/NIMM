@@ -1015,6 +1015,24 @@ async def run_script_agentique(script_id: str, args: list = None, thread_id: str
     return result
 
 
+CODE_THINKING_BUDGET = 4000  # tokens de réflexion pour générer/réparer un script
+
+
+def _thinking_budget() -> int:
+    """Budget de réflexion étendue pour l'écriture de code (0 = désactivée).
+
+    Réglage `coanimm_thinking_active`, actif par défaut : réfléchir avant d'écrire
+    améliore surtout les RÉPARATIONS (analyser une erreur puis corriger). Ignoré
+    par les providers qui ne gèrent pas la réflexion étendue.
+    """
+    try:
+        if str(db.get_setting('coanimm_thinking_active', '1')) in ('0', 'false', 'False'):
+            return 0
+    except Exception:
+        pass
+    return CODE_THINKING_BUDGET
+
+
 async def generate_code(consigne: str, thread_id: str = None,
                          provider_override: str = None) -> str:
     """Demande au LLM de générer un script Python à partir d'une consigne.
@@ -1041,6 +1059,7 @@ async def generate_code(consigne: str, thread_id: str = None,
             max_tokens=16000,
             temperature=0.2,
             api_keys=settings['api_keys'],
+            thinking_budget=_thinking_budget(),
         )
         return _strip_code_fences(response)
 
@@ -1404,6 +1423,24 @@ CRITIQUE_SYSTEM_PROMPT = (
 )
 
 
+# Schéma des sorties structurées : chez les providers qui le supportent (Anthropic),
+# la réponse est un JSON garanti conforme — le repli par expression régulière plus bas
+# reste en place pour les autres.
+CRITIQUE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'verdict': {'type': 'string', 'enum': ['ok', 'insuffisant'],
+                    'description': "ok si le résultat répond à la consigne, insuffisant sinon."},
+        'motif': {'type': 'string',
+                  'description': "Une phrase courte et claire, lisible par synthèse vocale. Vide si verdict ok."},
+        'conseil': {'type': 'string',
+                    'description': "Quoi changer dans le script pour y remédier. Vide si verdict ok."},
+    },
+    'required': ['verdict', 'motif', 'conseil'],
+    'additionalProperties': False,
+}
+
+
 async def critique_result(consigne: str, code: str, result: dict,
                           thread_id: str = None, provider_override: str = None) -> dict:
     """Critique le RÉSULTAT d'une exécution réussie : répond-il à la consigne ?
@@ -1448,6 +1485,7 @@ async def critique_result(consigne: str, code: str, result: dict,
             max_tokens=300,
             temperature=0.0,
             api_keys=settings['api_keys'],
+            output_schema=CRITIQUE_SCHEMA,
         )
         import json as _json
         import re as _re
