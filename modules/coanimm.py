@@ -941,6 +941,80 @@ def run_script(script_id: str, args: list = None, thread_id: str = None,
     return result
 
 
+SCRIPT_MAX_ITERATIONS = 2  # exécutions max d'un script enregistré (1 essai + 1 correction)
+
+
+async def run_script_agentique(script_id: str, args: list = None, thread_id: str = None,
+                               confirm_scope: str = None) -> dict:
+    """Exécute un script enregistré AVEC la boucle agentique (comme les consignes
+    libres et les ricochets) : réparation sur échec, vérification du résultat sur
+    succès, et remontée des fichiers produits.
+
+    `run_script()` reste inchangée (permissions + exécution simple) : c'est elle qui
+    fait le premier essai, donc la gestion de permission est strictement identique.
+    Le script CORRIGÉ n'est jamais réécrit en base — la version enregistrée par
+    l'utilisateur reste la référence.
+    """
+    workdir = _workspace_dir(thread_id)
+    before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
+
+    result = run_script(script_id, args, thread_id, confirm_scope)
+    if result.get('status') == 'permission_required' or 'script_id' not in result:
+        return result  # permission à accorder, script introuvable ou vide
+
+    entry = db.list_prompts('script').get(script_id) or {}
+    consigne = (entry.get('meta') or {}).get('consigne_origine') or entry.get('label') or script_id
+    code = entry.get('text', '')
+
+    for attempt in range(1, SCRIPT_MAX_ITERATIONS + 1):
+        if result.get('blocked') or result.get('needs_confirmation') or result.get('missing_capabilities'):
+            break
+        if result.get('status') == 'error' and 'Délai dépassé' in (result.get('message') or ''):
+            break
+
+        failed = (result.get('status') != 'ok') or (result.get('returncode', 0) != 0)
+        if failed:
+            if attempt >= SCRIPT_MAX_ITERATIONS:
+                break
+            feedback = ((result.get('message') or '') + '\n'
+                        + (result.get('stderr') or '') + '\n'
+                        + (result.get('stdout') or '')).strip()
+        else:
+            _new = _scan_new_files(workdir, before)
+            _desc = []
+            for _f in _new:
+                try:
+                    _desc.append({'filename': _f.get('filename', ''),
+                                  'size': os.path.getsize(_f.get('path', ''))})
+                except OSError:
+                    _desc.append({'filename': _f.get('filename', ''), 'size': 0})
+            critique = await critique_result(consigne, code,
+                                             dict(result, files_list=_desc), thread_id)
+            result['critique'] = critique
+            if critique.get('verdict') != 'insuffisant' or attempt >= SCRIPT_MAX_ITERATIONS:
+                break
+            feedback = ("Le script s'est exécuté sans erreur (code retour 0) mais le résultat "
+                        "ne répond pas à la consigne : " + (critique.get('motif') or '')
+                        + ((" Conseil : " + critique['conseil']) if critique.get('conseil') else ''))
+
+        try:
+            new_code = await repair_code(code, feedback, consigne, thread_id)
+        except Exception as _e:
+            print(f"[COANIMM] Correction du script impossible : {_e}")
+            break
+        if not new_code.strip() or _check_syntax(new_code) is not None:
+            break
+        code = new_code
+        result = _execute(code, args, workdir, thread_id)
+        result['script_id'] = script_id
+        result['code_corrige'] = code   # proposé à l'utilisateur, PAS enregistré
+
+    new_files = _scan_new_files(workdir, before)
+    result['files_info'], result['files_list'] = _route_new_files(new_files, thread_id)
+    result['files_count'] = len(new_files)
+    return result
+
+
 async def generate_code(consigne: str, thread_id: str = None,
                          provider_override: str = None) -> str:
     """Demande au LLM de générer un script Python à partir d'une consigne.
@@ -1190,6 +1264,35 @@ def _skill_haystack(sk: dict) -> str:
                      ' '.join(meta.get('mots_cles') or [])]).strip()
 
 
+def _bump_skill_stat(skill_id: str, ok: bool) -> None:
+    """Comptabilise une exécution de skill : meta['runs_ok'] / meta['runs_err'].
+    Silencieux en cas d'erreur — la statistique ne doit jamais casser une exécution."""
+    try:
+        skills = db.list_prompts('skill')
+        sk = (skills or {}).get(skill_id)
+        if not sk:
+            return
+        meta = dict(sk.get('meta') or {})
+        key = 'runs_ok' if ok else 'runs_err'
+        meta[key] = int(meta.get(key, 0)) + 1
+        db.save_prompt(skill_id, sk.get('label', ''), sk.get('text', ''),
+                       type='skill', meta=meta)
+    except Exception as e:
+        print(f"[COANIMM] Stat skill ignorée : {e}")
+
+
+def _skill_fiabilite(sk: dict) -> float:
+    """Fiabilité observée d'un skill, entre -1 (échoue toujours) et 1 (réussit toujours).
+    0 si jamais exécuté."""
+    meta = sk.get('meta') or {}
+    ok = int(meta.get('runs_ok', 0))
+    err = int(meta.get('runs_err', 0))
+    total = ok + err
+    if total <= 0:
+        return 0.0
+    return (ok - err) / float(total)
+
+
 def rank_skills(query: str, top_n: int = 1):
     """Classe les skills VALIDÉS par pertinence pour `query`.
     Essaie d'abord la similarité SÉMANTIQUE (embeddings « recherche par sens ») ;
@@ -1214,7 +1317,7 @@ def rank_skills(query: str, top_n: int = 1):
                 sv = _mem._embed(hay)
                 if sv is None:
                     continue
-                scored.append((sid, sk, float(_np.dot(qv, sv))))
+                scored.append((sid, sk, float(_np.dot(qv, sv)) + 0.05 * _skill_fiabilite(sk)))
             scored = [t for t in scored if t[2] >= 0.35]
             if scored:
                 scored.sort(key=lambda x: x[2], reverse=True)
@@ -1236,7 +1339,7 @@ def rank_skills(query: str, top_n: int = 1):
         hay = _skill_haystack(sk).lower()
         score = sum(1 for m in mots if m in hay)
         if score > 0:
-            scored.append((sid, sk, score))
+            scored.append((sid, sk, score + 0.5 * _skill_fiabilite(sk)))
     scored.sort(key=lambda x: x[2], reverse=True)
     return scored[:max(1, top_n)]
 
@@ -1281,6 +1384,82 @@ async def audit_against_skill(code: str, fiche_text: str, consigne: str = '',
         "Ne réexplique pas : renvoie seulement le script Python complet."
     )
     return await generate_code(message, thread_id, provider_override)
+
+
+AGENT_MAX_ITERATIONS = 3  # bornes de la boucle agentique de run_generated
+
+CRITIQUE_SYSTEM_PROMPT = (
+    "Tu es le vérificateur de CoaNIMM. On te donne la consigne de l'utilisateur, le script "
+    "Python exécuté, sa sortie et la liste des fichiers produits. Juge si le RÉSULTAT répond "
+    "réellement à la consigne.\n"
+    "Signes d'insuffisance : fichier attendu absent ou vide (0 octet), sortie vide alors que la "
+    "consigne demande une information, message signalant un repli ou un échec partiel, résultat "
+    "manifestement incomplet.\n"
+    "Sois indulgent : au moindre doute raisonnable, verdict \"ok\". Ne juge pas le style du code, "
+    "seulement le résultat.\n"
+    "Réponds UNIQUEMENT en JSON compact, sans texte autour : "
+    "{\"verdict\":\"ok\"} ou {\"verdict\":\"insuffisant\",\"motif\":\"…\",\"conseil\":\"…\"}. "
+    "motif : une phrase courte et claire, lisible par synthèse vocale. "
+    "conseil : quoi changer dans le script pour y remédier."
+)
+
+
+async def critique_result(consigne: str, code: str, result: dict,
+                          thread_id: str = None, provider_override: str = None) -> dict:
+    """Critique le RÉSULTAT d'une exécution réussie : répond-il à la consigne ?
+
+    Fail-open : en cas d'indisponibilité du LLM ou de réponse illisible, verdict "ok"
+    (la critique ne doit jamais bloquer un résultat).
+    Retourne {'verdict': 'ok'|'insuffisant', 'motif': str, 'conseil': str}.
+    """
+    try:
+        if str(db.get_setting('coanimm_critique_active', '1')) in ('0', 'false', 'False'):
+            return {'verdict': 'ok', 'motif': '', 'conseil': '', 'desactive': True}
+    except Exception:
+        pass
+    import core.engine as engine
+    import core.hub as hub
+    try:
+        settings = hub.load_settings(thread_id)
+        provider, model = hub.get_task_provider_model('coanimm', settings)
+        if provider_override:
+            provider, model = provider_override, None
+
+        files_desc = []
+        for f in (result.get('files_list') or []):
+            if isinstance(f, dict):
+                files_desc.append(f"{f.get('filename', '?')} ({f.get('size', 0)} octets)")
+            else:
+                files_desc.append(str(f))
+        message = (
+            f"Consigne de l'utilisateur :\n{(consigne or '').strip()[:2000]}\n\n"
+            f"Script exécuté :\n{(code or '')[:6000]}\n\n"
+            f"Code retour : {result.get('returncode', 0)}\n"
+            f"Sortie standard (fin) :\n{(result.get('stdout') or '')[-3000:]}\n"
+            f"Sortie d'erreur (fin) :\n{(result.get('stderr') or '')[-1000:]}\n"
+            f"Fichiers produits : {', '.join(files_desc) if files_desc else 'aucun'}\n\n"
+            "Le résultat répond-il à la consigne ? Réponds en JSON."
+        )
+        raw = await engine.call_llm(
+            messages=[{'role': 'user', 'content': message}],
+            provider=provider,
+            model=model,
+            system_prompt=CRITIQUE_SYSTEM_PROMPT,
+            max_tokens=300,
+            temperature=0.0,
+            api_keys=settings['api_keys'],
+        )
+        import json as _json
+        import re as _re
+        m = _re.search(r'\{.*\}', raw or '', _re.S)
+        data = _json.loads(m.group(0)) if m else {}
+        verdict = 'insuffisant' if str(data.get('verdict', 'ok')).strip().lower().startswith('insuf') else 'ok'
+        return {'verdict': verdict,
+                'motif': str(data.get('motif', ''))[:500],
+                'conseil': str(data.get('conseil', ''))[:500]}
+    except Exception as e:
+        print(f"[COANIMM] Critique du résultat indisponible : {e}")
+        return {'verdict': 'ok', 'motif': '', 'conseil': '', 'indisponible': True}
 
 
 async def generate_plan(consigne: str, thread_id: str = None,
@@ -1542,16 +1721,458 @@ async def run_generated(consigne: str, thread_id: str = None,
         except Exception as _e:
             print(f"[COANIMM] Auto-audit skill ignoré : {_e}")
 
+    # ── Boucle agentique bornée : exécuter → observer → réparer/critiquer → recommencer ──
     workdir = _workspace_dir(thread_id)
-    before  = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
-    result  = _execute(code, None, workdir, thread_id)
-    result['code'] = code
-    new_files = _scan_new_files(workdir, before)
-    result['files_info'], result['files_list'] = _route_new_files(new_files, thread_id)
-    result['files_count'] = len(new_files)
+    result = None
+    for _iter in range(1, AGENT_MAX_ITERATIONS + 1):
+        before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
+        result = _execute(code, None, workdir, thread_id)
+        result['code'] = code
+        new_files = _scan_new_files(workdir, before)
+        result['files_info'], result['files_list'] = _route_new_files(new_files, thread_id)
+        result['files_count'] = len(new_files)
+        result['iteration'] = _iter
+
+        # Refus de sécurité ou permission manquante : ne JAMAIS réessayer.
+        if result.get('blocked') or result.get('needs_confirmation') or result.get('missing_capabilities'):
+            break
+        # Délai dépassé : une relance recoûterait le délai complet.
+        if result.get('status') == 'error' and 'Délai dépassé' in (result.get('message') or ''):
+            break
+
+        failed = (result.get('status') != 'ok') or (result.get('returncode', 0) != 0)
+        if failed:
+            if _iter >= AGENT_MAX_ITERATIONS:
+                break
+            feedback = ((result.get('message') or '') + '\n'
+                        + (result.get('stderr') or '') + '\n'
+                        + (result.get('stdout') or '')).strip()
+            print(f"[COANIMM] Échec à l'itération {_iter} — réparation automatique…")
+        else:
+            critique = await critique_result(consigne, code, result, thread_id)
+            result['critique'] = critique
+            if critique.get('verdict') != 'insuffisant' or _iter >= AGENT_MAX_ITERATIONS:
+                break
+            feedback = ("Le script s'est exécuté sans erreur (code retour 0) mais le résultat "
+                        "ne répond pas à la consigne : " + (critique.get('motif') or '')
+                        + ((" Conseil : " + critique['conseil']) if critique.get('conseil') else ''))
+            print(f"[COANIMM] Résultat jugé insuffisant à l'itération {_iter} — correction…")
+
+        try:
+            new_code = await repair_code(code, feedback, consigne, thread_id)
+        except Exception as _rep_err:
+            print(f"[COANIMM] Réparation impossible : {_rep_err}")
+            break
+        if not new_code.strip() or _check_syntax(new_code) is not None:
+            break
+        code = new_code
     return result
 
 
 # ══════════════════════════════════════════════════════════════════════
 # WORKFLOWS — Étape 3 : séquences de skills rejouables
-# ════════════════════════════════════════════════════════�
+# ══════════════════════════════════════════════════════════════════════
+
+def save_workflow(label: str, etapes: list, thread_id: str = None) -> dict:
+    """Enregistre un workflow (séquence ordonnée de skills) dans la Promptothèque.
+
+    etapes : liste de dicts {skill_id, label}
+    Calcule l'union des capacités de toutes les étapes et la stocke dans meta.
+    Seuls les skills valide_par_laurent=True sont acceptés.
+    """
+    skills = db.list_prompts('skill')
+
+    etapes_valides = []
+    for e in etapes:
+        sid = e.get('skill_id', '')
+        if sid not in skills:
+            return {'status': 'error', 'message': f"Skill inconnu : {sid}"}
+        sk = skills[sid]
+        if not sk.get('meta', {}).get('valide_par_laurent', False):
+            return {'status': 'error',
+                    'message': f"Le skill « {sk.get('label', sid)} » n'est pas validé par Laurent."}
+        etapes_valides.append({'skill_id': sid, 'label': sk.get('label', sid)})
+
+    # Union des capacités de toutes les étapes
+    all_caps = set()
+    for e in etapes_valides:
+        sk = skills[e['skill_id']]
+        all_caps.update(sk.get('meta', {}).get('capacites', []))
+
+    meta = {
+        'etapes': etapes_valides,
+        'capacites': sorted(all_caps),
+        'valide_par_laurent': True,
+        'version': 1,
+    }
+    result = db.save_prompt(None, label, '', type='workflow', meta=meta)
+    return {'status': 'created', 'workflow': result}
+
+
+def list_workflows() -> list:
+    """Retourne la liste des workflows enregistrés, triés du plus récent au plus ancien."""
+    raw = db.list_prompts('workflow')
+    out = []
+    for wid, w in raw.items():
+        out.append({
+            'id': wid,
+            'label': w.get('label', ''),
+            'created_at': w.get('created_at', ''),
+            'meta': w.get('meta', {}),
+        })
+    out.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    return out
+
+
+async def adapt_step_code(code: str, consigne: str, parametre: str,
+                          thread_id: str = None, provider_override: str = None) -> str:
+    """Adapte un script de bond validé à l'ENTRÉE fournie au lancement du workflow
+    (sujet, chemin de fichier, URL, texte libre) SANS changer la méthode.
+
+    Réutilise generate_code (nettoyage + filet anti-troncature). Le script adapté
+    n'est jamais persisté, et _execute re-classifie ses capacités : une adaptation
+    qui introduirait une capacité non accordée serait refusée à l'exécution."""
+    message = (
+        "Voici un script Python VALIDÉ qui réalise la tâche suivante :\n"
+        f"{(consigne or '').strip()}\n\n"
+        "Script validé :\n"
+        f"{code}\n\n"
+        "L'utilisateur relance cette tâche avec l'ENTRÉE suivante (sujet, chemin de "
+        "fichier, URL ou texte libre) :\n"
+        f"{(parametre or '').strip()[:2000]}\n\n"
+        "Adapte le script pour traiter CETTE entrée, en conservant strictement la même "
+        "méthode et les mêmes fonctions nimm_*. N'ajoute AUCUN nouvel import ni aucune "
+        "nouvelle capacité (réseau, sous-processus, e-mail). Si le script traite déjà "
+        "cette entrée telle quelle, renvoie-le inchangé. "
+        "Ne réexplique pas : renvoie seulement le script Python complet."
+    )
+    return await generate_code(message, thread_id, provider_override)
+
+
+WORKFLOW_STEP_MAX_ITERATIONS = 2  # exécutions max d'une même étape (1 essai + 1 réparation)
+
+
+SCHEDULER_TICK_SECONDS = 30
+
+
+def schedule_due(sched: dict, now=None) -> bool:
+    """PURE et testable : la planification `sched` est-elle due à l'instant `now` ?
+
+    Règles : inactif → jamais ; jour (None = tous, 0 = lundi … 6 = dimanche) doit
+    correspondre ; due si now >= heure:minute du jour ET pas déjà exécutée pour
+    cette échéance (dernier_run >= échéance du jour). Si NIMM était éteint à
+    l'heure prévue, l'exécution RATTRAPE au démarrage suivant le même jour.
+    """
+    import datetime as _dt
+    now = now or _dt.datetime.now()
+    if not sched.get('actif', True):
+        return False
+    jour = sched.get('jour', None)
+    if jour is not None and int(jour) != now.weekday():
+        return False
+    try:
+        h = int(sched.get('heure', 0))
+        m = int(sched.get('minute', 0))
+    except (TypeError, ValueError):
+        return False
+    target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if now < target:
+        return False
+    dr = (sched.get('dernier_run') or '').strip()
+    if dr:
+        try:
+            if _dt.datetime.fromisoformat(dr) >= target:
+                return False  # déjà exécutée pour cette échéance
+        except ValueError:
+            pass
+    return True
+
+
+async def schedule_worker():
+    """Boucle de fond : lance les ricochets planifiés à leur échéance.
+
+    dernier_run est posé AVANT l'exécution (anti double-déclenchement pendant un
+    run long) ; dernier_statut reflète le résultat. Les exécutions passent par
+    run_workflow → mêmes garanties et journalisation que les autres lancements.
+    """
+    import asyncio as _asyncio
+    import datetime as _dt
+    print("[COANIMM-SCHED] Planificateur de ricochets démarré.")
+    while True:
+        try:
+            for s in db.list_coanimm_schedules():
+                if not schedule_due(s):
+                    continue
+                sid = s.get('id', '')
+                print(f"[COANIMM-SCHED] Échéance : {s.get('label', '')} ({sid[:8]})")
+                db.update_coanimm_schedule(sid,
+                                           dernier_run=_dt.datetime.now().isoformat(timespec='seconds'),
+                                           dernier_statut='en cours')
+                try:
+                    res = await run_workflow(s.get('workflow_id', ''), None,
+                                             parametre=s.get('parametre', '') or '')
+                    db.update_coanimm_schedule(sid, dernier_statut=res.get('status', 'error'),
+                                               dernier_message=(res.get('message') or '')[:300],
+                                               notifie=False)
+                except Exception as e:
+                    print(f"[COANIMM-SCHED] Erreur d'exécution : {e}")
+                    db.update_coanimm_schedule(sid, dernier_statut='error',
+                                               dernier_message=str(e)[:300], notifie=False)
+        except Exception as e:
+            print(f"[COANIMM-SCHED] Tick ignoré : {e}")
+        await _asyncio.sleep(SCHEDULER_TICK_SECONDS)
+
+
+def _log_workflow_run(wf: dict, parametre: str, status: str, message: str,
+                      files_count: int = 0, returncode=None,
+                      workflow_id: str = None) -> None:
+    """Journalise une exécution de ricochet dans l'historique des tâches ET le
+    journal de sécurité. Silencieux : ne casse jamais l'exécution."""
+    label = (wf or {}).get('label', '') or 'ricochet'
+    try:
+        consigne = f"[Ricochet] {label}"
+        if (parametre or '').strip():
+            consigne += f" — entrée : {parametre.strip()[:150]}"
+        db.add_coanimm_history(consigne, status, (message or '')[:400],
+                               returncode=returncode, files_count=files_count,
+                               extra={'kind': 'workflow',
+                                      'workflow_id': workflow_id or '',
+                                      'parametre': (parametre or '').strip()[:500]})
+    except Exception as e:
+        print(f"[COANIMM-WF] Historique ignoré : {e}")
+    try:
+        import modules.coanimm_safety as _safety
+        caps = (wf or {}).get('meta', {}).get('capacites', [])
+        db.add_coanimm_security_log({
+            'status': 'ok' if status == 'ok' else 'erreur',
+            'workflow': label,
+            'steps': len((wf or {}).get('meta', {}).get('etapes', [])),
+            'capabilities': [_safety.CAPABILITY_LABELS.get(c, c) for c in caps],
+            'files': files_count,
+            'reasons': [] if status == 'ok' else [(message or '')[:200]],
+        })
+    except Exception as e:
+        print(f"[COANIMM-WF] Journal de sécurité ignoré : {e}")
+    try:
+        if workflow_id:
+            meta = dict((wf or {}).get('meta') or {})
+            key = 'runs_ok' if status == 'ok' else 'runs_err'
+            meta[key] = int(meta.get(key, 0)) + 1
+            db.save_prompt(workflow_id, (wf or {}).get('label', ''), (wf or {}).get('text', ''),
+                           type='workflow', meta=meta)
+    except Exception as e:
+        print(f"[COANIMM-WF] Fiabilité ricochet ignorée : {e}")
+
+
+async def run_workflow_stream(workflow_id: str, thread_id: str = None,
+                              parametre: str = ''):
+    """Moteur de workflow STREAMÉ : générateur async d'événements (dicts).
+
+    Événements émis :
+      {'type':'start', 'label', 'total'}
+      {'type':'step_start', 'index', 'total', 'label'}
+      {'type':'step_adapt', 'index', 'total', 'label'}               (adaptation à l'entrée)
+      {'type':'step_repair', 'index', 'total', 'label', 'attempt'}   (échec → réparation)
+      {'type':'step_critique', 'index', 'total', 'label', 'motif'}   (résultat insuffisant → correction)
+      {'type':'step_done', 'index', 'total', 'label', 'status', 'files_count'}
+      {'type':'done', 'status', 'message', 'steps', 'files_info', 'files_list', 'files_count'}
+
+    Chaque étape bénéficie de la boucle agentique bornée (WORKFLOW_STEP_MAX_ITERATIONS) :
+    réparation sur échec, critique du résultat sur succès. Jamais de nouvel essai après
+    un blocage de sécurité, une capacité manquante ou un délai dépassé. Le script réparé
+    n'est PAS réécrit dans le bond : la version validée par Laurent reste la référence.
+    """
+    workflows = db.list_prompts('workflow')
+    if workflow_id not in workflows:
+        yield {'type': 'done', 'status': 'error',
+               'message': f"Workflow introuvable : {workflow_id}"}
+        return
+
+    wf = workflows[workflow_id]
+    etapes = wf.get('meta', {}).get('etapes', [])
+    if not etapes:
+        yield {'type': 'done', 'status': 'error',
+               'message': "Ce workflow ne contient aucune étape."}
+        return
+
+    # Capacités requises par le workflow vs capacités pré-accordées (Étape 2).
+    _granted = set(db.list_coanimm_capabilities())
+    _wf_caps = set(wf.get('meta', {}).get('capacites', [])) & {'reseau', 'programme', 'email'}
+    _missing_caps = _wf_caps - _granted
+    if _missing_caps:
+        _msg_caps = ("Ce workflow requiert des capacités non autorisées : "
+                     + ', '.join(sorted(_missing_caps))
+                     + ". Autorise-les dans « Capacités autorisées en exécution » avant de le lancer.")
+        _log_workflow_run(wf, parametre, 'error', _msg_caps, workflow_id=workflow_id)
+        yield {'type': 'done', 'status': 'error',
+               'message': _msg_caps,
+               'missing_capabilities': sorted(_missing_caps)}
+        return
+
+    skills = db.list_prompts('skill')
+    workdir = _workspace_dir(thread_id)
+    steps_results = []
+    all_new_files = []
+    total = len(etapes)
+    yield {'type': 'start', 'label': wf.get('label', ''), 'total': total}
+
+    for i, etape in enumerate(etapes):
+        sid = etape.get('skill_id', '')
+        elabel = etape.get('label', f"Étape {i + 1}")
+        yield {'type': 'step_start', 'index': i + 1, 'total': total, 'label': elabel}
+
+        if sid not in skills:
+            steps_results.append({'label': elabel, 'status': 'error',
+                                   'error': f"Skill introuvable : {sid}"})
+            _log_workflow_run(wf, parametre, 'error',
+                              f"Arrêt sur l'étape « {elabel} » : skill introuvable.",
+                              workflow_id=workflow_id)
+            yield {'type': 'done', 'status': 'error',
+                   'message': f"Arrêt sur l'étape « {elabel} » : skill introuvable.",
+                   'steps': steps_results}
+            return
+
+        sk = skills[sid]
+        code = sk.get('meta', {}).get('script', '')
+        consigne = sk.get('meta', {}).get('consigne_origine', elabel)
+
+        if not code.strip():
+            steps_results.append({'label': elabel, 'status': 'error',
+                                   'error': "Ce skill n'a pas de script exécutable enregistré."})
+            _log_workflow_run(wf, parametre, 'error',
+                              f"Arrêt sur l'étape « {elabel} » : skill sans script exécutable.",
+                              workflow_id=workflow_id)
+            yield {'type': 'done', 'status': 'error',
+                   'message': (f"Arrêt sur l'étape « {elabel} » : ce skill n'a pas de script "
+                               f"exécutable enregistré (recrée-le pour l'utiliser dans un workflow)."),
+                   'steps': steps_results}
+            return
+
+        # Auto-audit à la lumière d'un skill correspondant (Étape C)
+        fiche = _find_relevant_skill(consigne)
+        if fiche:
+            try:
+                audited = await audit_against_skill(code, _skill_to_text(fiche),
+                                                    consigne, thread_id)
+                if audited.strip() and _check_syntax(audited) is None:
+                    code = audited
+            except Exception as _ae:
+                print(f"[COANIMM-WF] Auto-audit ignoré étape {i + 1} : {_ae}")
+
+        # ── Adaptation du script à l'entrée fournie au lancement (facultative) ──
+        consigne_effective = consigne
+        if (parametre or '').strip():
+            consigne_effective = f"{consigne} (entrée fournie : {parametre.strip()[:500]})"
+            yield {'type': 'step_adapt', 'index': i + 1, 'total': total, 'label': elabel}
+            try:
+                adapted = await adapt_step_code(code, consigne, parametre, thread_id)
+                if adapted.strip() and _check_syntax(adapted) is None:
+                    code = adapted
+                else:
+                    print(f"[COANIMM-WF] Adaptation invalide étape {i + 1} : script d'origine conservé.")
+            except Exception as _ad_err:
+                print(f"[COANIMM-WF] Adaptation ignorée étape {i + 1} : {_ad_err}")
+
+        # ── Boucle agentique bornée pour CETTE étape ──
+        result = None
+        step_files = []
+        for attempt in range(1, WORKFLOW_STEP_MAX_ITERATIONS + 1):
+            before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
+            result = _execute(code, None, workdir, thread_id, granted_caps=_granted)
+            step_files = _scan_new_files(workdir, before)
+
+            # Blocage sécurité / permission / délai : jamais de nouvel essai.
+            if result.get('blocked') or result.get('needs_confirmation') or result.get('missing_capabilities'):
+                break
+            if result.get('status') == 'error' and 'Délai dépassé' in (result.get('message') or ''):
+                break
+
+            failed = (result.get('status') != 'ok') or (result.get('returncode', 0) != 0)
+            if failed:
+                if attempt >= WORKFLOW_STEP_MAX_ITERATIONS:
+                    break
+                feedback = ((result.get('message') or '') + '\n'
+                            + (result.get('stderr') or '') + '\n'
+                            + (result.get('stdout') or '')).strip()
+                yield {'type': 'step_repair', 'index': i + 1, 'total': total,
+                       'label': elabel, 'attempt': attempt}
+            else:
+                _files_desc = []
+                for _f in step_files:
+                    try:
+                        _files_desc.append({'filename': _f.get('filename', ''),
+                                            'size': os.path.getsize(_f.get('path', ''))})
+                    except OSError:
+                        _files_desc.append({'filename': _f.get('filename', ''), 'size': 0})
+                critique = await critique_result(consigne_effective, code,
+                                                 dict(result, files_list=_files_desc), thread_id)
+                result['critique'] = critique
+                if critique.get('verdict') != 'insuffisant' or attempt >= WORKFLOW_STEP_MAX_ITERATIONS:
+                    break
+                feedback = ("Le script s'est exécuté sans erreur (code retour 0) mais le résultat "
+                            "ne répond pas à la consigne : " + (critique.get('motif') or '')
+                            + ((" Conseil : " + critique['conseil']) if critique.get('conseil') else ''))
+                yield {'type': 'step_critique', 'index': i + 1, 'total': total,
+                       'label': elabel, 'motif': critique.get('motif', '')}
+
+            try:
+                new_code = await repair_code(code, feedback, consigne_effective, thread_id)
+            except Exception as _rep_err:
+                print(f"[COANIMM-WF] Réparation impossible étape {i + 1} : {_rep_err}")
+                break
+            if not new_code.strip() or _check_syntax(new_code) is not None:
+                break
+            code = new_code
+
+        ok = result.get('status') == 'ok' and result.get('returncode', 0) == 0
+        _bump_skill_stat(sid, ok)
+
+        if not ok:
+            err = (result.get('message') or (result.get('stderr') or '')[-400:]
+                   or 'Erreur inconnue')
+            steps_results.append({'label': elabel, 'status': 'error', 'error': err})
+            yield {'type': 'step_done', 'index': i + 1, 'total': total,
+                   'label': elabel, 'status': 'error', 'files_count': 0}
+            done_evt = {'type': 'done', 'status': 'error',
+                        'message': f"Arrêt sur l'étape « {elabel} » : {err}",
+                        'steps': steps_results}
+            if result.get('missing_capabilities'):
+                done_evt['missing_capabilities'] = result['missing_capabilities']
+            _log_workflow_run(wf, parametre, 'error', done_evt['message'],
+                              returncode=result.get('returncode'), workflow_id=workflow_id)
+            yield done_evt
+            return
+
+        all_new_files.extend(step_files)
+        steps_results.append({'label': elabel, 'status': 'ok',
+                               'output': (result.get('stdout') or '')[-1500:]})
+        yield {'type': 'step_done', 'index': i + 1, 'total': total,
+               'label': elabel, 'status': 'ok', 'files_count': len(step_files)}
+
+    files_info, files_list = '', []
+    if all_new_files:
+        files_info, files_list = _route_new_files(all_new_files, thread_id)
+
+    _log_workflow_run(wf, parametre,
+                      'ok', f"Terminé ({total} étapes).",
+                      files_count=len(all_new_files), returncode=0, workflow_id=workflow_id)
+    yield {'type': 'done', 'status': 'ok',
+           'message': f"Workflow « {wf.get('label', '')} » terminé ({total} étapes).",
+           'steps': steps_results,
+           'files_info': files_info,
+           'files_list': files_list,
+           'files_count': len(all_new_files)}
+
+
+async def run_workflow(workflow_id: str, thread_id: str = None,
+                       parametre: str = '') -> dict:
+    """Exécute un workflow et retourne le résultat final complet (non streamé).
+
+    Simple enveloppe de run_workflow_stream : même moteur, mêmes garanties
+    (réparation/critique par étape, arrêt-sur-erreur, capacités pré-accordées).
+    Conservée pour la route POST /api/coanimm/workflows/{id}/run et les tests."""
+    final = {'status': 'error', 'message': 'Workflow non exécuté.'}
+    async for evt in run_workflow_stream(workflow_id, thread_id, parametre=parametre):
+        if evt.get('type') == 'done':
+            final = {k: v for k, v in evt.items() if k != 'type'}
+    return final

@@ -187,11 +187,22 @@ async function _loadAgentMode(threadId) {
         var d = await r.json();
         _setAgentMode(d.agent_mode || '', false);
     } catch (e) { _setAgentMode('', false); }
+    _refreshVibeButtonVisibility();
 }
 
 document.querySelectorAll('.agent-mode-btn').forEach(function(btn) {
     btn.addEventListener('click', function() { _setAgentMode(btn.dataset.mode); });
 });
+
+// Le bouton Vibe n'est visible que si une clé Mistral est enregistrée (Vibe = Mistral cloud européen).
+async function _refreshVibeButtonVisibility(keys) {
+    var btn = document.getElementById('agent-btn-vibe');
+    if (!btn) return;
+    try {
+        if (!keys) keys = await fetch('/api/settings/api-keys').then(function(r) { return r.json(); });
+        btn.hidden = !(keys && keys.mistral);
+    } catch (e) { btn.hidden = true; }
+}
 
 function _splitSentences(text) {
     // 1. Convertir les \n littéraux en vrais sauts de ligne
@@ -4553,6 +4564,8 @@ function _updatePixtralModelVisibility(visionProvider) {
 }
 
 function _applyProviderConstraints(keys) {
+    // Bouton Vibe visible uniquement si une clé Mistral est enregistrée.
+    _refreshVibeButtonVisibility(keys);
     // 1. Désactiver les options sans clé
     document.querySelectorAll('.routing-select option[data-needs-key]').forEach(opt => {
         const needed  = opt.dataset.needsKey;
@@ -8265,19 +8278,18 @@ async function loadCosts() {
             grid.innerHTML = '<p style="color:var(--text-muted);padding:12px;">Aucun fournisseur configuré.</p>';
             return;
         }
-        grid.innerHTML = d.wallets.map(w => _renderWalletCard(w)).join('');
+        _ensureCostTableStyle();
+        grid.innerHTML = _renderCostTable(d.wallets);
         _setupCostActions();
 
         // Crédit restant en temps réel — chargement non bloquant, en plus
         fetch('/api/costs/credits').then(r => r.json()).then(cd => {
             const credits = cd.credits || {};
             for (const [provider, info] of Object.entries(credits)) {
-                const card = grid.querySelector(`.cost-card[data-provider="${provider}"]`);
-                if (!card || !info.available) continue;
-                const detail = document.createElement('div');
-                detail.className = 'cost-detail';
-                detail.innerHTML = `Crédit restant : <strong>${info.balance} ${info.currency}</strong>`;
-                card.appendChild(detail);
+                const cell = grid.querySelector(`td.cost-credit[data-provider="${provider}"]`);
+                if (!cell || !info.available) continue;
+                cell.innerHTML = `<strong>${info.balance} ${info.currency}</strong>`;
+                cell.setAttribute('aria-label', `Crédit API restant : ${info.balance} ${info.currency}`);
             }
         }).catch(() => {});
     } catch(e) {
@@ -8285,55 +8297,93 @@ async function loadCosts() {
     }
 }
 
-function _renderWalletCard(w) {
-    const icons = {
-        anthropic: '🔴', deepseek: '🟢', gemini: '🟡', openai: '🔴',
-        openrouter: '🟠', mistral: '🔵', ollama: '🟢', brave: '🔵'
-    };
-    const icon = icons[w.provider] || '⚪';
-    let content = '';
+const _COST_ICONS = {
+    anthropic: '🔴', deepseek: '🟢', gemini: '🟡', openai: '🔴',
+    openrouter: '🟠', mistral: '🔵', ollama: '🟢', brave: '🔵', tavily: '🟣'
+};
 
-    if (w.wallet_type === 'tirelire') {
-        const pct     = w.solde_depart > 0 ? Math.min(100, Math.round((w.solde_restant / w.solde_depart) * 100)) : 0;
-        const restant = (w.solde_restant || 0).toFixed(2);
-        const depart  = (w.solde_depart  || 0).toFixed(2);
-        const color   = pct > 50 ? 'var(--accent)' : pct > 20 ? '#f0a500' : '#e05555';
-        content = `
-            <div class="cost-bar-wrap">
-                <div class="cost-bar" style="width:${pct}%;background:${color};"></div>
-            </div>
-            <div class="cost-detail">Solde : <strong>${restant} €</strong> / ${depart} €</div>
-            <div class="cost-detail">Tokens : ${_fmtNum(w.tokens_in_total)} in · ${_fmtNum(w.tokens_out_total)} out</div>
-            <div class="cost-actions">
-                <button class="cost-btn" data-action="solde" data-provider="${w.provider}" data-solde="${w.solde_depart}">✏️ Solde</button>
-                <button class="cost-btn" data-action="rates" data-provider="${w.provider}" data-rate-in="${w.rate_in}" data-rate-out="${w.rate_out}">✏️ Tarifs</button>
-                <button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}">🔄 Reset</button>
-            </div>`;
+// Injecte une seule fois le style du tableau des coûts (évite de toucher styles.css).
+function _ensureCostTableStyle() {
+    if (document.getElementById('cost-table-style')) return;
+    const st = document.createElement('style');
+    st.id = 'cost-table-style';
+    st.textContent = `
+        .cost-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+        .cost-table caption { text-align:left; color:var(--text-muted); font-size:0.8rem; padding:0 0 8px; }
+        .cost-table th, .cost-table td { border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top; }
+        .cost-table thead th { background:var(--bg-secondary); }
+        .cost-table tbody th[scope="row"] { font-weight:600; white-space:nowrap; }
+        .cost-table td { white-space:nowrap; }
+        .cost-table .cost-num { text-align:right; font-variant-numeric:tabular-nums; }
+        .cost-table .cost-btn { font-size:0.75rem; padding:2px 6px; margin:1px; border:1px solid var(--border); border-radius:5px; background:var(--bg-input); color:var(--text); cursor:pointer; }`;
+    document.head.appendChild(st);
+}
 
-    } else if (w.wallet_type === 'compteur_tokens') {
-        content = `
-            <div class="cost-detail">Tokens : ${_fmtNum(w.tokens_in_total)} in · ${_fmtNum(w.tokens_out_total)} out</div>
-            <div class="cost-detail cost-muted">Depuis le ${_fmtDate(w.last_reset)}</div>
-            <div class="cost-actions">
-                <button class="cost-btn" data-action="rates" data-provider="${w.provider}" data-rate-in="${w.rate_in}" data-rate-out="${w.rate_out}">✏️ Tarifs</button>
-                <button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}">🔄 Reset</button>
-            </div>`;
+// Coût estimé € = (tokens_in × tarif_in + tokens_out × tarif_out) / 1M.
+function _walletEstCost(w) {
+    return ((w.tokens_in_total || 0) * (w.rate_in || 0)
+          + (w.tokens_out_total || 0) * (w.rate_out || 0)) / 1_000_000;
+}
 
-    } else {
-        // compteur_requetes (Gemini, Brave)
-        content = `
-            <div class="cost-detail">Requêtes : <strong>${_fmtNum(w.requests_total)}</strong></div>
-            <div class="cost-detail cost-muted">Depuis le ${_fmtDate(w.last_reset)}</div>
-            <div class="cost-actions">
-                <button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}">🔄 Reset</button>
-            </div>`;
-    }
+function _renderCostTable(wallets) {
+    const rows = wallets.map(w => {
+        const icon   = _COST_ICONS[w.provider] || '⚪';
+        const estStr = _formatCostEur(_walletEstCost(w)) || '0 €';
+        const solde  = w.wallet_type === 'tirelire'
+            ? `${(w.solde_restant || 0).toFixed(2).replace('.', ',')} € / ${(w.solde_depart || 0).toFixed(2).replace('.', ',')} €`
+            : '—';
+        const toks   = `${_fmtNum(w.tokens_in_total)} / ${_fmtNum(w.tokens_out_total)}`;
+        const reqs   = w.wallet_type === 'compteur_requetes' ? _fmtNum(w.requests_total) : '—';
+        const rates  = `${(w.rate_in || 0)} / ${(w.rate_out || 0)}`;
+        const depuis = _fmtDate(w.last_reset);
+
+        let actions = '';
+        if (w.wallet_type === 'tirelire') {
+            actions =
+                `<button class="cost-btn" data-action="solde" data-provider="${w.provider}" data-solde="${w.solde_depart}" aria-label="Modifier le solde de ${w.display_name}">✏️ Solde</button> ` +
+                `<button class="cost-btn" data-action="rates" data-provider="${w.provider}" data-rate-in="${w.rate_in}" data-rate-out="${w.rate_out}" aria-label="Modifier les tarifs de ${w.display_name}">✏️ Tarifs</button> ` +
+                `<button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}" aria-label="Réinitialiser les compteurs de ${w.display_name}">🔄 Reset</button>`;
+        } else if (w.wallet_type === 'compteur_tokens') {
+            actions =
+                `<button class="cost-btn" data-action="rates" data-provider="${w.provider}" data-rate-in="${w.rate_in}" data-rate-out="${w.rate_out}" aria-label="Modifier les tarifs de ${w.display_name}">✏️ Tarifs</button> ` +
+                `<button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}" aria-label="Réinitialiser les compteurs de ${w.display_name}">🔄 Reset</button>`;
+        } else {
+            actions =
+                `<button class="cost-btn cost-btn-reset" data-action="reset" data-provider="${w.provider}" aria-label="Réinitialiser les compteurs de ${w.display_name}">🔄 Reset</button>`;
+        }
+
+        return `
+            <tr data-provider="${w.provider}">
+                <th scope="row">${icon} ${w.display_name}</th>
+                <td class="cost-num">${estStr}</td>
+                <td class="cost-num">${solde}</td>
+                <td class="cost-credit cost-num" data-provider="${w.provider}">—</td>
+                <td class="cost-num">${toks}</td>
+                <td class="cost-num">${reqs}</td>
+                <td class="cost-num">${rates}</td>
+                <td>${depuis}</td>
+                <td>${actions}</td>
+            </tr>`;
+    }).join('');
 
     return `
-        <div class="cost-card" data-provider="${w.provider}">
-            <div class="cost-card-header">${icon} <strong>${w.display_name}</strong></div>
-            ${content}
-        </div>`;
+        <table class="cost-table">
+            <caption>Dépenses estimées par fournisseur. Tokens et tarifs au format « entrée / sortie » ; tarifs en dollars par million de tokens.</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Fournisseur</th>
+                    <th scope="col">Coût estimé</th>
+                    <th scope="col">Solde</th>
+                    <th scope="col">Crédit API</th>
+                    <th scope="col">Tokens (entrée / sortie)</th>
+                    <th scope="col">Requêtes</th>
+                    <th scope="col">Tarifs $/1M (entrée / sortie)</th>
+                    <th scope="col">Depuis</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>`;
 }
 
 function _fmtNum(n) {
@@ -8841,8 +8891,9 @@ function _coanimmShowResult(data, label) {
     // Label stderr = élément précédent le textarea dans le DOM
     const stderrLabel = stderrEl ? stderrEl.previousElementSibling : null;
     if (data.status === 'ok') {
-        statusEl.textContent = `Terminé (code retour ${data.returncode}).`;
-        _coanimmAnnounce('Terminé.');
+        const _corrige = data.code_corrige ? " CoaNIMM a corrigé le script pour cette exécution ; le script enregistré n'a pas été modifié." : '';
+        statusEl.textContent = `Terminé (code retour ${data.returncode}).` + _corrige;
+        _coanimmAnnounce('Terminé.' + _corrige);
         stdoutEl.value = data.stdout || '';
     } else {
         statusEl.textContent = `Erreur : ${data.message || 'erreur inconnue.'}`;
@@ -8959,6 +9010,8 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     loadCoanimmHistory();
     loadCoanimmCapabilities();
     loadCoanimmWorkflows();
+    loadCoanimmSchedules();
+    _coanimmSchedPopulateWfPicker();
     loadCoanimmSkills();
     loadCoanimmTools();
     loadCoanimmSecurityLog();
@@ -9172,6 +9225,21 @@ function _renderCoanimmHistory(list) {
         });
         li.appendChild(cb);
         li.appendChild(btn);
+        if (item.kind === 'workflow' && item.workflow_id) {
+            const rerun = document.createElement('button');
+            rerun.type = 'button';
+            rerun.textContent = '↻ Relancer';
+            const entree = (item.parametre || '').trim();
+            rerun.setAttribute('aria-label', 'Relancer ce ricochet' + (entree ? ' avec la même entrée : ' + entree.slice(0, 80) : ''));
+            rerun.style.cssText = 'font-size:0.78rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;white-space:nowrap;';
+            rerun.addEventListener('click', () => {
+                const inp = document.getElementById('coanimm-wf-input');
+                if (inp) inp.value = entree;
+                const wfLabel = (item.consigne || '').replace(/^\[Ricochet\]\s*/, '').split(' — entrée :')[0];
+                _runCoanimmWorkflow(item.workflow_id, wfLabel || 'ricochet');
+            });
+            li.appendChild(rerun);
+        }
         ul.appendChild(li);
     });
 }
@@ -9431,6 +9499,13 @@ function _renderCoanimmSkills(prompts) {
             desc.textContent = meta.description;
             li.appendChild(desc);
         }
+        const _rok = parseInt(meta.runs_ok || 0, 10), _rerr = parseInt(meta.runs_err || 0, 10);
+        if (_rok + _rerr > 0) {
+            const fiab = document.createElement('div');
+            fiab.style.cssText = 'color:var(--text-muted);font-size:0.8rem;margin:2px 0;';
+            fiab.textContent = 'Fiabilité : ' + _rok + ' réussite' + (_rok > 1 ? 's' : '') + ', ' + _rerr + ' échec' + (_rerr > 1 ? 's' : '') + '.';
+            li.appendChild(fiab);
+        }
         const actions = document.createElement('div');
         actions.style.cssText = 'display:flex;gap:8px;margin-top:4px;';
         const edit = document.createElement('button');
@@ -9658,6 +9733,143 @@ async function _toggleCoanimmCapability(cap, grant) {
 
 let _coanimmWfSteps = []; // [{skill_id, label}]
 
+// ── Annonce des ricochets planifiés qui se sont exécutés en arrière-plan ──
+// La zone aria-live est hors du panneau CoaNIMM : l'annonce fonctionne même
+// panneau fermé. Lecture unique côté serveur (les notifications sont consommées).
+const _COANIMM_NOTIF_INTERVAL_MS = 90000;
+
+async function _coanimmPollScheduleNotifications() {
+    try {
+        const r = await fetch('/api/coanimm/schedules/notifications', { method: 'POST' });
+        const d = await r.json();
+        (d.notifications || []).forEach(n => {
+            const quand = (n.quand || '').replace('T', ' à ').slice(0, 16);
+            const verdict = n.statut === 'ok' ? 'a réussi' : 'a échoué';
+            _coanimmAnnounce(`Ricochet planifié « ${n.label} » ${verdict}`
+                + (quand ? ` (${quand})` : '') + '.'
+                + (n.statut !== 'ok' && n.message ? ' ' + n.message : ''));
+        });
+        if ((d.notifications || []).length) loadCoanimmSchedules().catch(() => {});
+    } catch (e) { /* silencieux : pas de bruit si le serveur ne répond pas */ }
+}
+setInterval(_coanimmPollScheduleNotifications, _COANIMM_NOTIF_INTERVAL_MS);
+setTimeout(_coanimmPollScheduleNotifications, 5000);
+
+// ── Ricochets planifiés ──
+const _JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+
+async function loadCoanimmSchedules() {
+    try {
+        const r = await fetch('/api/coanimm/schedules');
+        const d = await r.json();
+        _renderCoanimmSchedules(d.schedules || [], d.is_owner !== false);
+    } catch (e) { /* silencieux */ }
+}
+
+function _renderCoanimmSchedules(scheds, isOwner) {
+    const ul = document.getElementById('coanimm-schedules-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const form = document.getElementById('coanimm-sched-form');
+    if (form) form.style.display = isOwner ? '' : 'none';
+    if (!scheds.length) {
+        const li = document.createElement('li');
+        li.textContent = 'Aucun ricochet planifié.';
+        li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+        ul.appendChild(li);
+        return;
+    }
+    scheds.forEach(s => {
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;';
+        const quand = (s.jour === null || s.jour === undefined || s.jour === '')
+            ? 'tous les jours' : 'le ' + (_JOURS_SEMAINE[s.jour] || '?');
+        const hh = String(s.heure).padStart(2, '0') + ':' + String(s.minute).padStart(2, '0');
+        const entree = (s.parametre || '').trim();
+        const statut = s.dernier_statut ? (' — dernier lancement : ' + (s.dernier_statut === 'ok' ? 'réussi' : s.dernier_statut)) : '';
+        const span = document.createElement('span');
+        span.style.cssText = 'flex:1;min-width:0;';
+        span.textContent = (s.label || '(sans nom)') + ', ' + quand + ' à ' + hh
+            + (entree ? ', entrée : ' + entree.slice(0, 60) : '') + statut
+            + (s.actif === false ? ' (désactivé)' : '');
+        li.appendChild(span);
+        if (isOwner) {
+            const tog = document.createElement('button');
+            tog.type = 'button';
+            tog.textContent = s.actif === false ? 'Activer' : 'Désactiver';
+            tog.setAttribute('aria-label', (s.actif === false ? 'Activer' : 'Désactiver') + ' la planification de ' + (s.label || ''));
+            tog.style.cssText = 'font-size:0.78rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+            tog.addEventListener('click', async () => {
+                try {
+                    const r = await fetch('/api/coanimm/schedules/' + encodeURIComponent(s.id) + '/toggle', { method: 'POST' });
+                    const d = await r.json();
+                    if (d.schedules) _renderCoanimmSchedules(d.schedules, isOwner);
+                    _coanimmAnnounce('Planification ' + (s.actif === false ? 'activée.' : 'désactivée.'));
+                } catch (e) { /* silencieux */ }
+            });
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.textContent = 'Supprimer';
+            del.setAttribute('aria-label', 'Supprimer la planification de ' + (s.label || ''));
+            del.style.cssText = tog.style.cssText;
+            del.addEventListener('click', async () => {
+                try {
+                    const r = await fetch('/api/coanimm/schedules/' + encodeURIComponent(s.id), { method: 'DELETE' });
+                    const d = await r.json();
+                    if (d.schedules) _renderCoanimmSchedules(d.schedules, isOwner);
+                    _coanimmAnnounce('Planification supprimée.');
+                } catch (e) { /* silencieux */ }
+            });
+            li.appendChild(tog);
+            li.appendChild(del);
+        }
+        ul.appendChild(li);
+    });
+}
+
+async function _coanimmSchedPopulateWfPicker() {
+    const sel = document.getElementById('coanimm-sched-wf');
+    if (!sel) return;
+    try {
+        const r = await fetch('/api/coanimm/workflows');
+        const d = await r.json();
+        sel.innerHTML = '<option value="">— Choisir un ricochet —</option>';
+        (d.workflows || []).forEach(wf => {
+            const opt = document.createElement('option');
+            opt.value = wf.id;
+            opt.textContent = wf.label || wf.id;
+            sel.appendChild(opt);
+        });
+    } catch (e) { /* silencieux */ }
+}
+
+document.getElementById('coanimm-sched-add-btn')?.addEventListener('click', async () => {
+    const wfId = document.getElementById('coanimm-sched-wf')?.value || '';
+    if (!wfId) { _coanimmAnnounce('Choisis d\'abord un ricochet à planifier.'); return; }
+    const jourVal = document.getElementById('coanimm-sched-jour')?.value ?? '';
+    const heureVal = document.getElementById('coanimm-sched-heure')?.value || '09:00';
+    const [hh, mm] = heureVal.split(':').map(x => parseInt(x, 10));
+    try {
+        const r = await fetch('/api/coanimm/schedules', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                workflow_id: wfId,
+                jour: jourVal === '' ? null : parseInt(jourVal, 10),
+                heure: isNaN(hh) ? 9 : hh,
+                minute: isNaN(mm) ? 0 : mm,
+                parametre: (document.getElementById('coanimm-sched-entree')?.value || '').trim() || null,
+            }),
+        });
+        const d = await r.json();
+        if (r.ok && d.schedules) {
+            _renderCoanimmSchedules(d.schedules, true);
+            _coanimmAnnounce('Ricochet planifié.');
+        } else {
+            _coanimmAnnounce('Planification refusée : ' + (d.detail || 'erreur.'));
+        }
+    } catch (e) { _coanimmAnnounce('Erreur réseau lors de la planification.'); }
+});
+
 async function loadCoanimmWorkflows() {
     try {
         const r = await fetch('/api/coanimm/workflows');
@@ -9687,6 +9899,13 @@ function _renderCoanimmWorkflows(workflows) {
         nameSpan.textContent = wf.label || '(sans titre)';
         nameSpan.style.cssText = 'flex:1;min-width:0;';
 
+        const _wok = parseInt(wf.meta?.runs_ok || 0, 10), _werr = parseInt(wf.meta?.runs_err || 0, 10);
+        if (_wok + _werr > 0) {
+            const fiabSpan = document.createElement('span');
+            fiabSpan.textContent = ` (fiabilité : ${_wok} réussite${_wok > 1 ? 's' : ''}, ${_werr} échec${_werr > 1 ? 's' : ''})`;
+            fiabSpan.style.cssText = 'font-size:0.75rem;color:var(--text-muted);';
+            nameSpan.appendChild(fiabSpan);
+        }
         const caps = (wf.meta?.capacites || []).join(', ');
         if (caps) {
             const capSpan = document.createElement('span');
@@ -9725,12 +9944,49 @@ async function _runCoanimmWorkflow(wfId, label) {
     if (!resultDiv) return;
     resultDiv.style.display = 'block';
     resultDiv.textContent = `Exécution du ricochet « ${label} »…`;
+    const wfParam = (document.getElementById('coanimm-wf-input')?.value || '').trim();
 
     try {
-        const r = await fetch(`/api/coanimm/workflows/${wfId}/run?thread_id=${encodeURIComponent(currentThreadId || '')}`, {
+        const r = await fetch(`/api/coanimm/workflows/${wfId}/run_stream`, {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ thread_id: currentThreadId || null, parametre: wfParam || null }),
         });
-        const data = await r.json();
+        if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let finalData = null;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const parts = buf.split('\n\n');
+            buf = parts.pop();
+            for (const part of parts) {
+                const line = part.trim();
+                if (!line.startsWith('data: ')) continue;
+                const payload = line.slice(6);
+                if (payload === '[DONE]') continue;
+                let evt;
+                try { evt = JSON.parse(payload); } catch (_e) { continue; }
+                if (evt.type === 'step_start') {
+                    resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} : ${evt.label}…`;
+                } else if (evt.type === 'step_adapt') {
+                    resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} : adaptation du script à l'entrée fournie…`;
+                } else if (evt.type === 'step_repair') {
+                    resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} : échec, correction automatique…`;
+                } else if (evt.type === 'step_critique') {
+                    resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} : résultat insuffisant${evt.motif ? ' (' + evt.motif + ')' : ''}, correction…`;
+                } else if (evt.type === 'step_done' && evt.status === 'ok') {
+                    resultDiv.textContent = `Étape ${evt.index} sur ${evt.total} terminée.`;
+                } else if (evt.type === 'done') {
+                    finalData = evt;
+                    loadCoanimmHistory().catch(() => {});
+                }
+            }
+        }
+        const data = finalData || { status: 'error', message: 'Flux interrompu sans résultat final.' };
         let html = `<strong>${data.status === 'ok' ? '✓' : '✗'} ${_escHtml(data.message || '')}</strong>`;
         if (Array.isArray(data.steps) && data.steps.length) {
             html += '<ul style="margin:6px 0 0;padding-left:1.2em;">';
@@ -10143,6 +10399,25 @@ async function runCoanimmExplore(consigne, confirmScope) {
     t.addEventListener('change', () => { try { localStorage.setItem('coanimm_preview', t.checked ? '1' : '0'); } catch (e) {} });
 })();
 
+// ── Vérification du résultat (critique) : réglage serveur, actif par défaut ──
+(function _coanimmWireCritiqueToggle(){
+    const t = document.getElementById('coanimm-critique-toggle');
+    if (!t) return;
+    fetch('/api/settings/coanimm-critique').then(r => r.json())
+        .then(d => { t.checked = d.active !== false; }).catch(() => {});
+    t.addEventListener('change', async () => {
+        try {
+            await fetch('/api/settings/coanimm-critique', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ active: t.checked }),
+            });
+            _coanimmAnnounce(t.checked
+                ? 'Vérification du résultat activée.'
+                : 'Vérification du résultat désactivée : plus d\'appel IA supplémentaire après les exécutions.');
+        } catch (e) { /* silencieux */ }
+    });
+})();
+
 function _coanimmShowPreview(code, confirmScope) {
     const panel = document.getElementById('coanimm-preview-panel');
     const body  = document.getElementById('coanimm-preview-body');
@@ -10184,6 +10459,57 @@ function _coanimmShowPreview(code, confirmScope) {
     if (yes) { const fy = yes.cloneNode(true); yes.replaceWith(fy); fy.addEventListener('click', () => { panel.classList.add('hidden'); runCoanimmExecuteCode(code, confirmScope || 'once', 0, false, null, true); }); }
     if (no)  { const fn = no.cloneNode(true);  no.replaceWith(fn);  fn.addEventListener('click', () => { panel.classList.add('hidden'); _coanimmAnnounce('Exécution annulée.'); }); }
     setTimeout(() => { if (title) title.focus(); }, 60);
+}
+
+// ── Critique du résultat (boucle agentique) : après un run réussi, vérifie que le
+// résultat répond à la consigne ; si insuffisant, corrige et relance (borné par
+// COANIMM_MAX_REPAIR). Renvoie true si une relance a été lancée (l'appelant s'arrête).
+async function _coanimmCritiqueAndRetry(code, stdoutText, filesList, repairAttempt, confirmScope) {
+    if (!_coanimmCurrentConsigne || !_coanimmCurrentConsigne.trim()) return false; // exécution directe : pas de critique
+    const statusEl = document.getElementById('coanimm-result-status');
+    try {
+        const r = await fetch('/api/coanimm/critique', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                consigne: _coanimmCurrentConsigne,
+                code,
+                stdout: (stdoutText || '').slice(-4000),
+                returncode: 0,
+                files: (filesList || []).map(f => (f.filename || '') + ' (' + (f.size || 0) + ' octets)'),
+                thread_id: currentThreadId || null,
+                override_provider: _coanimmOverrideProvider || null,
+            }),
+        });
+        const d = await r.json();
+        if (!d || d.verdict !== 'insuffisant') return false;
+        const motif = d.motif || 'le résultat semble incomplet par rapport à la consigne';
+        if (repairAttempt >= COANIMM_MAX_REPAIR) {
+            _coanimmAnnounce('Vérification du résultat : ' + motif + '. Limite de corrections automatiques atteinte, résultat conservé tel quel.');
+            return false;
+        }
+        if (statusEl) statusEl.textContent = '🐸 Résultat jugé insuffisant — correction (' + (repairAttempt + 1) + '/' + COANIMM_MAX_REPAIR + ')…';
+        _coanimmAnnounce('Vérification du résultat : ' + motif + '. Correction automatique en cours, tentative ' + (repairAttempt + 1) + ' sur ' + COANIMM_MAX_REPAIR + '.');
+        const rr = await fetch('/api/coanimm/repair', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                code,
+                error_output: "Le script s'est exécuté sans erreur (code retour 0) mais le résultat ne répond pas à la consigne : " + motif + (d.conseil ? ' Conseil : ' + d.conseil : ''),
+                consigne: _coanimmCurrentConsigne,
+                thread_id: currentThreadId || null,
+                override_provider: _coanimmOverrideProvider || null,
+            }),
+        });
+        const dr = await rr.json();
+        if (dr.status === 'ok' && dr.code && dr.code.trim()) {
+            const ce = document.getElementById('coanimm-result-code');
+            if (ce) { ce.value = dr.code; document.getElementById('coanimm-result-code-box')?.classList.remove('hidden'); }
+            await runCoanimmExecuteCode(dr.code, confirmScope || 'once', repairAttempt + 1);
+            return true;
+        }
+    } catch (e) { console.error('[COANIMM] Critique du résultat ignorée :', e); }
+    return false;
 }
 
 async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allowRisky = false, onceCaps = null, skipPreview = false) {
@@ -10416,6 +10742,8 @@ async function runCoanimmExecuteCode(code, confirmScope, repairAttempt = 0, allo
                             setTimeout(() => { if (ann) ann.setAttribute('aria-live','polite'); }, 3000);
                         } else {
                             _coanimmAnnounce(evt.summary || 'Terminé avec succès.');
+                            const _critiqueRelance = await _coanimmCritiqueAndRetry(code, stdoutEl.value, evt.files_list || [], repairAttempt, confirmScope);
+                            if (_critiqueRelance) return;
                         }
                         _coanimmMaybeShowSavePanel(code, rc === 0);
                         _coanimmSetBusy(false);

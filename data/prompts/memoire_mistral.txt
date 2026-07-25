@@ -4,45 +4,37 @@ Utilisateur : {{USER_NAME}} — Date : {{DATE}} — Lieu : {{LOCATION}}
 Extrais uniquement les faits explicitement déclarés. Rien d'inféré, jamais.
 
 INTERDICTIONS (avec alternative) :
-- "On est 5 dans la maison" → pas d'enfants déduits. Rien à extraire.
+- "On est 5 dans la maison" → pas d'enfants déduits. Aucun tag.
 - "[F] avait 18 ans en 2010" → objet = "18 ans", contexte = "en 2010". Pas d'âge calculé aujourd'hui.
-- Rôle bénévole/associatif → predicat = benevolat, jamais metier, même si c'est une fonction nommée.
-- Un seul triplet par fait, dans le sens naturel de l'énoncé. Ne génère jamais la réciproque — le code s'en charge.
+- Rôle associatif/bénévole → prédicat = benevolat, jamais metier, même si c'est une fonction nommée.
+- Relation nommée dans un sens → écris la réciproque avec le genre correct de chaque personne.
 - Proche sans prénom → sujet = {{USER_NAME}}, prédicat = lien de parenté.
-- Trait de caractère ("douce", "émotive") → predicat="qualite", memoire_type="autre". Jamais "sante".
 
-REGISTRE — 1 valeur obligatoire parmi :
-  neutre     : fait calme, même si le contenu évoque une émotion passée
-  emotionnel : ton à vif au moment d'écrire (colère, majuscules)
-  figure     : humour, ironie, second degré
-  intention  : souhait ou projet réel
-  hypothese  : irréel pur, fiction
+EXEMPLES :
+Échange : "[F] est comptable. Elle est aussi trésorière bénévole à l'école."
+→ %%MEM:trait|[F]|metier|comptable||identite|1|permanent%%
+→ %%MEM:activite|[F]|benevolat|trésorière école||activite|3|persistant%%
 
-PRÉDICATS CANONIQUES :
-  date_naissance · age · nationalite · domicile · metier · diplome · anciennete_debut
-  conjoint · enfant · parent · frere · soeur · prenom_pere · prenom_mere
-  sport · loisir · lecture · benevolat · anciennete_pratique
-  probleme_sante · traitement · allergie
-  aime · n_aime_pas · objectif · valeur · trait · qualite · anecdote
-  ecole · competence · employeur
+Échange : "On est 5 dans la maison."
+→ (aucun tag — aucun prénom, aucun fait nommé)
 
-FORMAT — chaque fait = un objet JSON :
-{"registre":"...","type":"...","sujet":"...","predicat":"...","objet":"...","memoire_type":"...","profondeur":N,"type_temporal":"...","contexte":"..."}
+Échange : "[F] avait 18 ans quand elle est arrivée en France."
+→ %%MEM:trait|[F]|age|18 ans||identite|2|episodique%%
 
-- sujet       : prénom réel uniquement — jamais "je", "il", "elle", "utilisateur", rôle ou lien
-- type        : trait | relation | evenement
-- objet       : valeur concrète, compréhensible seule, jamais vide
-- memoire_type : identite | famille | preference | loisir | sante | travail | autre
-- profondeur  : 1 (fait de base) à 5 (anecdote)
-- type_temporal : permanent | persistant | episodique | engagement
-- contexte    : précision courte 5 mots max, ou ""
+Échange : "J'ai un frère, il s'appelle [H]."
+→ %%MEM:relation|{{USER_NAME}}|frere|[H]||identite|1|permanent%%
+→ %%MEM:relation|[H]|soeur|{{USER_NAME}}||identite|1|permanent%%
 
-RÈGLES :
-- Le triplet doit se comprendre sans relire la conversation.
-- Une nuance qui complète un fait extractible → mets-la en "contexte", ne l'ignore pas.
-- Moment narratif marquant → predicat="anecdote", objet ≤ 12 mots, profondeur=5, type_temporal="episodique".
-
-Réponds UNIQUEMENT avec le tableau JSON. Aucun texte avant ou après. Aucune balise ```.
+FORMAT :
+%%MEM:type|sujet|prédicat|objet|contexte|mem_type|profondeur|temporal%%
+- type : trait / relation / activite
+- sujet : prénom exact — jamais "je", "il", "elle", "utilisateur", "père", "fils"
+- prédicat : 1 mot snake_case
+- objet : valeur concrète, jamais vide
+- contexte : 5 mots max, vide si aucun
+- mem_type : identite / activite
+- profondeur : 1 (stable) à 5 (anecdotique)
+- temporal : permanent / persistant / episodique
 
 Conversation :
 {{CONV_TEXT}}
