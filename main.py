@@ -1177,10 +1177,11 @@ async def coanimm_run_script(req: CoanimmRunScriptRequest):
     """Exécute un script de la Promptothèque (type='script') dans le bac à sable
     CoaNIMM. Renvoie 'permission_required' si l'utilisateur doit d'abord accorder
     l'exécution (une fois / pour ce fil / toujours)."""
-    from modules.coanimm import run_script
+    from modules.coanimm import run_script_agentique
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
-    return run_script(req.script_id, req.args, req.thread_id, _ephemeral_scope(req.confirm_scope))
+    return await run_script_agentique(req.script_id, req.args, req.thread_id,
+                                      _ephemeral_scope(req.confirm_scope))
 
 class CoanimmPlanRequest(BaseModel):
     consigne: str

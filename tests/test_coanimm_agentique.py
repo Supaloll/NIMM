@@ -312,12 +312,76 @@ def test_echeances():
     ok("planification : 8 cas d'échéance (heure, jour, actif, dernier_run, invalide)")
 
 
+# ── 7. Scripts enregistrés : boucle agentique ──────────────────────────
+
+def _env_script(exec_fn):
+    """Doublures pour run_script_agentique : un script enregistré 'sc1'."""
+    scripts = {'sc1': {'label': 'Mon script', 'text': "print('orig')", 'meta': {}}}
+    C.db = types.SimpleNamespace(
+        list_prompts=lambda t=None: dict(scripts) if t == 'script' else {},
+        grant_agent_permission=lambda *a, **k: None,
+        agent_permission_granted=lambda *a, **k: True,
+    )
+    C._workspace_dir = lambda tid=None: WORKDIR
+    C._scan_new_files = lambda wd, before: []
+    C._route_new_files = lambda files, tid=None: ('', [])
+    C._execute = exec_fn
+
+    async def rep(code, fb, consigne='', tid=None, provider_override=None):
+        return "print('corrigé')"
+    C.repair_code = rep
+
+
+def test_script_reparation():
+    calls = {'n': 0}
+
+    def ex(code, args, wd, tid=None, granted_caps=None):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            return {'status': 'ok', 'stdout': '', 'stderr': 'Boom', 'returncode': 1}
+        return {'status': 'ok', 'stdout': 'ok après correction', 'stderr': '', 'returncode': 0}
+    _env_script(ex)
+
+    async def crit_ok(*a, **k):
+        return {'verdict': 'ok'}
+    C.critique_result = crit_ok
+    res = asyncio.run(C.run_script_agentique('sc1'))
+    assert res['returncode'] == 0 and calls['n'] == 2, res
+    assert res.get('code_corrige') == "print('corrigé')", "le code corrigé est proposé, pas enregistré"
+    ok("script enregistré : échec → correction → succès (script en base inchangé)")
+
+
+def test_script_permission_inchangee():
+    _env_script(lambda code, args, wd, tid=None, granted_caps=None: {
+        'status': 'ok', 'stdout': '', 'stderr': '', 'returncode': 0})
+    C.db.agent_permission_granted = lambda *a, **k: False
+    res = asyncio.run(C.run_script_agentique('sc1'))
+    assert res['status'] == 'permission_required', res
+    ok("script enregistré : permission requise → renvoyée telle quelle, rien n'est exécuté")
+
+
+def test_script_blocage_securite_pas_de_retry():
+    calls = {'n': 0}
+
+    def ex(code, args, wd, tid=None, granted_caps=None):
+        calls['n'] += 1
+        return {'status': 'error', 'message': 'refusé', 'blocked': [{'message': 'shell'}],
+                'stdout': '', 'stderr': '', 'returncode': 1}
+    _env_script(ex)
+    res = asyncio.run(C.run_script_agentique('sc1'))
+    assert calls['n'] == 1, "un blocage sécurité ne doit jamais être réessayé"
+    assert res.get('blocked')
+    ok("script enregistré : blocage sécurité → aucun nouvel essai")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
                test_adaptation_appelee, test_sans_entree_pas_dadaptation, test_adaptation_invalide_repli,
                test_journalisation_succes, test_journalisation_refus_capacite, test_journalisation_echec_etape,
                test_chat_liste, test_chat_resolution_nom, test_chat_dispatch,
-               test_fiabilite_ricochet, test_critique_desactivable, test_echeances]:
+               test_fiabilite_ricochet, test_critique_desactivable, test_echeances,
+               test_script_reparation, test_script_permission_inchangee,
+               test_script_blocage_securite_pas_de_retry]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
