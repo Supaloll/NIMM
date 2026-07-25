@@ -22,6 +22,8 @@ import core.database as real_db        # noqa: E402
 
 WORKDIR = tempfile.mkdtemp(prefix='nimm_wf_test_')
 
+_REAL_CRITIQUE_RESULT = C.critique_result   # capturée avant tout mock (test du réglage)
+
 PASSED = []
 
 
@@ -269,11 +271,36 @@ def test_chat_dispatch():
     ok("chat : dispatch + outils déclarés au modèle")
 
 
+# ── 5. Fiabilité des ricochets + réglage critique ──────────────────────
+
+def test_fiabilite_ricochet():
+    _h, _s, stats = make_env()
+    run_wf()
+    wf_updates = [k for a, k in stats if k.get('type') == 'workflow']
+    assert wf_updates and int(wf_updates[-1]['meta'].get('runs_ok', 0)) == 1, stats
+    _h, _s, stats = make_env()
+    C._execute = lambda code, args, wd, tid=None, granted_caps=None: {
+        'status': 'ok', 'stdout': '', 'stderr': 'boom', 'returncode': 1}
+    run_wf()
+    wf_updates = [k for a, k in stats if k.get('type') == 'workflow']
+    assert wf_updates and int(wf_updates[-1]['meta'].get('runs_err', 0)) == 1, stats
+    ok("fiabilité : compteurs runs_ok/runs_err du ricochet incrémentés")
+
+
+def test_critique_desactivable():
+    make_env()
+    C.db.get_setting = lambda k, d=None: '0'   # réglage : critique désactivée
+    res = asyncio.run(_REAL_CRITIQUE_RESULT('consigne', 'code', {'stdout': '', 'files_list': []}))
+    assert res['verdict'] == 'ok' and res.get('desactive') is True, res
+    ok("réglage : critique désactivée → verdict ok immédiat, sans appel IA")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
                test_adaptation_appelee, test_sans_entree_pas_dadaptation, test_adaptation_invalide_repli,
                test_journalisation_succes, test_journalisation_refus_capacite, test_journalisation_echec_etape,
-               test_chat_liste, test_chat_resolution_nom, test_chat_dispatch]:
+               test_chat_liste, test_chat_resolution_nom, test_chat_dispatch,
+               test_fiabilite_ricochet, test_critique_desactivable]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

@@ -9722,6 +9722,13 @@ function _renderCoanimmWorkflows(workflows) {
         nameSpan.textContent = wf.label || '(sans titre)';
         nameSpan.style.cssText = 'flex:1;min-width:0;';
 
+        const _wok = parseInt(wf.meta?.runs_ok || 0, 10), _werr = parseInt(wf.meta?.runs_err || 0, 10);
+        if (_wok + _werr > 0) {
+            const fiabSpan = document.createElement('span');
+            fiabSpan.textContent = ` (fiabilité : ${_wok} réussite${_wok > 1 ? 's' : ''}, ${_werr} échec${_werr > 1 ? 's' : ''})`;
+            fiabSpan.style.cssText = 'font-size:0.75rem;color:var(--text-muted);';
+            nameSpan.appendChild(fiabSpan);
+        }
         const caps = (wf.meta?.capacites || []).join(', ');
         if (caps) {
             const capSpan = document.createElement('span');
@@ -10213,6 +10220,25 @@ async function runCoanimmExplore(consigne, confirmScope) {
     if (!t) return;
     try { t.checked = localStorage.getItem('coanimm_preview') === '1'; } catch (e) {}
     t.addEventListener('change', () => { try { localStorage.setItem('coanimm_preview', t.checked ? '1' : '0'); } catch (e) {} });
+})();
+
+// ── Vérification du résultat (critique) : réglage serveur, actif par défaut ──
+(function _coanimmWireCritiqueToggle(){
+    const t = document.getElementById('coanimm-critique-toggle');
+    if (!t) return;
+    fetch('/api/settings/coanimm-critique').then(r => r.json())
+        .then(d => { t.checked = d.active !== false; }).catch(() => {});
+    t.addEventListener('change', async () => {
+        try {
+            await fetch('/api/settings/coanimm-critique', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ active: t.checked }),
+            });
+            _coanimmAnnounce(t.checked
+                ? 'Vérification du résultat activée.'
+                : 'Vérification du résultat désactivée : plus d\'appel IA supplémentaire après les exécutions.');
+        } catch (e) { /* silencieux */ }
+    });
 })();
 
 function _coanimmShowPreview(code, confirmScope) {

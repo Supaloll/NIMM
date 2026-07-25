@@ -1166,7 +1166,11 @@ Analyse les sentiments de : ..."
                 <input type="checkbox" id="coanimm-preview-toggle" style="width:auto;margin:2px 0 0;flex:none;">
                 <label for="coanimm-preview-toggle" style="font-size:0.82rem;margin:0;cursor:pointer;">Aperçu avant exécution (annoncer capacités et dossiers touchés, puis confirmer)</label>
             </div>
-            <button id="coanimm-generate-btn" style="margin-top:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">Coa !<//button>
+            <div style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;">
+                <input type="checkbox" id="coanimm-critique-toggle" checked style="width:auto;margin:2px 0 0;flex:none;">
+                <label for="coanimm-critique-toggle" style="font-size:0.82rem;margin:0;cursor:pointer;">Vérifier le résultat après chaque exécution et corriger si besoin (un appel IA en plus par tâche)</label>
+            </div>
+            <button id="coanimm-generate-btn" style="margin-top:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">Coa !</button>
         </div>
 
         <div id="coanimm-plan" class="hidden" role="region" aria-live="polite" style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:8px;">
@@ -1783,7 +1787,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260724-wf-rerun"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260724-critique-toggle"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
