@@ -106,6 +106,50 @@ def _resolve_model(provider, model):
 #  Comptage de tokens et catalogue de modèles
 # ══════════════════════════════════════════
 
+# Fournisseurs compatibles OpenAI acceptant response_format json_schema. Ailleurs on
+# n'envoie RIEN : un paramètre inconnu ferait échouer l'appel, et l'appelant garde de
+# toute façon son analyse de repli.
+_JSON_SCHEMA_PROVIDERS = {'openai', 'mistral', 'openrouter'}
+
+
+def _oai_response_format(provider_name: str, output_schema: dict):
+    """Bloc response_format pour un provider OpenAI-compat, ou None si non supporté."""
+    if not output_schema or (provider_name or '').lower() not in _JSON_SCHEMA_PROVIDERS:
+        return None
+    return {'response_format': {
+        'type': 'json_schema',
+        'json_schema': {'name': 'reponse', 'strict': True, 'schema': output_schema},
+    }}
+
+
+async def count_tokens(provider: str, text: str, model: str = None, api_keys: dict = None) -> int:
+    """Tokens d'entrée d'un texte chez `provider`, SANS envoyer la requête.
+
+    Anthropic et Gemini exposent un point de comptage ; ailleurs on renvoie -1
+    (« inconnu »), jamais une estimation inventée.
+    """
+    provider = (provider or '').lower()
+    if provider == 'anthropic':
+        return await count_tokens_anthropic([{'role': 'user', 'content': text or ''}],
+                                            model=model, api_keys=api_keys)
+    if provider == 'gemini':
+        api_key = get_api_key('gemini', api_keys)
+        if not api_key:
+            return -1
+        m = _resolve_model('gemini', model)
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.post(
+                    f'https://generativelanguage.googleapis.com/v1beta/models/{m}:countTokens?key={api_key}',
+                    json={'contents': [{'parts': [{'text': text or ''}]}]})
+                r.raise_for_status()
+                return int(r.json().get('totalTokens', -1))
+        except Exception as e:
+            print(f"[ENGINE] Comptage de tokens Gemini indisponible : {e}")
+            return -1
+    return -1
+
+
 async def count_tokens_anthropic(messages: list, model: str = None, system_prompt: str = None,
                                  tools: list = None, api_keys: dict = None) -> int:
     """Nombre de tokens d'entrée d'une requête, SANS l'envoyer (donc sans la payer).
@@ -246,15 +290,15 @@ async def call_llm(
         return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images,
                                      tools=tools, output_schema=output_schema, thinking_budget=thinking_budget)
     elif provider == 'deepseek':
-        return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', 'https://api.deepseek.com/v1', images=images)
+        return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', 'https://api.deepseek.com/v1', images=images, output_schema=output_schema)
     elif provider == 'gemini':
         return await _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys, tools=tools)
     elif provider == 'openai':
-        return await _call_openai_compat(messages, model or 'gpt-4o', system_prompt, max_tokens, temperature, api_keys, 'openai', 'https://api.openai.com/v1', images=images)
+        return await _call_openai_compat(messages, model or 'gpt-4o', system_prompt, max_tokens, temperature, api_keys, 'openai', 'https://api.openai.com/v1', images=images, output_schema=output_schema)
     elif provider == 'openrouter':
-        return await _call_openai_compat(messages, model or 'mistralai/mistral-7b-instruct', system_prompt, max_tokens, temperature, api_keys, 'openrouter', 'https://openrouter.ai/api/v1', images=images)
+        return await _call_openai_compat(messages, model or 'mistralai/mistral-7b-instruct', system_prompt, max_tokens, temperature, api_keys, 'openrouter', 'https://openrouter.ai/api/v1', images=images, output_schema=output_schema)
     elif provider == 'mistral':
-        return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', 'https://api.mistral.ai/v1', images=images, tools=tools)
+        return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', 'https://api.mistral.ai/v1', images=images, tools=tools, output_schema=output_schema)
     elif provider == 'ollama':
         return await _call_ollama(messages, model or 'llama3', system_prompt, max_tokens, temperature)
     else:
@@ -432,7 +476,7 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
 # OPENAI-COMPATIBLE (DeepSeek / OpenAI / OpenRouter)
 # ══════════════════════════════════════════
 
-async def _call_openai_compat(messages, model, system_prompt, max_tokens, temperature, api_keys, provider_name, base_url, images=None, tools=None):
+async def _call_openai_compat(messages, model, system_prompt, max_tokens, temperature, api_keys, provider_name, base_url, images=None, tools=None, output_schema=None):
     api_key = get_api_key(provider_name, api_keys)
     if not api_key:
         raise ValueError(f"Clé API {provider_name} manquante.")
@@ -477,6 +521,7 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
                 'max_tokens':  max_tokens,
                 'temperature': temperature,
                 **({'tools': tools} if tools else {}),
+                **(_oai_response_format(provider_name, output_schema) or {}),
             }
         )
         r.raise_for_status()

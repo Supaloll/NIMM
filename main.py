@@ -1642,25 +1642,30 @@ class TokenCountReq(BaseModel):
 
 @app.post("/api/tokens/estimate")
 async def tokens_estimate(req: TokenCountReq):
-    """Estime le nombre de tokens d'entrée d'un message SANS l'envoyer (donc sans
-    le payer), et le coût correspondant. tokens = -1 si l'estimation est indisponible."""
-    from core.engine import count_tokens_anthropic
-    from core.hub import load_settings
+    """Estime les tokens d'entrée d'un message SANS l'envoyer (donc sans le payer),
+    et le coût correspondant CHEZ LE FOURNISSEUR RÉELLEMENT UTILISÉ.
+
+    Seuls Anthropic et Gemini exposent un comptage exact : ailleurs on renvoie
+    tokens = -1 (« inconnu »), jamais une estimation inventée. Le tarif appliqué est
+    celui du portefeuille du fournisseur courant, pas d'un fournisseur en dur."""
+    from core.engine import count_tokens
+    from core.hub import load_settings, get_task_provider_model
     import core.database as _db
     settings = load_settings(req.thread_id)
-    n = await count_tokens_anthropic([{"role": "user", "content": req.text or ""}],
-                                     model=settings.get('model'),
-                                     api_keys=settings.get('api_keys', {}))
+    provider, model = get_task_provider_model('chat', settings)
+    n = await count_tokens(provider, req.text or "", model=model,
+                           api_keys=settings.get('api_keys', {}))
     cout = None
     if n and n > 0:
         try:
             row = _db.get_conn().execute(
-                'SELECT rate_in FROM cost_wallets WHERE provider = ?', ('anthropic',)).fetchone()
-            rate = row['rate_in'] if row else (_db.TARIFS_DEFAUT.get('anthropic', {}) or {}).get('in', 0.0)
+                'SELECT rate_in FROM cost_wallets WHERE provider = ?', (provider,)).fetchone()
+            rate = row['rate_in'] if row else (_db.TARIFS_DEFAUT.get(provider, {}) or {}).get('in', 0.0)
             cout = round(n * float(rate or 0.0) / 1_000_000, 6)
         except Exception:
             cout = None
-    return {"tokens": n, "cout_usd": cout}
+    return {"tokens": n, "cout_usd": cout, "provider": provider,
+            "disponible": n is not None and n >= 0}
 
 class AnthropicCacheToggleReq(BaseModel):
     active: bool = True
