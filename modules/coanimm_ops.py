@@ -401,7 +401,7 @@ async def op_expurgate_doc(path, consigne='', fmt='docx', allow_cloud=False, thr
     except Exception as e:
         return f"[Erreur] Impossible de produire le document : {e}"
 
-ASYNC_OPS_NAMES = {'summarize_document', 'expurgate_document'}
+ASYNC_OPS_NAMES = {'summarize_document', 'expurgate_document', 'list_ricochets', 'run_ricochet'}
 
 ASYNC_OPS_TOOLS = [
     _tool("summarize_document",
@@ -423,6 +423,19 @@ ASYNC_OPS_TOOLS = [
            "fmt": {"type": "string", "description": "Format de sortie : docx (défaut), pdf, epub, html."},
            "allow_cloud": {"type": "boolean", "description": "true uniquement si l'utilisateur a explicitement accepté l'envoi cloud."}},
           ["path"]),
+    _tool("list_ricochets",
+          "Liste les ricochets (workflows) enregistrés : séquences de bonds validés, rejouables. "
+          "Lecture seule. Utilise cet outil quand l'utilisateur demande quels ricochets ou workflows existent.",
+          {}, []),
+    _tool("run_ricochet",
+          "Lance un ricochet (workflow) enregistré, par son nom, avec une entrée facultative "
+          "(sujet, chemin de fichier, lien ou texte) qui adapte chaque étape. "
+          "NE LANCE un ricochet QUE si l'utilisateur le demande explicitement dans la conversation. "
+          "Les capacités sensibles restent soumises aux autorisations déjà accordées : en cas de refus, "
+          "transmets le message à l'utilisateur sans insister.",
+          {"nom": {"type": "string", "description": "Nom (ou début de nom) du ricochet à lancer."},
+           "entree": {"type": "string", "description": "Entrée facultative appliquée aux étapes (sujet, fichier, lien, texte)."}},
+          ["nom"]),
 ]
 
 
@@ -461,11 +474,77 @@ async def op_codestral_fim(prefix: str, suffix: str = '', stop: list = None,
         return f'[Codestral FIM erreur : {e}]'
 
 
+def _find_ricochet(nom: str):
+    """Retrouve un workflow par nom : exact (insensible à la casse), sinon
+    sous-chaîne si UNE seule correspondance. Renvoie (id, wf) ou (None, message)."""
+    import core.database as _db
+    nom = (nom or '').strip().lower()
+    if not nom:
+        return None, "[Erreur] Aucun nom de ricochet indiqué."
+    wfs = _db.list_prompts('workflow')
+    exact = [(wid, w) for wid, w in wfs.items() if (w.get('label', '') or '').strip().lower() == nom]
+    if len(exact) == 1:
+        return exact[0]
+    partial = [(wid, w) for wid, w in wfs.items() if nom in (w.get('label', '') or '').lower()]
+    if len(partial) == 1:
+        return partial[0]
+    if not partial:
+        dispo = ', '.join((w.get('label', '') or wid) for wid, w in list(wfs.items())[:10]) or 'aucun'
+        return None, f"[Erreur] Ricochet « {nom} » introuvable. Ricochets disponibles : {dispo}."
+    noms = ', '.join(w.get('label', '') for _w, w in partial[:10])
+    return None, f"[Erreur] Plusieurs ricochets correspondent à « {nom} » : {noms}. Précise le nom."
+
+
+async def op_list_ricochets(thread_id=None) -> str:
+    """Liste les ricochets enregistrés (lecture seule)."""
+    from modules.coanimm import list_workflows
+    wfs = list_workflows()
+    if not wfs:
+        return "Aucun ricochet enregistré. On peut en composer un depuis le panneau CoaNIMM (bonds validés)."
+    lines = []
+    for w in wfs:
+        meta = w.get('meta', {})
+        etapes = [e.get('label', '') for e in meta.get('etapes', [])]
+        caps = ', '.join(meta.get('capacites', [])) or 'aucune capacité sensible'
+        ok = int(meta.get('runs_ok', 0)); err = int(meta.get('runs_err', 0))
+        fiab = f" — fiabilité : {ok} réussite(s), {err} échec(s)" if (ok + err) else ''
+        lines.append(f"- {w.get('label', w.get('id', '?'))} : {len(etapes)} étape(s) ({' → '.join(etapes)}) ; capacités : {caps}{fiab}")
+    return "Ricochets enregistrés :\n" + "\n".join(lines)
+
+
+async def op_run_ricochet(nom: str, entree: str = '', thread_id=None) -> str:
+    """Lance un ricochet par son nom (entrée facultative) via run_workflow —
+    mêmes garanties que le panneau : capacités pré-accordées, arrêt-sur-erreur,
+    réparation/critique par étape, journalisation."""
+    from modules.coanimm import run_workflow
+    wid, wf = _find_ricochet(nom)
+    if wid is None:
+        return wf  # message d'erreur
+    result = await run_workflow(wid, thread_id, parametre=(entree or '').strip())
+    lines = [result.get('message', '')]
+    for s in result.get('steps', []):
+        icone = '✓' if s.get('status') == 'ok' else '✗'
+        l = f"{icone} {s.get('label', '')}"
+        if s.get('error'):
+            l += f" — {s['error']}"
+        lines.append(l)
+    if result.get('files_info'):
+        lines.append(result['files_info'])
+    if result.get('missing_capabilities'):
+        lines.append("Capacités à autoriser dans « Capacités autorisées en exécution » : "
+                     + ', '.join(result['missing_capabilities']) + ".")
+    return "\n".join(l for l in lines if l)
+
+
 async def dispatch_async_op(name, args, thread_id=None):
-    """Dispatch des opérations Documents asynchrones (appel LLM)."""
+    """Dispatch des opérations asynchrones (appel LLM ou moteur agentique)."""
     args = args or {}
     if name == 'summarize_document':
         return await op_summarize(args.get('path', ''), args.get('allow_cloud', False), thread_id)
     if name == 'expurgate_document':
         return await op_expurgate_doc(args.get('path',''), args.get('consigne',''), args.get('fmt','docx'), args.get('allow_cloud',False), thread_id)
+    if name == 'list_ricochets':
+        return await op_list_ricochets(thread_id)
+    if name == 'run_ricochet':
+        return await op_run_ricochet(args.get('nom', ''), args.get('entree', ''), thread_id)
     return f"[Opération asynchrone inconnue : {name}]"

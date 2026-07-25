@@ -178,6 +178,8 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_run_decay,        daemon=True).start()
     threading.Thread(target=_run_inference,    daemon=True).start()
     asyncio.create_task(memory_worker())
+    from modules.coanimm import schedule_worker
+    asyncio.create_task(schedule_worker())
     yield
 
 app = FastAPI(title="NIMM", lifespan=lifespan)
@@ -1175,10 +1177,11 @@ async def coanimm_run_script(req: CoanimmRunScriptRequest):
     """Exécute un script de la Promptothèque (type='script') dans le bac à sable
     CoaNIMM. Renvoie 'permission_required' si l'utilisateur doit d'abord accorder
     l'exécution (une fois / pour ce fil / toujours)."""
-    from modules.coanimm import run_script
+    from modules.coanimm import run_script_agentique
     if req.confirm_scope not in (None, 'once', 'project', 'always'):
         raise HTTPException(400, "confirm_scope invalide (once, project ou always).")
-    return run_script(req.script_id, req.args, req.thread_id, _ephemeral_scope(req.confirm_scope))
+    return await run_script_agentique(req.script_id, req.args, req.thread_id,
+                                      _ephemeral_scope(req.confirm_scope))
 
 class CoanimmPlanRequest(BaseModel):
     consigne: str
@@ -1619,6 +1622,45 @@ async def coanimm_repair(req: CoanimmRepairRequest):
         detail = traceback.format_exc()
         print('[COANIMM][ERREUR]', detail)
         return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
+
+
+class CoanimmCritiqueToggleReq(BaseModel):
+    active: bool = True
+
+@app.get("/api/settings/coanimm-critique")
+async def coanimm_critique_get():
+    """Réglage : vérification du résultat après chaque exécution CoaNIMM (1 appel IA en plus)."""
+    import core.database as _db
+    return {"active": str(_db.get_setting("coanimm_critique_active", "1")) not in ("0", "false", "False")}
+
+@app.post("/api/settings/coanimm-critique")
+async def coanimm_critique_set(req: CoanimmCritiqueToggleReq):
+    import core.database as _db
+    _db.set_setting("coanimm_critique_active", "1" if req.active else "0")
+    return {"status": "ok", "active": req.active}
+
+class CoanimmCritiqueRequest(BaseModel):
+    consigne: str = ""
+    code: str = ""
+    stdout: str = ""
+    stderr: str = ""
+    returncode: int = 0
+    files: Optional[List[str]] = None
+    thread_id: Optional[str] = None
+    override_provider: Optional[str] = None
+
+@app.post("/api/coanimm/critique")
+async def coanimm_critique(req: CoanimmCritiqueRequest):
+    """Critique le RÉSULTAT d'une exécution réussie : répond-il à la consigne ?
+    Utilisé par la boucle agentique côté interface après un returncode nul.
+    Fail-open : verdict "ok" si la critique est indisponible."""
+    from modules.coanimm import critique_result
+    if not (req.consigne or "").strip():
+        return {"verdict": "ok", "motif": "", "conseil": ""}
+    result = {"status": "ok", "stdout": req.stdout or "", "stderr": req.stderr or "",
+              "returncode": req.returncode or 0, "files_list": req.files or []}
+    return await critique_result(req.consigne, req.code or "", result,
+                                 req.thread_id, provider_override=req.override_provider)
 
 
 @app.post("/api/coanimm/generate_image")
@@ -3195,10 +3237,110 @@ async def coanimm_workflows_save(req: CoanimmWorkflowRequest):
     return save_workflow(req.label or "", req.etapes or [])
 
 @app.post("/api/coanimm/workflows/{workflow_id}/run")
-async def coanimm_workflows_run(workflow_id: str, thread_id: str = ""):
-    """Exécute un workflow pas à pas."""
+async def coanimm_workflows_run(workflow_id: str, thread_id: str = "", parametre: str = ""):
+    """Exécute un workflow pas à pas (non streamé). `parametre` facultatif :
+    entrée injectée dans chaque étape par adaptation du script validé."""
     from modules.coanimm import run_workflow
-    return await run_workflow(workflow_id, thread_id or None)
+    return await run_workflow(workflow_id, thread_id or None, parametre=parametre or "")
+
+class CoanimmWfRunReq(BaseModel):
+    thread_id: Optional[str] = None
+    parametre: Optional[str] = None  # entrée facultative : sujet, fichier, URL, texte libre
+
+@app.post("/api/coanimm/workflows/{workflow_id}/run_stream")
+async def coanimm_workflows_run_stream(workflow_id: str, thread_id: str = "",
+                                       req: Optional[CoanimmWfRunReq] = None):
+    """Exécute un workflow en diffusant la progression étape par étape (SSE) :
+    step_start / step_adapt / step_repair / step_critique / step_done / done.
+    Body JSON facultatif {thread_id, parametre} : l'entrée est injectée dans
+    chaque étape par adaptation LLM du script validé (jamais persistée).
+    Même moteur et mêmes garanties que POST /run (qui reste disponible)."""
+    from fastapi.responses import StreamingResponse as SR
+    from modules.coanimm import run_workflow_stream
+    import json as _json
+
+    _tid = (req.thread_id if req and req.thread_id else thread_id) or None
+    _param = (req.parametre if req and req.parametre else "") or ""
+
+    async def _gen():
+        try:
+            async for evt in run_workflow_stream(workflow_id, _tid, parametre=_param):
+                yield "data: " + _json.dumps(evt, ensure_ascii=False) + "\n\n"
+        except Exception as e:
+            yield "data: " + _json.dumps({"type": "done", "status": "error",
+                                          "message": f"Erreur interne : {e}"},
+                                         ensure_ascii=False) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    return SR(_gen(), media_type="text/event-stream")
+
+class CoanimmScheduleReq(BaseModel):
+    workflow_id: str = ""
+    jour: Optional[int] = None   # None = tous les jours ; 0 = lundi … 6 = dimanche
+    heure: int = 9
+    minute: int = 0
+    parametre: Optional[str] = None
+
+@app.get("/api/coanimm/schedules")
+async def coanimm_schedules_list():
+    """Ricochets planifiés + droit de gestion (propriétaire)."""
+    import core.database as _db
+    return {"schedules": _db.list_coanimm_schedules(), "is_owner": _db.is_current_user_admin()}
+
+@app.post("/api/coanimm/schedules")
+async def coanimm_schedules_add(req: CoanimmScheduleReq):
+    """Planifie un ricochet (réservé au propriétaire). jour None = tous les jours."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut planifier un ricochet.")
+    if req.jour is not None and not (0 <= int(req.jour) <= 6):
+        raise HTTPException(400, "jour invalide (0 = lundi … 6 = dimanche, ou vide = tous les jours).")
+    if not (0 <= int(req.heure) <= 23 and 0 <= int(req.minute) <= 59):
+        raise HTTPException(400, "heure invalide.")
+    wfs = _db.list_prompts('workflow')
+    wf = wfs.get(req.workflow_id or "")
+    if not wf:
+        raise HTTPException(404, "Ricochet introuvable.")
+    return {"status": "ok",
+            "schedules": _db.add_coanimm_schedule(req.workflow_id, wf.get('label', ''),
+                                                  req.jour, req.heure, req.minute,
+                                                  req.parametre or "")}
+
+@app.post("/api/coanimm/schedules/{sched_id}/toggle")
+async def coanimm_schedules_toggle(sched_id: str):
+    """Active/désactive une planification (réservé au propriétaire)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut modifier une planification.")
+    for s in _db.list_coanimm_schedules():
+        if s.get('id') == sched_id:
+            return {"status": "ok",
+                    "schedules": _db.update_coanimm_schedule(sched_id, actif=not s.get('actif', True))}
+    raise HTTPException(404, "Planification introuvable.")
+
+@app.post("/api/coanimm/schedules/notifications")
+async def coanimm_schedules_notifications():
+    """Exécutions planifiées terminées et pas encore annoncées. Les marque comme
+    annoncées (lecture unique) : l'interface les lit à voix haute une seule fois.
+    POST car la lecture consomme les notifications."""
+    import core.database as _db
+    pending = []
+    for s in _db.list_coanimm_schedules():
+        if s.get('notifie') is False and s.get('dernier_statut') not in ('', 'en cours', None):
+            pending.append({"label": s.get('label', ''),
+                            "statut": s.get('dernier_statut', ''),
+                            "message": s.get('dernier_message', ''),
+                            "quand": s.get('dernier_run', '')})
+            _db.update_coanimm_schedule(s.get('id', ''), notifie=True)
+    return {"notifications": pending}
+
+@app.delete("/api/coanimm/schedules/{sched_id}")
+async def coanimm_schedules_delete(sched_id: str):
+    """Supprime une planification (réservé au propriétaire)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut supprimer une planification.")
+    return {"status": "ok", "schedules": _db.remove_coanimm_schedule(sched_id)}
 
 @app.delete("/api/coanimm/workflows/{workflow_id}")
 async def coanimm_workflows_delete(workflow_id: str):

@@ -2183,6 +2183,55 @@ def remove_coanimm_path(path: str) -> list:
 
 _COANIMM_HISTORY_MAX = 50
 
+_COANIMM_SCHEDULES_MAX = 50
+
+def list_coanimm_schedules() -> list:
+    """Ricochets planifiés : [{id, workflow_id, label, jour (None=tous, 0=lundi..6),
+    heure, minute, parametre, actif, dernier_run, dernier_statut}]."""
+    raw = get_setting('coanimm_schedules', '[]')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def _save_coanimm_schedules(scheds: list) -> list:
+    scheds = scheds[:_COANIMM_SCHEDULES_MAX]
+    set_setting('coanimm_schedules', json.dumps(scheds, ensure_ascii=False))
+    return scheds
+
+def add_coanimm_schedule(workflow_id: str, label: str, jour, heure: int, minute: int,
+                         parametre: str = '') -> list:
+    """Ajoute une planification. jour : None = tous les jours, sinon 0 (lundi) à 6 (dimanche)."""
+    scheds = list_coanimm_schedules()
+    scheds.append({
+        'id': uuid.uuid4().hex,
+        'workflow_id': workflow_id,
+        'label': (label or '')[:200],
+        'jour': None if jour is None else int(jour),
+        'heure': max(0, min(23, int(heure))),
+        'minute': max(0, min(59, int(minute))),
+        'parametre': (parametre or '').strip()[:500],
+        'actif': True,
+        'cree_le': datetime.now().isoformat(timespec='seconds'),
+        'dernier_run': '',
+        'dernier_statut': '',
+    })
+    return _save_coanimm_schedules(scheds)
+
+def update_coanimm_schedule(sched_id: str, **champs) -> list:
+    """Met à jour les champs fournis d'une planification (actif, dernier_run…)."""
+    scheds = list_coanimm_schedules()
+    for s in scheds:
+        if s.get('id') == sched_id:
+            s.update(champs)
+            break
+    return _save_coanimm_schedules(scheds)
+
+def remove_coanimm_schedule(sched_id: str) -> list:
+    scheds = [s for s in list_coanimm_schedules() if s.get('id') != sched_id]
+    return _save_coanimm_schedules(scheds)
+
 def list_coanimm_history() -> list:
     """Retourne la liste des tâches CoaNIMM passées (plus récente d'abord)."""
     raw = get_setting('coanimm_history', '[]')
@@ -2193,8 +2242,10 @@ def list_coanimm_history() -> list:
         return []
 
 def add_coanimm_history(consigne: str, status: str = 'ok', summary: str = '',
-                        returncode=None, files_count: int = 0) -> list:
-    """Ajoute une tâche au journal CoaNIMM. Retourne la liste à jour (plafonnée)."""
+                        returncode=None, files_count: int = 0, extra: dict = None) -> list:
+    """Ajoute une tâche au journal CoaNIMM. Retourne la liste à jour (plafonnée).
+    `extra` : champs additionnels fusionnés dans l'entrée (ex. workflow_id, parametre
+    pour permettre de relancer un ricochet depuis l'historique)."""
     consigne = (consigne or '').strip()
     if not consigne:
         return list_coanimm_history()
@@ -2208,6 +2259,8 @@ def add_coanimm_history(consigne: str, status: str = 'ok', summary: str = '',
         'returncode': returncode,
         'files_count': int(files_count or 0),
     }
+    for k, v in (extra or {}).items():
+        entry.setdefault(k, v)
     hist.insert(0, entry)
     hist = hist[:_COANIMM_HISTORY_MAX]
     set_setting('coanimm_history', json.dumps(hist, ensure_ascii=False))
