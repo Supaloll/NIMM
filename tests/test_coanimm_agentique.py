@@ -312,6 +312,48 @@ def test_echeances():
     ok("planification : 8 cas d'échéance (heure, jour, actif, dernier_run, invalide)")
 
 
+def test_worker_marque_a_notifier():
+    """Un tick du planificateur exécute l'échéance et marque le run à annoncer."""
+    scheds = [{'id': 's1', 'workflow_id': 'wf', 'label': 'Ricochet test', 'jour': None,
+               'heure': 0, 'minute': 0, 'parametre': 'X', 'actif': True,
+               'dernier_run': '', 'dernier_statut': ''}]
+    majs = []
+
+    def upd(sid, **champs):
+        majs.append((sid, champs))
+        for s in scheds:
+            if s['id'] == sid:
+                s.update(champs)
+        return scheds
+
+    C.db = types.SimpleNamespace(list_coanimm_schedules=lambda: [dict(s) for s in scheds],
+                                 update_coanimm_schedule=upd)
+
+    async def fake_run(wid, tid=None, parametre=''):
+        return {'status': 'ok', 'message': 'Terminé (1 étapes).'}
+    C.run_workflow = fake_run
+
+    async def un_tick():
+        # rejoue le corps d'un tick sans la boucle infinie
+        for s in C.db.list_coanimm_schedules():
+            if not C.schedule_due(s):
+                continue
+            C.db.update_coanimm_schedule(s['id'], dernier_run='2026-07-24T09:00:00',
+                                         dernier_statut='en cours')
+            res = await C.run_workflow(s['workflow_id'], None, parametre=s.get('parametre', ''))
+            C.db.update_coanimm_schedule(s['id'], dernier_statut=res.get('status', 'error'),
+                                         dernier_message=(res.get('message') or '')[:300],
+                                         notifie=False)
+    asyncio.run(un_tick())
+    assert majs[0][1]['dernier_statut'] == 'en cours', "dernier_run posé AVANT l'exécution"
+    assert majs[-1][1] == {'dernier_statut': 'ok', 'dernier_message': 'Terminé (1 étapes).',
+                           'notifie': False}, majs[-1]
+    # après notification, plus rien à annoncer
+    upd('s1', notifie=True)
+    assert scheds[0]['notifie'] is True
+    ok("planification : exécution marquée à annoncer, puis consommée")
+
+
 # ── 7. Scripts enregistrés : boucle agentique ──────────────────────────
 
 def _env_script(exec_fn):
@@ -381,6 +423,7 @@ if __name__ == '__main__':
                test_journalisation_succes, test_journalisation_refus_capacite, test_journalisation_echec_etape,
                test_chat_liste, test_chat_resolution_nom, test_chat_dispatch,
                test_fiabilite_ricochet, test_critique_desactivable, test_echeances,
+               test_worker_marque_a_notifier,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()
