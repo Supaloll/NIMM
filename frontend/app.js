@@ -8972,6 +8972,8 @@ document.getElementById('toggle-coanimm')?.addEventListener('click', function() 
     loadCoanimmHistory();
     loadCoanimmCapabilities();
     loadCoanimmWorkflows();
+    loadCoanimmSchedules();
+    _coanimmSchedPopulateWfPicker();
     loadCoanimmSkills();
     loadCoanimmTools();
     loadCoanimmSecurityLog();
@@ -9692,6 +9694,121 @@ async function _toggleCoanimmCapability(cap, grant) {
 // ── Ricochets CoaNIMM ──────────────────────────────────────────────────────────
 
 let _coanimmWfSteps = []; // [{skill_id, label}]
+
+// ── Ricochets planifiés ──
+const _JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+
+async function loadCoanimmSchedules() {
+    try {
+        const r = await fetch('/api/coanimm/schedules');
+        const d = await r.json();
+        _renderCoanimmSchedules(d.schedules || [], d.is_owner !== false);
+    } catch (e) { /* silencieux */ }
+}
+
+function _renderCoanimmSchedules(scheds, isOwner) {
+    const ul = document.getElementById('coanimm-schedules-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const form = document.getElementById('coanimm-sched-form');
+    if (form) form.style.display = isOwner ? '' : 'none';
+    if (!scheds.length) {
+        const li = document.createElement('li');
+        li.textContent = 'Aucun ricochet planifié.';
+        li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+        ul.appendChild(li);
+        return;
+    }
+    scheds.forEach(s => {
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;';
+        const quand = (s.jour === null || s.jour === undefined || s.jour === '')
+            ? 'tous les jours' : 'le ' + (_JOURS_SEMAINE[s.jour] || '?');
+        const hh = String(s.heure).padStart(2, '0') + ':' + String(s.minute).padStart(2, '0');
+        const entree = (s.parametre || '').trim();
+        const statut = s.dernier_statut ? (' — dernier lancement : ' + (s.dernier_statut === 'ok' ? 'réussi' : s.dernier_statut)) : '';
+        const span = document.createElement('span');
+        span.style.cssText = 'flex:1;min-width:0;';
+        span.textContent = (s.label || '(sans nom)') + ', ' + quand + ' à ' + hh
+            + (entree ? ', entrée : ' + entree.slice(0, 60) : '') + statut
+            + (s.actif === false ? ' (désactivé)' : '');
+        li.appendChild(span);
+        if (isOwner) {
+            const tog = document.createElement('button');
+            tog.type = 'button';
+            tog.textContent = s.actif === false ? 'Activer' : 'Désactiver';
+            tog.setAttribute('aria-label', (s.actif === false ? 'Activer' : 'Désactiver') + ' la planification de ' + (s.label || ''));
+            tog.style.cssText = 'font-size:0.78rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+            tog.addEventListener('click', async () => {
+                try {
+                    const r = await fetch('/api/coanimm/schedules/' + encodeURIComponent(s.id) + '/toggle', { method: 'POST' });
+                    const d = await r.json();
+                    if (d.schedules) _renderCoanimmSchedules(d.schedules, isOwner);
+                    _coanimmAnnounce('Planification ' + (s.actif === false ? 'activée.' : 'désactivée.'));
+                } catch (e) { /* silencieux */ }
+            });
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.textContent = 'Supprimer';
+            del.setAttribute('aria-label', 'Supprimer la planification de ' + (s.label || ''));
+            del.style.cssText = tog.style.cssText;
+            del.addEventListener('click', async () => {
+                try {
+                    const r = await fetch('/api/coanimm/schedules/' + encodeURIComponent(s.id), { method: 'DELETE' });
+                    const d = await r.json();
+                    if (d.schedules) _renderCoanimmSchedules(d.schedules, isOwner);
+                    _coanimmAnnounce('Planification supprimée.');
+                } catch (e) { /* silencieux */ }
+            });
+            li.appendChild(tog);
+            li.appendChild(del);
+        }
+        ul.appendChild(li);
+    });
+}
+
+async function _coanimmSchedPopulateWfPicker() {
+    const sel = document.getElementById('coanimm-sched-wf');
+    if (!sel) return;
+    try {
+        const r = await fetch('/api/coanimm/workflows');
+        const d = await r.json();
+        sel.innerHTML = '<option value="">— Choisir un ricochet —</option>';
+        (d.workflows || []).forEach(wf => {
+            const opt = document.createElement('option');
+            opt.value = wf.id;
+            opt.textContent = wf.label || wf.id;
+            sel.appendChild(opt);
+        });
+    } catch (e) { /* silencieux */ }
+}
+
+document.getElementById('coanimm-sched-add-btn')?.addEventListener('click', async () => {
+    const wfId = document.getElementById('coanimm-sched-wf')?.value || '';
+    if (!wfId) { _coanimmAnnounce('Choisis d\'abord un ricochet à planifier.'); return; }
+    const jourVal = document.getElementById('coanimm-sched-jour')?.value ?? '';
+    const heureVal = document.getElementById('coanimm-sched-heure')?.value || '09:00';
+    const [hh, mm] = heureVal.split(':').map(x => parseInt(x, 10));
+    try {
+        const r = await fetch('/api/coanimm/schedules', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                workflow_id: wfId,
+                jour: jourVal === '' ? null : parseInt(jourVal, 10),
+                heure: isNaN(hh) ? 9 : hh,
+                minute: isNaN(mm) ? 0 : mm,
+                parametre: (document.getElementById('coanimm-sched-entree')?.value || '').trim() || null,
+            }),
+        });
+        const d = await r.json();
+        if (r.ok && d.schedules) {
+            _renderCoanimmSchedules(d.schedules, true);
+            _coanimmAnnounce('Ricochet planifié.');
+        } else {
+            _coanimmAnnounce('Planification refusée : ' + (d.detail || 'erreur.'));
+        }
+    } catch (e) { _coanimmAnnounce('Erreur réseau lors de la planification.'); }
+});
 
 async function loadCoanimmWorkflows() {
     try {
