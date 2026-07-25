@@ -375,6 +375,51 @@ def test_facturation_cache():
     ok("cache Anthropic : facturation pondérée (plein tarif, écriture, relecture, mixte)")
 
 
+def test_specificites_anthropic_confinees():
+    """NIMM doit continuer à marcher avec les autres API : aucune nouveauté
+    Anthropic ne doit fuir dans un appel Mistral, Gemini, Ollama…"""
+    import re
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+
+    def corps(nom):
+        i = src.find(f'async def {nom}(')
+        if i < 0:
+            i = src.find(f'def {nom}(')
+        j, k = src.find('\nasync def ', i + 10), src.find('\ndef ', i + 10)
+        return src[i:min([x for x in (j, k) if x > 0] or [len(src)])]
+
+    # 1. Les champs propres à Anthropic ne sont posés que dans ses fonctions
+    for motif in ("payload['cache_control']", "payload['thinking']", "payload['output_config']"):
+        for m in re.finditer(re.escape(motif), src):
+            debut = src.rfind('def ', 0, m.start())
+            nom = src[debut:src.find('(', debut)]
+            assert 'anthropic' in nom, f"{motif} posé hors Anthropic ({nom})"
+
+    # 2. Dans call_llm, chaque paramètre ne part que vers les fonctions qui le gèrent
+    plat = re.sub(r'\s+', ' ', corps('call_llm'))
+    for nom, args in re.findall(r'await (_call_\w+)\(([^()]*(?:\([^()]*\)[^()]*)*)\)', plat):
+        if 'thinking_budget=' in args:
+            assert nom == '_call_anthropic', f"thinking_budget transmis à {nom}"
+        if 'output_schema=' in args:
+            assert nom in ('_call_anthropic', '_call_openai_compat'), f"output_schema transmis à {nom}"
+
+    # 3. response_format : allowlist stricte (un champ inconnu ferait échouer l'appel)
+    ns = {}
+    exec(src[src.find('_JSON_SCHEMA_PROVIDERS'):src.find('async def count_tokens(')], ns)
+    rf = ns['_oai_response_format']
+    assert rf('mistral', {'type': 'object'}) and rf('openai', {'type': 'object'})
+    assert rf('deepseek', {'type': 'object'}) is None
+    assert rf('ollama', {'type': 'object'}) is None
+    assert rf('mistral', None) is None
+
+    # 4. Comptage : exact là où l'API l'expose, « inconnu » ailleurs — jamais inventé
+    ct = corps('count_tokens')
+    assert "provider == 'anthropic'" in ct and "provider == 'gemini'" in ct
+    assert ct.rstrip().endswith('return -1')
+    ok("multi-fournisseurs : les spécificités Anthropic restent confinées")
+
+
 # ── 7. Scripts enregistrés : boucle agentique ──────────────────────────
 
 def _env_script(exec_fn):
@@ -445,6 +490,7 @@ if __name__ == '__main__':
                test_chat_liste, test_chat_resolution_nom, test_chat_dispatch,
                test_fiabilite_ricochet, test_critique_desactivable, test_echeances,
                test_worker_marque_a_notifier, test_facturation_cache,
+               test_specificites_anthropic_confinees,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()
