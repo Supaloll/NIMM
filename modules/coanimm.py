@@ -186,11 +186,14 @@ GENERATE_SYSTEM_PROMPT = (
     "voice : id de voix (appeler nimm_list_voices() pour les options y compris voix Voxtral personnalisées) ; "
     "vide = voix par défaut. "
     "Retourne le chemin du fichier .daisy.\n"
+    "nimm_ask_documents(question, k=5) : répond à une question à partir de la base de "
+    "connaissances en CITANT la phrase exacte de chaque source. À préférer à "
+    "nimm_search_documents quand la réponse doit être vérifiable.\n"
     "nimm_read_pdf_visual(path, question='') : lecture VISUELLE d'un PDF par le modèle "
     "(mise en page, tableaux, figures, pages SCANNÉES). À préférer à nimm_extract_text quand "
     "le texte seul ne suffit pas : document scanné, tableau complexe, description accessible.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
-    "nimm_search_documents, nimm_extract_text, nimm_read_pdf_visual, nimm_ask_llm, nimm_read_url, nimm_translate, "
+    "nimm_search_documents, nimm_ask_documents, nimm_extract_text, nimm_read_pdf_visual, nimm_ask_llm, nimm_read_url, nimm_translate, "
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
     "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
@@ -410,6 +413,15 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
+    ad = (
+        "def nimm_ask_documents(question, k=5, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"question\": question, \"k\": k, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/ask_documents\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
     al = (
         "def nimm_ask_llm(prompt, system='', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"prompt\": prompt, \"system\": system, \"thread_id\": _tid}).encode()\n"
@@ -431,6 +443,7 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     parts.append(ds if "doc_search" not in _disabled else _stub("nimm_search_documents", "consulter la base de connaissances"))
     parts.append(ex if "extract_text" not in _disabled else _stub("nimm_extract_text", "extraire le texte d'un document"))
     parts.append(pv if "read_pdf_visual" not in _disabled else _stub("nimm_read_pdf_visual", "lire un PDF visuellement"))
+    parts.append(ad if "ask_documents" not in _disabled else _stub("nimm_ask_documents", "interroger la base avec citations"))
     parts.append(al if "ask_llm" not in _disabled else _stub("nimm_ask_llm", "sous-tache IA"))
     parts.append(ru if "read_url" not in _disabled else _stub("nimm_read_url", "lire une page web"))
     tr = (

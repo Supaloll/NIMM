@@ -46,6 +46,18 @@ Tourne entièrement sur ta machine — tes conversations ne quittent jamais ton 
 - 📤 **Export** — marque des réponses et exporte-les en TXT, DOCX, PDF, RTF, ODT, EPUB ou MP3
 - 🤖 **CoaNIMM** — exécute des tâches en langage naturel (organiser, renommer, déplacer des fichiers, extraire ou résumer un document…) en générant et lançant un script Python à la demande, **confiné aux dossiers que tu autorises** ; les actions sensibles demandent ton accord explicite, capacité par capacité (réseau, lancement de programme, e-mail) ; il peut **retenir une méthode que tu valides** pour la réutiliser plus tard (skills), **enchaîner plusieurs méthodes** en workflows rejouables (avec progression annoncée étape par étape, **auto-réparation et vérification du résultat** à chaque étape, et une **entrée facultative** — sujet, fichier, lien — pour adapter le même workflow à chaque lancement), et garde un **historique** de tes tâches et ricochets pour les **relancer en un geste** (même entrée comprise) ; les ricochets se pilotent aussi **à la voix, en pleine conversation** (« lance le ricochet Résumé hebdo sur la semaine 30 ») ; après chaque exécution réussie, CoaNIMM **vérifie que le résultat répond vraiment à la demande** et se corrige tout seul si besoin
 
+### 💸 Économie et fiabilité des appels IA
+
+NIMM tire parti des fonctionnalités avancées de chaque fournisseur, sans jamais dépendre d'un seul :
+
+- **Mise en cache des prompts** (Claude) — les longues conversations coûtent bien moins cher, le contexte n'étant plus refacturé plein tarif à chaque tour. Débrayable, et automatiquement désactivée si l'API la refuse.
+- **Réponses au format garanti** — les vérifications internes reçoivent un JSON conforme (Claude, OpenAI, Mistral, OpenRouter) au lieu d'un texte à deviner.
+- **Réflexion avant écriture** — CoaNIMM peut réfléchir avant de produire ou corriger un script.
+- **Estimation du coût avant envoi** et **catalogue de modèles à jour**, interrogé directement chez chaque fournisseur.
+- **Traitement par lots** (Mistral ou Claude) pour les gros volumes, à tarif réduit.
+- **Lecture visuelle des PDF** et **recherche web avec sources citées**, quand le texte seul ne suffit pas.
+- **Serveurs MCP distants** pour brancher vos propres outils.
+
 ### 🧰 Les outils de CoaNIMM
 
 CoaNIMM dispose d'une boîte à outils que ses scripts peuvent appeler. Chaque outil est **activable ou désactivable** depuis le panneau « Outils de CoaNIMM » (rangés par catégories repliables), et un outil sensible apparaît dans l'aperçu avant exécution et le journal de sécurité :

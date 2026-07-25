@@ -46,6 +46,54 @@ def _anthropic_mcp_servers() -> list:
         return []
 
 
+def _anthropic_desactiver_cache(raison: str) -> None:
+    """Coupe la mise en cache après un refus de l'API, pour ne pas casser le chat.
+
+    Le champ `cache_control` part sur TOUS les appels Anthropic : si l'API le
+    refusait (compte, version, plateforme), plus aucune conversation ne passerait.
+    On le désactive donc durablement au premier refus, et on le dit clairement.
+    """
+    try:
+        from core.database import set_setting
+        set_setting('anthropic_cache_active', '0')
+    except Exception:
+        pass
+    print("[ENGINE] ⚠️ Mise en cache des prompts refusée par l'API "
+          f"({raison}) — désactivée automatiquement. Réactivable dans les réglages.")
+
+
+def _anthropic_cache_fallback(exc) -> bool:
+    """Vrai si l'erreur vient du champ de cache : on réessaie alors sans lui."""
+    try:
+        import httpx as _h
+        if not isinstance(exc, _h.HTTPStatusError) or exc.response.status_code != 400:
+            return False
+        corps = (exc.response.text or '').lower()
+    except Exception:
+        return False
+    if 'cache_control' in corps or 'cache control' in corps:
+        _anthropic_desactiver_cache('400 sur cache_control')
+        return True
+    return False
+
+
+# Une réponse coupée net n'est pas visible quand on lit à la synthèse vocale ou en
+# braille : on l'annonce explicitement en fin de texte plutôt que de laisser croire
+# que le modèle a fini de parler.
+_AVIS_STOP = {
+    'max_tokens': "\n\n⚠️ Réponse interrompue : la limite de longueur a été atteinte. "
+                  "Demande « continue » pour la suite.",
+    'refusal':    "\n\n⚠️ Le modèle a préféré ne pas poursuivre cette réponse.",
+    'pause_turn': "\n\n⏸️ Tour mis en pause par le fournisseur (recherche longue). "
+                  "Relance pour obtenir la suite.",
+}
+
+
+def _avis_stop_reason(stop_reason: str) -> str:
+    """Message à ajouter à la réponse selon la raison d'arrêt ('' si fin normale)."""
+    return _AVIS_STOP.get((stop_reason or '').strip(), '')
+
+
 def _anthropic_billable_input(usage: dict) -> int:
     """Tokens d'entrée FACTURABLES, exprimés en équivalent « tokens plein tarif ».
 
@@ -173,6 +221,74 @@ async def count_tokens(provider: str, text: str, model: str = None, api_keys: di
     return -1
 
 
+async def answer_with_citations_anthropic(passages: list, question: str, model: str = None,
+                                api_keys: dict = None, max_tokens: int = 2000) -> str:
+    """Répond à `question` À PARTIR des passages fournis, en citant la phrase exacte.
+
+    Chaque passage devient un document citable distinct : Claude rattache alors
+    chaque affirmation à sa source, et le texte cité est extrait par l'API (donc
+    garanti présent dans le document, contrairement à une citation demandée par
+    prompt). Décisif pour vérifier une réponse qu'on ne peut pas relire soi-même.
+
+    NB : les citations sont incompatibles avec les sorties structurées — ne jamais
+    combiner `citations` et `output_config.format` (erreur 400).
+    """
+    api_key = get_api_key('anthropic', api_keys)
+    if not api_key:
+        return "[Citations : clé Anthropic non configurée.]"
+    if not passages:
+        return "[Aucun passage pertinent dans la base de connaissances.]"
+    contenu = []
+    for p in passages[:8]:
+        texte = (p.get('passage') or '').strip()
+        if not texte:
+            continue
+        contenu.append({
+            'type': 'document',
+            'source': {'type': 'text', 'media_type': 'text/plain', 'data': texte},
+            'title': (p.get('titre') or 'Document')[:200],
+            'context': (p.get('source') or '')[:500],   # transmis, mais non citable
+            'citations': {'enabled': True},
+        })
+    if not contenu:
+        return "[Aucun passage exploitable.]"
+    contenu.append({'type': 'text', 'text': (question or '').strip()
+                    or "Que disent ces documents ?"})
+    payload = {'model': _resolve_model('anthropic', model), 'max_tokens': max_tokens,
+               'messages': [{'role': 'user', 'content': contenu}]}
+    if _anthropic_cache_enabled():
+        payload['cache_control'] = {'type': 'ephemeral'}
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(
+                'https://api.anthropic.com/v1/messages',
+                headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+                         'content-type': 'application/json'},
+                json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return f"[Réponse citée impossible ({e})]"
+    usage = data.get('usage', {})
+    _log('anthropic', payload['model'], _anthropic_billable_input(usage),
+         usage.get('output_tokens', 0), 'citations')
+    txt, cites = [], []
+    for b in data.get('content', []):
+        if b.get('type') != 'text':
+            continue
+        txt.append(b.get('text', ''))
+        for c in (b.get('citations') or []):
+            paire = ((c.get('document_title') or 'Document'),
+                     (c.get('cited_text') or '').strip().replace('\n', ' ')[:200])
+            if paire[1] and paire not in cites:
+                cites.append(paire)
+    sortie = ''.join(txt) + _avis_stop_reason(data.get('stop_reason', ''))
+    if cites:
+        sortie += '\n\nPassages cités :\n' + '\n'.join(
+            f"- {t} : « {e} »" for t, e in cites[:15])
+    return sortie
+
+
 async def analyze_pdf_anthropic(pdf_bytes: bytes, question: str = '', model: str = None,
                                 api_keys: dict = None, max_tokens: int = 4000) -> str:
     """Envoie un PDF NATIVEMENT à Claude (compréhension VISUELLE de la page).
@@ -195,7 +311,11 @@ async def analyze_pdf_anthropic(pdf_bytes: bytes, question: str = '', model: str
         'messages': [{'role': 'user', 'content': [
             {'type': 'document',
              'source': {'type': 'base64', 'media_type': 'application/pdf',
-                        'data': _b64.standard_b64encode(pdf_bytes).decode()}},
+                        'data': _b64.standard_b64encode(pdf_bytes).decode()},
+             # Citations : chaque affirmation est rattachée à la page d'origine.
+             # Indispensable pour vérifier une lecture qu'on ne peut pas contrôler
+             # visuellement. cited_text n'est pas facturé en sortie.
+             'citations': {'enabled': True}},
             {'type': 'text', 'text': consigne},
         ]}],
     }
@@ -214,7 +334,26 @@ async def analyze_pdf_anthropic(pdf_bytes: bytes, question: str = '', model: str
         return f"[PDF : lecture visuelle impossible ({e})]"
     usage = data.get('usage', {})
     _log('anthropic', model, _anthropic_billable_input(usage), usage.get('output_tokens', 0), 'pdf')
-    return ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+    _txt, _pages = [], []
+    for b in data.get('content', []):
+        if b.get('type') != 'text':
+            continue
+        _txt.append(b.get('text', ''))
+        for c in (b.get('citations') or []):
+            p1 = c.get('start_page_number')
+            p2 = c.get('end_page_number')
+            if p1 is None:
+                continue
+            libelle = f"page {p1}" if (p2 is None or p2 <= p1 + 1) else f"pages {p1} à {p2 - 1}"
+            extrait = (c.get('cited_text') or '').strip().replace('\n', ' ')[:150]
+            paire = (libelle, extrait)
+            if paire not in _pages:
+                _pages.append(paire)
+    sortie = ''.join(_txt) + _avis_stop_reason(data.get('stop_reason', ''))
+    if _pages:
+        sortie += '\n\nPassages cités :\n' + '\n'.join(
+            f"- {lib} : « {ext} »" for lib, ext in _pages[:20])
+    return sortie
 
 
 async def count_tokens_anthropic(messages: list, model: str = None, system_prompt: str = None,
@@ -486,11 +625,24 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
             },
             json=payload
         )
-        r.raise_for_status()
+        try:
+            r.raise_for_status()
+        except Exception as _e:
+            if not _anthropic_cache_fallback(_e):
+                raise
+            payload.pop('cache_control', None)
+            r = await client.post(
+                'https://api.anthropic.com/v1/messages',
+                headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+                         'content-type': 'application/json',
+                         **({'anthropic-beta': 'mcp-client-2025-11-20'} if _mcp else {})},
+                json=payload)
+            r.raise_for_status()
         data = r.json()
         usage = data.get('usage', {})
         _log('anthropic', model, _anthropic_billable_input(usage), usage.get('output_tokens', 0))
-        return ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+        _texte = ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
+        return _texte + _avis_stop_reason(data.get('stop_reason', ''))
 
 
 async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
@@ -1107,6 +1259,10 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
     if _anthropic_cache_enabled():
         payload['cache_control'] = {'type': 'ephemeral'}
     async with httpx.AsyncClient(timeout=120) as client:
+        # Le flux ne se rejoue pas : on retire le champ de cache AVANT d'ouvrir le
+        # flux s'il a déjà été refusé une fois (le repli l'a alors désactivé).
+        if 'cache_control' in payload and not _anthropic_cache_enabled():
+            payload.pop('cache_control', None)
         async with client.stream(
             'POST',
             'https://api.anthropic.com/v1/messages',
@@ -1117,6 +1273,18 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
             },
             json=payload
         ) as r:
+            if r.status_code == 400 and 'cache_control' in payload:
+                await r.aread()
+                import httpx as _hx
+                _err = _hx.HTTPStatusError('400', request=r.request, response=r)
+                if _anthropic_cache_fallback(_err):
+                    # Cache refusé : désactivé pour de bon, on relance ce tour sans lui.
+                    payload.pop('cache_control', None)
+                    async for _tok in _call_anthropic_stream(
+                            messages, model, system_prompt, max_tokens, temperature,
+                            api_keys, images, tools=tools):
+                        yield _tok
+                    return
             r.raise_for_status()
             _ant_tokens_in  = 0
             _ant_tokens_out = 0
@@ -1134,6 +1302,10 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                     elif evt == 'message_delta':
                         u = data.get('usage', {})
                         _ant_tokens_out = u.get('output_tokens', 0)
+                        _avis = _avis_stop_reason(
+                            (data.get('delta') or {}).get('stop_reason', ''))
+                        if _avis:
+                            yield _avis
                     elif evt == 'content_block_delta':
                         token = data.get('delta', {}).get('text', '')
                         if token:
