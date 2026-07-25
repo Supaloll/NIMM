@@ -354,6 +354,27 @@ def test_worker_marque_a_notifier():
     ok("planification : exécution marquée à annoncer, puis consommée")
 
 
+# ── 6 bis. Facturation de la mise en cache Anthropic ───────────────────
+
+def test_facturation_cache():
+    """La pondération doit refléter les tarifs : écriture 1,25x, relecture 0,1x.
+    Sans elle, le tableau des coûts serait faux dès que le cache est actif."""
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            'core', 'engine.py'), encoding='utf-8').read()
+    i = src.find('def _anthropic_billable_input')
+    j = src.find('\ndef ', i + 10)
+    ns = {}
+    exec(src[i:j], ns)                      # isolé : engine.py entier exige httpx
+    f = ns['_anthropic_billable_input']
+    assert f({'input_tokens': 100}) == 100
+    assert f({'input_tokens': 0, 'cache_creation_input_tokens': 1000}) == 1250
+    assert f({'input_tokens': 0, 'cache_read_input_tokens': 1000}) == 100
+    assert f({'input_tokens': 50, 'cache_creation_input_tokens': 100,
+              'cache_read_input_tokens': 1000}) == 275
+    assert f({}) == 0 and f(None) == 0
+    ok("cache Anthropic : facturation pondérée (plein tarif, écriture, relecture, mixte)")
+
+
 # ── 7. Scripts enregistrés : boucle agentique ──────────────────────────
 
 def _env_script(exec_fn):
@@ -423,7 +444,7 @@ if __name__ == '__main__':
                test_journalisation_succes, test_journalisation_refus_capacite, test_journalisation_echec_etape,
                test_chat_liste, test_chat_resolution_nom, test_chat_dispatch,
                test_fiabilite_ricochet, test_critique_desactivable, test_echeances,
-               test_worker_marque_a_notifier,
+               test_worker_marque_a_notifier, test_facturation_cache,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()

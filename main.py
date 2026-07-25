@@ -1624,6 +1624,71 @@ async def coanimm_repair(req: CoanimmRepairRequest):
         return JSONResponse({'status': 'error', 'message': str(e), 'detail': ''})
 
 
+@app.get("/api/models/{provider}")
+async def models_list(provider: str, force: bool = False):
+    """Modèles réellement disponibles chez le fournisseur (interrogation + cache 1 h).
+    Renvoie une liste vide si indisponible : l'interface garde alors sa liste de repli."""
+    from core.engine import list_models
+    from core.hub import load_settings
+    try:
+        keys = load_settings(None).get('api_keys', {})
+    except Exception:
+        keys = {}
+    return {"provider": provider, "models": await list_models(provider, keys, force=force)}
+
+class TokenCountReq(BaseModel):
+    text: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/tokens/estimate")
+async def tokens_estimate(req: TokenCountReq):
+    """Estime le nombre de tokens d'entrée d'un message SANS l'envoyer (donc sans
+    le payer), et le coût correspondant. tokens = -1 si l'estimation est indisponible."""
+    from core.engine import count_tokens_anthropic
+    from core.hub import load_settings
+    import core.database as _db
+    settings = load_settings(req.thread_id)
+    n = await count_tokens_anthropic([{"role": "user", "content": req.text or ""}],
+                                     model=settings.get('model'),
+                                     api_keys=settings.get('api_keys', {}))
+    cout = None
+    if n and n > 0:
+        try:
+            row = _db.get_conn().execute(
+                'SELECT rate_in FROM cost_wallets WHERE provider = ?', ('anthropic',)).fetchone()
+            rate = row['rate_in'] if row else (_db.TARIFS_DEFAUT.get('anthropic', {}) or {}).get('in', 0.0)
+            cout = round(n * float(rate or 0.0) / 1_000_000, 6)
+        except Exception:
+            cout = None
+    return {"tokens": n, "cout_usd": cout}
+
+class AnthropicCacheToggleReq(BaseModel):
+    active: bool = True
+
+@app.get("/api/settings/anthropic-cache")
+async def anthropic_cache_get():
+    """Réglage : mise en cache automatique des prompts Anthropic (économie d'entrée)."""
+    import core.database as _db
+    return {"active": str(_db.get_setting("anthropic_cache_active", "1")) not in ("0", "false", "False")}
+
+@app.post("/api/settings/anthropic-cache")
+async def anthropic_cache_set(req: AnthropicCacheToggleReq):
+    import core.database as _db
+    _db.set_setting("anthropic_cache_active", "1" if req.active else "0")
+    return {"status": "ok", "active": req.active}
+
+@app.get("/api/settings/coanimm-thinking")
+async def coanimm_thinking_get():
+    """Réglage : réflexion étendue pour l'écriture et la réparation de scripts."""
+    import core.database as _db
+    return {"active": str(_db.get_setting("coanimm_thinking_active", "1")) not in ("0", "false", "False")}
+
+@app.post("/api/settings/coanimm-thinking")
+async def coanimm_thinking_set(req: AnthropicCacheToggleReq):
+    import core.database as _db
+    _db.set_setting("coanimm_thinking_active", "1" if req.active else "0")
+    return {"status": "ok", "active": req.active}
+
 class CoanimmCritiqueToggleReq(BaseModel):
     active: bool = True
 

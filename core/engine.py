@@ -9,6 +9,34 @@ import json
 import httpx
 from typing import Optional
 
+def _anthropic_cache_enabled() -> bool:
+    """Mise en cache automatique des prompts Anthropic (réglage, actif par défaut).
+
+    Un seul champ `cache_control` au niveau supérieur : l'API pose elle-même le point
+    de rupture sur le dernier bloc cachable et l'avance au fil de la conversation.
+    Idéal ici — NIMM renvoie à chaque tour un long system prompt + 80 messages.
+    """
+    try:
+        from core.database import get_setting
+        return str(get_setting('anthropic_cache_active', '1')) not in ('0', 'false', 'False')
+    except Exception:
+        return True
+
+
+def _anthropic_billable_input(usage: dict) -> int:
+    """Tokens d'entrée FACTURABLES, exprimés en équivalent « tokens plein tarif ».
+
+    Avec la mise en cache, `input_tokens` ne compte que le non-caché : l'écriture de
+    cache coûte 1,25× et la relecture 0,1×. Sans cette pondération, le tableau des
+    coûts sous-estimerait l'écriture et surestimerait massivement la relecture.
+    """
+    u = usage or {}
+    base = int(u.get('input_tokens', 0) or 0)
+    creation = int(u.get('cache_creation_input_tokens', 0) or 0)
+    read = int(u.get('cache_read_input_tokens', 0) or 0)
+    return int(round(base + 1.25 * creation + 0.1 * read))
+
+
 def _log(provider: str, model: str, tokens_in: int, tokens_out: int, pipeline: str = 'chat'):
     """Log silencieux — ne bloque jamais le pipeline si DB indisponible."""
     try:
@@ -38,7 +66,7 @@ def get_api_key(provider: str, db_keys: dict = None) -> Optional[str]:
 # ══════════════════════════════════════════
 
 _PROVIDER_DEFAULT_MODEL = {
-    'anthropic':  'claude-opus-4-5',
+    'anthropic':  'claude-sonnet-4-6',
     'deepseek':   'deepseek-chat',
     'openai':     'gpt-4o-mini',
     'openrouter': 'openai/gpt-4o-mini',
@@ -74,6 +102,122 @@ def _resolve_model(provider, model):
     return model
 
 
+# ══════════════════════════════════════════
+#  Comptage de tokens et catalogue de modèles
+# ══════════════════════════════════════════
+
+async def count_tokens_anthropic(messages: list, model: str = None, system_prompt: str = None,
+                                 tools: list = None, api_keys: dict = None) -> int:
+    """Nombre de tokens d'entrée d'une requête, SANS l'envoyer (donc sans la payer).
+
+    Renvoie -1 si le comptage est indisponible (pas de clé, réseau, API) : l'appelant
+    doit traiter -1 comme « inconnu » et ne rien afficher plutôt qu'un chiffre faux.
+    """
+    api_key = get_api_key('anthropic', api_keys)
+    if not api_key:
+        return -1
+    payload = {
+        'model': _resolve_model('anthropic', model),
+        'messages': _oai_msgs_to_anthropic(messages),
+    }
+    if system_prompt:
+        payload['system'] = system_prompt
+    if tools:
+        payload['tools'] = _oai_tools_to_anthropic(tools)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                'https://api.anthropic.com/v1/messages/count_tokens',
+                headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+                         'content-type': 'application/json'},
+                json=payload)
+            r.raise_for_status()
+            return int(r.json().get('input_tokens', -1))
+    except Exception as e:
+        print(f"[ENGINE] Comptage de tokens indisponible : {e}")
+        return -1
+
+
+# Catalogue interrogé chez le fournisseur, avec cache mémoire (les listes codées en
+# dur vieillissent à chaque sortie de modèle).
+_MODELS_CACHE = {}          # provider -> (timestamp, [ {id, label} ])
+_MODELS_TTL_SECONDS = 3600
+
+
+def _models_endpoint(provider: str, api_key: str):
+    """(url, headers, extracteur) pour lister les modèles, ou None si non supporté."""
+    def _ids(data, key='data', field='id'):
+        return [m.get(field, '') for m in (data.get(key) or []) if isinstance(m, dict)]
+
+    if provider == 'anthropic':
+        return ('https://api.anthropic.com/v1/models',
+                {'x-api-key': api_key, 'anthropic-version': '2023-06-01'},
+                lambda d: [(m.get('id', ''), m.get('display_name', '') or m.get('id', ''))
+                           for m in (d.get('data') or [])])
+    if provider == 'openai':
+        return ('https://api.openai.com/v1/models',
+                {'Authorization': f'Bearer {api_key}'},
+                lambda d: [(i, i) for i in _ids(d)])
+    if provider == 'deepseek':
+        return ('https://api.deepseek.com/models',
+                {'Authorization': f'Bearer {api_key}'},
+                lambda d: [(i, i) for i in _ids(d)])
+    if provider == 'mistral':
+        return ('https://api.mistral.ai/v1/models',
+                {'Authorization': f'Bearer {api_key}'},
+                lambda d: [(i, i) for i in _ids(d)])
+    if provider == 'openrouter':
+        return ('https://openrouter.ai/api/v1/models',
+                {'Authorization': f'Bearer {api_key}'},
+                lambda d: [(m.get('id', ''), m.get('name', '') or m.get('id', ''))
+                           for m in (d.get('data') or [])])
+    if provider == 'gemini':
+        return (f'https://generativelanguage.googleapis.com/v1beta/models?key={api_key}',
+                {},
+                lambda d: [((m.get('name', '') or '').replace('models/', ''),
+                            m.get('displayName', '') or (m.get('name', '') or '').replace('models/', ''))
+                           for m in (d.get('models') or [])])
+    if provider == 'ollama':
+        base = os.getenv('OLLAMA_HOST', 'http://localhost:11434').rstrip('/')
+        return (f'{base}/api/tags', {},
+                lambda d: [(m.get('name', ''), m.get('name', '')) for m in (d.get('models') or [])])
+    return None
+
+
+async def list_models(provider: str, api_keys: dict = None, force: bool = False) -> list:
+    """Modèles réellement disponibles chez `provider` : [{'id', 'label'}].
+
+    Interroge le fournisseur (cache 1 h). Renvoie [] si indisponible — l'appelant
+    garde alors sa liste de repli codée en dur : jamais de sélecteur vide.
+    """
+    import time as _time
+    provider = (provider or '').lower()
+    now = _time.time()
+    if not force and provider in _MODELS_CACHE:
+        ts, cached = _MODELS_CACHE[provider]
+        if now - ts < _MODELS_TTL_SECONDS:
+            return cached
+    api_key = get_api_key(provider, api_keys) or ''
+    if provider != 'ollama' and not api_key:
+        return []
+    spec = _models_endpoint(provider, api_key)
+    if not spec:
+        return []
+    url, headers, extract = spec
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            pairs = extract(r.json())
+    except Exception as e:
+        print(f"[ENGINE] Catalogue de modèles indisponible ({provider}) : {e}")
+        return []
+    models = [{'id': i, 'label': lbl or i} for i, lbl in pairs if i]
+    models.sort(key=lambda m: m['id'])
+    _MODELS_CACHE[provider] = (now, models)
+    return models
+
+
 async def call_llm(
     messages: list,
     provider: str = 'anthropic',
@@ -84,16 +228,23 @@ async def call_llm(
     api_keys: dict = None,
     images: list = None,        # [{"data": base64, "media_type": "image/jpeg"}]
     tools: list = None,
+    output_schema: dict = None,   # JSON Schema : réponse garantie conforme (Anthropic)
+    thinking_budget: int = 0,     # > 0 : réflexion étendue, budget en tokens (Anthropic)
 ) -> str:
     """
     Point d'entrée unique pour tous les providers.
     Retourne le texte de la réponse.
+
+    `output_schema` et `thinking_budget` ne sont honorés que par Anthropic ; les
+    autres providers les ignorent silencieusement (l'appelant doit garder son
+    analyse de repli — voir critique_result).
     """
     provider = provider.lower()
     model = _resolve_model(provider, model)
 
     if provider == 'anthropic':
-        return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools)
+        return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images,
+                                     tools=tools, output_schema=output_schema, thinking_budget=thinking_budget)
     elif provider == 'deepseek':
         return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', 'https://api.deepseek.com/v1', images=images)
     elif provider == 'gemini':
@@ -161,12 +312,13 @@ def _oai_msgs_to_anthropic(messages):
     return out
 
 
-async def _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None):
+async def _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None,
+                          output_schema=None, thinking_budget=0):
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
         raise ValueError("Clé API Anthropic manquante.")
 
-    model = model or 'claude-opus-4-5'
+    model = model or _PROVIDER_DEFAULT_MODEL['anthropic']
 
     # Construire les messages au format Anthropic (gère tool_use / tool_result)
     anthropic_messages = _oai_msgs_to_anthropic(messages)
@@ -198,6 +350,16 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
         payload['system'] = system_prompt
     if tools:
         payload['tools'] = _oai_tools_to_anthropic(tools)
+    if _anthropic_cache_enabled():
+        payload['cache_control'] = {'type': 'ephemeral'}
+    if output_schema:
+        # Décodage contraint : la réponse est un JSON valide conforme au schéma.
+        payload['output_config'] = {'format': {'type': 'json_schema', 'schema': output_schema}}
+    if thinking_budget and int(thinking_budget) > 0:
+        # La réflexion étendue exige temperature = 1 et max_tokens > budget.
+        payload['thinking'] = {'type': 'enabled', 'budget_tokens': int(thinking_budget)}
+        payload['temperature'] = 1
+        payload['max_tokens'] = max(int(max_tokens), int(thinking_budget) + 1024)
 
     async with httpx.AsyncClient(timeout=300) as client:
         r = await client.post(
@@ -212,7 +374,7 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
         r.raise_for_status()
         data = r.json()
         usage = data.get('usage', {})
-        _log('anthropic', model, usage.get('input_tokens', 0), usage.get('output_tokens', 0))
+        _log('anthropic', model, _anthropic_billable_input(usage), usage.get('output_tokens', 0))
         return ''.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text')
 
 
@@ -222,7 +384,7 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
         raise ValueError("Clé API Anthropic manquante.")
-    model = model or 'claude-opus-4-5'
+    model = model or _PROVIDER_DEFAULT_MODEL['anthropic']
 
     payload = {
         'model':       model,
@@ -233,6 +395,8 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
     }
     if system_prompt:
         payload['system'] = system_prompt
+    if _anthropic_cache_enabled():
+        payload['cache_control'] = {'type': 'ephemeral'}
 
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
@@ -797,7 +961,7 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
         raise ValueError("Clé API Anthropic manquante.")
-    model = model or 'claude-opus-4-5'
+    model = model or _PROVIDER_DEFAULT_MODEL['anthropic']
     # Conversion OpenAI -> Anthropic : gère les messages 'tool' (rôle inexistant
     # côté Anthropic) et les tool_calls de l'assistant, sinon 400 Bad Request
     # dès qu'un outil (search_web, search_memory…) a été utilisé en phase 1.
@@ -824,6 +988,8 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
         payload['system'] = system_prompt
     if tools:
         payload['tools'] = _oai_tools_to_anthropic(tools)
+    if _anthropic_cache_enabled():
+        payload['cache_control'] = {'type': 'ephemeral'}
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
             'POST',
@@ -848,7 +1014,7 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                     evt = data.get('type', '')
                     if evt == 'message_start':
                         u = data.get('message', {}).get('usage', {})
-                        _ant_tokens_in = u.get('input_tokens', 0)
+                        _ant_tokens_in = _anthropic_billable_input(u)
                     elif evt == 'message_delta':
                         u = data.get('usage', {})
                         _ant_tokens_out = u.get('output_tokens', 0)

@@ -5088,15 +5088,39 @@ async function _populateModelSelect(provider, savedModel, selId = 'model-select'
     }
 
     const models = MODELS_BY_PROVIDER[provider] || [];
-    if (!models.length) {
+    // Catalogue vivant interrogé chez le fournisseur : les listes codées en dur
+    // vieillissent à chaque sortie de modèle. On FUSIONNE au lieu de remplacer —
+    // les modèles conseillés (libellés parlants) d'abord, le reste regroupé à part,
+    // pour ne pas noyer le sélecteur au lecteur d'écran (OpenRouter en expose des centaines).
+    let live = [];
+    try {
+        const rl = await fetch(`/api/models/${encodeURIComponent(provider)}`);
+        const dl = await rl.json();
+        live = Array.isArray(dl.models) ? dl.models : [];
+    } catch (e) { /* repli silencieux sur la liste conseillée */ }
+
+    if (!models.length && !live.length) {
         sel.innerHTML = '<option value="">— modele par defaut —</option>';
         return;
     }
-    sel.innerHTML = models.map(m =>
-        `<option value="${m.value}"${m.value === savedModel ? ' selected' : ''}>${m.label}</option>`
-    ).join('');
-    if (savedModel && !models.find(m => m.value === savedModel)) {
-        sel.value = models[0].value;
+    const connus = new Set(models.map(m => m.value));
+    const autres = live.filter(m => m.id && !connus.has(m.id));
+    const opt = (v, lbl) => `<option value="${v}"${v === savedModel ? ' selected' : ''}>${lbl}</option>`;
+    let html = '';
+    if (models.length) {
+        html += autres.length ? '<optgroup label="Modèles conseillés">' : '';
+        html += models.map(m => opt(m.value, m.label)).join('');
+        html += autres.length ? '</optgroup>' : '';
+    }
+    if (autres.length) {
+        html += `<optgroup label="Autres modèles disponibles (${autres.length})">`;
+        html += autres.map(m => opt(m.id, m.label || m.id)).join('');
+        html += '</optgroup>';
+    }
+    sel.innerHTML = html;
+    const dispo = new Set([...connus, ...autres.map(m => m.id)]);
+    if (savedModel && !dispo.has(savedModel)) {
+        sel.value = models.length ? models[0].value : (autres[0] && autres[0].id) || '';
     }
     if (isMainSelect) {
         const warn = document.getElementById('ollama-warn');
@@ -10361,6 +10385,28 @@ async function runCoanimmExplore(consigne, confirmScope) {
     try { t.checked = localStorage.getItem('coanimm_preview') === '1'; } catch (e) {}
     t.addEventListener('change', () => { try { localStorage.setItem('coanimm_preview', t.checked ? '1' : '0'); } catch (e) {} });
 })();
+
+// ── Réglages serveur simples : case à cocher ↔ route GET/POST {active} ──
+function _wireToggleReglage(idCase, route, msgOn, msgOff) {
+    const t = document.getElementById(idCase);
+    if (!t) return;
+    fetch(route).then(r => r.json()).then(d => { t.checked = d.active !== false; }).catch(() => {});
+    t.addEventListener('change', async () => {
+        try {
+            await fetch(route, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ active: t.checked }),
+            });
+            _coanimmAnnounce(t.checked ? msgOn : msgOff);
+        } catch (e) { /* silencieux */ }
+    });
+}
+_wireToggleReglage('coanimm-thinking-toggle', '/api/settings/coanimm-thinking',
+    'Réflexion avant écriture activée.',
+    'Réflexion avant écriture désactivée : scripts générés plus vite, corrections moins fines.');
+_wireToggleReglage('anthropic-cache-toggle', '/api/settings/anthropic-cache',
+    'Mise en cache des prompts activée.',
+    'Mise en cache des prompts désactivée : les messages longs coûteront plus cher.');
 
 // ── Vérification du résultat (critique) : réglage serveur, actif par défaut ──
 (function _coanimmWireCritiqueToggle(){
