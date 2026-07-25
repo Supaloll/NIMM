@@ -7701,20 +7701,44 @@ async function _waitSttReady() {
     return false;
 }
 
+// ── Watchdog anti-blocage : évite qu'un clic reste "mort" pour toujours ──
+// si une phase asynchrone (attente Whisper, requête réseau) ne se termine jamais.
+let _sttWatchdogTimer = null;
+
+function _armSttWatchdog() {
+    if (_sttWatchdogTimer) clearTimeout(_sttWatchdogTimer);
+    _sttWatchdogTimer = setTimeout(() => {
+        if (_sttState !== 'idle') {
+            console.warn('[STT] Watchdog : état bloqué sur "' + _sttState + '" — réinitialisation forcée.');
+            _notify('🎙️ Ça a coincé, réessaie.', 'error');
+            _micStream?.getTracks().forEach(t => t.stop());
+            _micStream = null;
+            _setSttState('idle');
+        }
+    }, 25000);
+}
+
+function _disarmSttWatchdog() {
+    if (_sttWatchdogTimer) { clearTimeout(_sttWatchdogTimer); _sttWatchdogTimer = null; }
+}
+
 async function _startRecording() {
     if (_sttState !== 'idle') return;
 
-    _setSttState('loading');
-    const ready = await _waitSttReady();
-    if (!ready) { _setSttState('idle'); return; }
-
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         _setSttState('idle');
+        _notify('🎙️ Micro indisponible (HTTPS requis).', 'error');
         console.warn('[STT] HTTPS requis pour le micro (Chrome/mobile)');
         return;
     }
 
+    _armSttWatchdog();
+    _setSttState('loading');
+
     try {
+        // IMPORTANT : getUserMedia doit rester la toute première operation async apres le clic.
+        // Firefox invalide le "geste utilisateur" des qu'un autre await a lieu avant lui,
+        // et refuse alors le micro silencieusement (NotAllowedError) meme si la permission est accordee.
         _micStream   = await navigator.mediaDevices.getUserMedia({ audio: true });
         _audioChunks = [];
 
@@ -7735,18 +7759,26 @@ async function _startRecording() {
         };
 
         _mediaRec.start();   // pas de timeslice — plus fiable sur mobile
+        _disarmSttWatchdog(); // écoute = contrôlée par l'utilisateur, pas de watchdog
         _setSttState('listening');
 
     } catch(e) {
         console.error('[STT] Erreur accès micro :', e);
+        _disarmSttWatchdog();
         _setSttState('idle');
-        console.warn('[STT] Erreur accès micro :', e.name === 'NotAllowedError' ? 'Permission refusée' : e.name === 'NotSupportedError' ? 'HTTPS requis (Tailscale)' : e.message || e.name);
+        const _reason = e.name === 'NotAllowedError' ? 'Permission micro refusée'
+            : e.name === 'NotSupportedError' ? 'HTTPS requis (Tailscale)'
+            : e.name === 'NotFoundError' ? 'Aucun micro détecté'
+            : (e.message || e.name);
+        _notify('🎙️ ' + _reason, 'error');
+        console.warn('[STT] Erreur accès micro :', _reason);
     }
 }
 
 async function _stopRecording() {
     if (_sttState !== 'listening' || !_mediaRec) return;
 
+    _armSttWatchdog();
     _setSttState('processing');
 
     await new Promise(resolve => {
@@ -7757,7 +7789,7 @@ async function _stopRecording() {
     _micStream?.getTracks().forEach(t => t.stop());
     _micStream = null;
 
-    if (!_audioChunks.length) { _setSttState('idle'); return; }
+    if (!_audioChunks.length) { _disarmSttWatchdog(); _setSttState('idle'); return; }
 
     try {
         const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
@@ -7771,6 +7803,7 @@ async function _stopRecording() {
 
         const r      = await fetch('/api/stt/transcribe', { method: 'POST', body: formData });
         const result = await r.json();
+        _disarmSttWatchdog();
 
         if (result.status === 'ok' && result.text) {
             userInput.value = (userInput.value + ' ' + result.text).trim();
@@ -7793,12 +7826,15 @@ async function _stopRecording() {
             if (status) status.textContent = result.status === 'erreur'
                 ? '⚠️ Erreur : ' + (result.error || 'inconnue')
                 : '⚠️ Rien capté — réessaie';
+            _notify('🎙️ ' + (result.status === 'erreur' ? ('Erreur : ' + (result.error || 'inconnue')) : 'Rien capté — réessaie'), 'warn');
             console.warn('[STT] Résultat vide ou erreur :', result);
             setTimeout(() => _setSttState('idle'), 2500);
         }
     } catch(e) {
         console.error('[STT] Erreur transcription :', e);
+        _disarmSttWatchdog();
         _setSttState('idle');
+        _notify('🎙️ Erreur réseau pendant la transcription.', 'error');
     }
 }
 
@@ -7810,8 +7846,9 @@ document.getElementById('newline-btn')?.addEventListener('click', () => {
     userInput.dispatchEvent(new Event('input'));
 });
 
-// ── Binding UX — même comportement PC et mobile ──
+// ── Binding UX — desktop : direct ; mobile : ouvre le panneau dédié (retour visuel + gros bouton) ──
 micBtn.addEventListener('click', () => {
+    if (_isMobile) { openMicPanel(); return; }
     if (_sttState === 'listening') _stopRecording();
     else _startRecording();
 });

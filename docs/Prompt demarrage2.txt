@@ -5,7 +5,6 @@ Je suis Laurent, créateur du projet NIMM.
 CONTEXTE :
 Tu as accès aux fichiers du projet dans "Project files" :
 - ARCHITECTURE.md (état réel du code — à lire en priorité)
-- DESIGN.md (conception et décisions d'architecture)
 - Fichiers sources principaux
 
 CONVENTIONS DE CODE :
@@ -59,4 +58,4 @@ AUJOURD'HUI :
 
 ---
 
-Commence par me confirmer que tu as bien lu ARCHITECTURE.md, DESIGN.md et les fichiers utiles pour la session, puis on discute de ce que je veux implémenter/modifier.
+Commence par me confirmer que tu as bien lu ARCHITECTURE.md et les fichiers utiles pour la session, puis on discute de ce que je veux implémenter/modifier.
