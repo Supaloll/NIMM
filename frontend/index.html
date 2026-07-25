@@ -384,6 +384,7 @@
                 <select id="routing-websearch" class="routing-select" aria-label="Fournisseur pour la recherche web">
                     <option value="same">↩ Brave / Tavily (par défaut)</option>
                     <option value="mistral" data-needs-key="mistral">🔵 Mistral (web search natif)</option>
+                    <option value="anthropic" data-needs-key="anthropic">🟣 Claude (recherche web native, sources citées)</option>
                 </select>
                 <span class="routing-warning hidden" id="warn-websearch" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
 
@@ -668,14 +669,43 @@
 
         <div class="settings-divider"></div>
 
+        <!-- ── SERVEURS MCP DISTANTS ── -->
+        <div class="setting-group" id="mcp-section">
+            <details id="mcp-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">🔌 Serveurs MCP distants (Claude)</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Un serveur MCP ajoute des outils que Claude peut utiliser (agenda, notes, service métier…).
+                    Claude s'y connecte directement. N'ajoutez que des serveurs de confiance : leurs outils
+                    agissent en votre nom. Le jeton est chiffré et n'est jamais réaffiché.
+                </p>
+                <ul id="mcp-servers-list" style="list-style:none;padding:0;margin:0 0 10px;font-size:0.82rem;" aria-label="Serveurs MCP configurés"></ul>
+                <div id="mcp-form" style="display:flex;flex-direction:column;gap:6px;">
+                    <label for="mcp-name">Nom du serveur</label>
+                    <input type="text" id="mcp-name" autocomplete="off" placeholder="Mon agenda">
+                    <label for="mcp-url">Adresse (https)</label>
+                    <input type="url" id="mcp-url" autocomplete="off" placeholder="https://exemple.org/mcp">
+                    <label for="mcp-token">Jeton d'autorisation (facultatif)</label>
+                    <input type="password" id="mcp-token" autocomplete="new-password">
+                    <button type="button" id="mcp-add-btn" style="align-self:flex-start;font-size:0.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Ajouter ce serveur</button>
+                </div>
+            </details>
+        </div>
+
         <!-- ── MISTRAL BATCH ── -->
         <div class="setting-group" id="mistral-batch-section">
             <details id="mistral-batch-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
-                <summary style="font-weight:600;cursor:pointer;">🔵 Traitement par lots Mistral (Batch)</summary>
+                <summary style="font-weight:600;cursor:pointer;">📦 Traitement par lots (Batch)</summary>
                 <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
                     Envoie un lot de requêtes en une fois — idéal pour résumés ou extractions en masse.
-                    Traitement asynchrone (minutes à heures selon le volume).
+                    Traitement asynchrone (minutes à heures selon le volume), à tarif réduit.
                 </p>
+                <div class="setting-group">
+                    <label for="batch-provider-select">Fournisseur</label>
+                    <select id="batch-provider-select" aria-label="Fournisseur pour le traitement par lots">
+                        <option value="mistral">🔵 Mistral</option>
+                        <option value="anthropic">🟣 Claude (Anthropic) — moitié prix</option>
+                    </select>
+                </div>
                 <div class="setting-group">
                     <label for="batch-model-select">Modèle</label>
                     <select id="batch-model-select" aria-label="Modèle Mistral pour le batch">
@@ -1815,7 +1845,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260725-2"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260725-5"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

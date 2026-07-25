@@ -9779,6 +9779,96 @@ async function _coanimmPollScheduleNotifications() {
 setInterval(_coanimmPollScheduleNotifications, _COANIMM_NOTIF_INTERVAL_MS);
 setTimeout(_coanimmPollScheduleNotifications, 5000);
 
+// ── Serveurs MCP distants ──
+async function loadMcpServers() {
+    try {
+        const r = await fetch('/api/mcp/servers');
+        const d = await r.json();
+        _renderMcpServers(d.servers || [], d.is_owner !== false);
+    } catch (e) { /* silencieux */ }
+}
+
+function _renderMcpServers(servers, isOwner) {
+    const ul = document.getElementById('mcp-servers-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    const form = document.getElementById('mcp-form');
+    if (form) form.style.display = isOwner ? '' : 'none';
+    if (!servers.length) {
+        const li = document.createElement('li');
+        li.textContent = 'Aucun serveur MCP configuré.';
+        li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+        ul.appendChild(li);
+        return;
+    }
+    servers.forEach(s => {
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;';
+        const span = document.createElement('span');
+        span.style.cssText = 'flex:1;min-width:0;';
+        span.textContent = (s.name || 'serveur') + ' — ' + (s.url || '')
+            + (s.a_jeton ? ', jeton enregistré' : ', sans jeton')
+            + (s.actif === false ? ' (désactivé)' : '');
+        li.appendChild(span);
+        if (isOwner) {
+            const tog = document.createElement('button');
+            tog.type = 'button';
+            tog.textContent = s.actif === false ? 'Activer' : 'Désactiver';
+            tog.setAttribute('aria-label', (s.actif === false ? 'Activer' : 'Désactiver') + ' le serveur MCP ' + (s.name || ''));
+            tog.style.cssText = 'font-size:0.78rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+            tog.addEventListener('click', async () => {
+                try {
+                    const r = await fetch('/api/mcp/servers/' + encodeURIComponent(s.id) + '/toggle', { method: 'POST' });
+                    const d = await r.json();
+                    if (d.servers) _renderMcpServers(d.servers, isOwner);
+                    _coanimmAnnounce('Serveur MCP ' + (s.actif === false ? 'activé.' : 'désactivé.'));
+                } catch (e) { /* silencieux */ }
+            });
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.textContent = 'Supprimer';
+            del.setAttribute('aria-label', 'Supprimer le serveur MCP ' + (s.name || ''));
+            del.style.cssText = tog.style.cssText;
+            del.addEventListener('click', async () => {
+                try {
+                    const r = await fetch('/api/mcp/servers/' + encodeURIComponent(s.id), { method: 'DELETE' });
+                    const d = await r.json();
+                    if (d.servers) _renderMcpServers(d.servers, isOwner);
+                    _coanimmAnnounce('Serveur MCP supprimé.');
+                } catch (e) { /* silencieux */ }
+            });
+            li.appendChild(tog);
+            li.appendChild(del);
+        }
+        ul.appendChild(li);
+    });
+}
+
+document.getElementById('mcp-add-btn')?.addEventListener('click', async () => {
+    const name = (document.getElementById('mcp-name')?.value || '').trim();
+    const url = (document.getElementById('mcp-url')?.value || '').trim();
+    const jeton = document.getElementById('mcp-token')?.value || '';
+    if (!url) { _coanimmAnnounce("Indique l'adresse du serveur MCP."); return; }
+    try {
+        const r = await fetch('/api/mcp/servers', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, url, jeton: jeton || null }),
+        });
+        const d = await r.json();
+        if (r.ok && d.servers) {
+            _renderMcpServers(d.servers, true);
+            const t = document.getElementById('mcp-token');
+            if (t) t.value = '';           // ne jamais laisser le secret à l'écran
+            _coanimmAnnounce('Serveur MCP ajouté.');
+        } else {
+            _coanimmAnnounce('Ajout refusé : ' + (d.detail || 'erreur.'));
+        }
+    } catch (e) { _coanimmAnnounce("Erreur réseau lors de l'ajout du serveur MCP."); }
+});
+document.getElementById('mcp-details')?.addEventListener('toggle', function () {
+    if (this.open) loadMcpServers();
+});
+
 // ── Ricochets planifiés ──
 const _JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 
@@ -11519,6 +11609,52 @@ init();
 (function () {
     var _batchJobId = null;
 
+    // Fournisseur choisi : routes et modèles en dépendent.
+    function _batchProvider() {
+        return document.getElementById('batch-provider-select')?.value || 'mistral';
+    }
+    function _batchBase() {
+        return '/api/' + _batchProvider() + '/batch';
+    }
+    var _BATCH_MODELS = {
+        mistral: [
+            ['mistral-small-latest', 'Mistral Small (rapide, économique)'],
+            ['mistral-medium-latest', 'Mistral Medium'],
+            ['mistral-large-latest', 'Mistral Large'],
+            ['magistral-small-latest', 'Magistral Small (raisonnement)'],
+            ['magistral-medium-latest', 'Magistral Medium (raisonnement)'],
+        ],
+        anthropic: [],
+    };
+    var _BATCH_ANTHROPIC_REPLI = [
+        ['claude-haiku-4-5-20251001', 'Claude Haiku (rapide, économique)'],
+        ['claude-sonnet-4-6', 'Claude Sonnet (équilibre)'],
+    ];
+    async function _batchPopulateModels() {
+        var sel = document.getElementById('batch-model-select');
+        if (!sel) return;
+        var p = _batchProvider();
+        var liste = _BATCH_MODELS[p] || [];
+        if (p === 'anthropic' && !liste.length) {
+            try {
+                var r = await fetch('/api/models/anthropic');
+                var d = await r.json();
+                liste = (d.models || []).map(function (m) { return [m.id, m.label || m.id]; });
+            } catch (e) { /* repli */ }
+            if (!liste.length) liste = _BATCH_ANTHROPIC_REPLI;
+            _BATCH_MODELS.anthropic = liste;
+        }
+        sel.innerHTML = liste.map(function (m) {
+            return '<option value="' + m[0] + '">' + m[1] + '</option>';
+        }).join('');
+    }
+    document.getElementById('batch-provider-select')?.addEventListener('change', function () {
+        _batchSetJobId(null);
+        _batchSetStatus('Fournisseur changé : ' + _batchProvider() + '. Nouveau lot à soumettre.');
+        _batchPopulateModels();
+    });
+    _batchPopulateModels();
+
     function _batchSetStatus(msg) {
         var el = document.getElementById('batch-status-out');
         if (el) el.textContent = msg;
@@ -11543,14 +11679,14 @@ init();
         var maxTok  = parseInt(document.getElementById('batch-max-tokens')?.value || '1024', 10);
         _batchSetStatus('Envoi du lot… (' + prompts.length + ' requêtes)');
         try {
-            var resp = await fetch('/api/mistral/batch/submit', {
+            var resp = await fetch(_batchBase() + '/submit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ prompts, model, max_tokens: maxTok })
             });
             if (!resp.ok) throw new Error(await resp.text());
             var data = await resp.json();
-            _batchSetJobId(data.job_id);
+            _batchSetJobId(data.job_id || data.batch_id);
             _batchSetStatus('Lot soumis. Statut : ' + (data.status || '?'));
         } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
     });
@@ -11559,11 +11695,17 @@ init();
         if (!_batchJobId) return;
         _batchSetStatus('Vérification…');
         try {
-            var resp = await fetch('/api/mistral/batch/status/' + _batchJobId);
+            var resp = await fetch(_batchBase() + '/status/' + _batchJobId);
             if (!resp.ok) throw new Error(await resp.text());
             var d = await resp.json();
-            _batchSetStatus('Statut : ' + d.status +
-                (d.total_requests ? ' | ' + (d.succeeded_requests || 0) + '/' + d.total_requests + ' OK' : ''));
+            var detail = '';
+            if (d.total_requests) {
+                detail = ' | ' + (d.succeeded_requests || 0) + '/' + d.total_requests + ' réussies';
+            } else if (d.succeeded !== undefined) {
+                detail = ' | ' + (d.succeeded || 0) + ' réussies, ' + (d.errored || 0)
+                       + ' en erreur, ' + (d.processing || 0) + ' en cours';
+            }
+            _batchSetStatus('Statut : ' + d.status + detail);
         } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
     });
 
@@ -11572,10 +11714,10 @@ init();
         _batchSetStatus('Récupération des résultats…');
         var out = document.getElementById('batch-results-out');
         try {
-            var resp = await fetch('/api/mistral/batch/results/' + _batchJobId);
+            var resp = await fetch(_batchBase() + '/results/' + _batchJobId);
             if (!resp.ok) throw new Error(await resp.text());
             var d = await resp.json();
-            if (d.status !== 'SUCCESS') {
+            if (d.status !== 'SUCCESS' && d.status !== 'ended') {
                 _batchSetStatus('Pas encore terminé (statut : ' + d.status + ').');
                 return;
             }
@@ -11615,7 +11757,7 @@ init();
         if (!_batchJobId) return;
         if (!confirm('Annuler ce job batch ?')) return;
         try {
-            var resp = await fetch('/api/mistral/batch/' + _batchJobId, { method: 'DELETE' });
+            var resp = await fetch(_batchBase() + '/' + _batchJobId, { method: 'DELETE' });
             if (!resp.ok) throw new Error(await resp.text());
             _batchSetStatus('Job annulé.');
             _batchSetJobId(null);

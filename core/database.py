@@ -2183,6 +2183,74 @@ def remove_coanimm_path(path: str) -> list:
 
 _COANIMM_HISTORY_MAX = 50
 
+# ── Serveurs MCP distants (connecteur Anthropic) ──
+# Le jeton d'autorisation est un SECRET : chiffré au repos avec la même clé Fernet
+# que les clés API, et jamais renvoyé par l'API de lecture.
+_MCP_SERVERS_MAX = 20
+
+def list_mcp_servers(inclure_jeton: bool = False) -> list:
+    """Serveurs MCP configurés. Par défaut le jeton est masqué (`a_jeton` booléen)."""
+    raw = get_setting('mcp_servers', '[]')
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return []
+    except Exception:
+        return []
+    out = []
+    for s in data:
+        e = {k: v for k, v in s.items() if k != 'jeton_enc'}
+        e['a_jeton'] = bool(s.get('jeton_enc'))
+        if inclure_jeton and s.get('jeton_enc'):
+            try:
+                e['jeton'] = _api_keys_fernet().decrypt(s['jeton_enc'].encode()).decode()
+            except Exception:
+                e['jeton'] = ''
+        out.append(e)
+    return out
+
+def _save_mcp_servers(servers: list) -> None:
+    set_setting('mcp_servers', json.dumps(servers[:_MCP_SERVERS_MAX], ensure_ascii=False))
+
+def _raw_mcp_servers() -> list:
+    try:
+        data = json.loads(get_setting('mcp_servers', '[]'))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def add_mcp_server(name: str, url: str, jeton: str = '') -> list:
+    """Ajoute un serveur MCP distant (jeton chiffré si fourni)."""
+    servers = _raw_mcp_servers()
+    entry = {
+        'id': uuid.uuid4().hex,
+        'name': (name or '').strip()[:100] or 'serveur MCP',
+        'url': (url or '').strip()[:500],
+        'actif': True,
+        'cree_le': datetime.now().isoformat(timespec='seconds'),
+    }
+    if jeton:
+        try:
+            entry['jeton_enc'] = _api_keys_fernet().encrypt(jeton.encode('utf-8')).decode('utf-8')
+        except Exception:
+            entry['jeton_enc'] = ''
+    servers.append(entry)
+    _save_mcp_servers(servers)
+    return list_mcp_servers()
+
+def toggle_mcp_server(server_id: str) -> list:
+    servers = _raw_mcp_servers()
+    for s in servers:
+        if s.get('id') == server_id:
+            s['actif'] = not s.get('actif', True)
+            break
+    _save_mcp_servers(servers)
+    return list_mcp_servers()
+
+def remove_mcp_server(server_id: str) -> list:
+    _save_mcp_servers([s for s in _raw_mcp_servers() if s.get('id') != server_id])
+    return list_mcp_servers()
+
 _COANIMM_SCHEDULES_MAX = 50
 
 def list_coanimm_schedules() -> list:

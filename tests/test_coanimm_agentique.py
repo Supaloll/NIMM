@@ -420,6 +420,25 @@ def test_specificites_anthropic_confinees():
     ok("multi-fournisseurs : les spécificités Anthropic restent confinées")
 
 
+def test_mcp_inerte_sans_serveur():
+    """Sans serveur MCP configuré, rien ne doit changer dans l'appel : ni champ
+    mcp_servers, ni en-tête bêta. Et le jeton ne doit jamais sortir en lecture."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    assert "if _mcp:\n        payload['mcp_servers'] = _mcp" in eng
+    assert "**({'anthropic-beta': 'mcp-client-2025-11-20'} if _mcp else {})" in eng
+
+    db = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    i = db.find('def list_mcp_servers')
+    corps = db[i:db.find('\ndef ', i + 10)]
+    assert "k != 'jeton_enc'" in corps, "le jeton chiffré doit être retiré de la lecture"
+    assert 'a_jeton' in corps, "un booléen doit remplacer le jeton"
+
+    m = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    assert 'startswith("https://")' in m, "adresse MCP : https exigé"
+    ok("MCP : inerte sans serveur, jeton jamais exposé, https exigé")
+
+
 # ── 7. Scripts enregistrés : boucle agentique ──────────────────────────
 
 def _env_script(exec_fn):
@@ -490,7 +509,7 @@ if __name__ == '__main__':
                test_chat_liste, test_chat_resolution_nom, test_chat_dispatch,
                test_fiabilite_ricochet, test_critique_desactivable, test_echeances,
                test_worker_marque_a_notifier, test_facturation_cache,
-               test_specificites_anthropic_confinees,
+               test_specificites_anthropic_confinees, test_mcp_inerte_sans_serveur,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()
