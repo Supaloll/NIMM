@@ -941,6 +941,80 @@ def run_script(script_id: str, args: list = None, thread_id: str = None,
     return result
 
 
+SCRIPT_MAX_ITERATIONS = 2  # exécutions max d'un script enregistré (1 essai + 1 correction)
+
+
+async def run_script_agentique(script_id: str, args: list = None, thread_id: str = None,
+                               confirm_scope: str = None) -> dict:
+    """Exécute un script enregistré AVEC la boucle agentique (comme les consignes
+    libres et les ricochets) : réparation sur échec, vérification du résultat sur
+    succès, et remontée des fichiers produits.
+
+    `run_script()` reste inchangée (permissions + exécution simple) : c'est elle qui
+    fait le premier essai, donc la gestion de permission est strictement identique.
+    Le script CORRIGÉ n'est jamais réécrit en base — la version enregistrée par
+    l'utilisateur reste la référence.
+    """
+    workdir = _workspace_dir(thread_id)
+    before = set(os.listdir(workdir)) if os.path.isdir(workdir) else set()
+
+    result = run_script(script_id, args, thread_id, confirm_scope)
+    if result.get('status') == 'permission_required' or 'script_id' not in result:
+        return result  # permission à accorder, script introuvable ou vide
+
+    entry = db.list_prompts('script').get(script_id) or {}
+    consigne = (entry.get('meta') or {}).get('consigne_origine') or entry.get('label') or script_id
+    code = entry.get('text', '')
+
+    for attempt in range(1, SCRIPT_MAX_ITERATIONS + 1):
+        if result.get('blocked') or result.get('needs_confirmation') or result.get('missing_capabilities'):
+            break
+        if result.get('status') == 'error' and 'Délai dépassé' in (result.get('message') or ''):
+            break
+
+        failed = (result.get('status') != 'ok') or (result.get('returncode', 0) != 0)
+        if failed:
+            if attempt >= SCRIPT_MAX_ITERATIONS:
+                break
+            feedback = ((result.get('message') or '') + '\n'
+                        + (result.get('stderr') or '') + '\n'
+                        + (result.get('stdout') or '')).strip()
+        else:
+            _new = _scan_new_files(workdir, before)
+            _desc = []
+            for _f in _new:
+                try:
+                    _desc.append({'filename': _f.get('filename', ''),
+                                  'size': os.path.getsize(_f.get('path', ''))})
+                except OSError:
+                    _desc.append({'filename': _f.get('filename', ''), 'size': 0})
+            critique = await critique_result(consigne, code,
+                                             dict(result, files_list=_desc), thread_id)
+            result['critique'] = critique
+            if critique.get('verdict') != 'insuffisant' or attempt >= SCRIPT_MAX_ITERATIONS:
+                break
+            feedback = ("Le script s'est exécuté sans erreur (code retour 0) mais le résultat "
+                        "ne répond pas à la consigne : " + (critique.get('motif') or '')
+                        + ((" Conseil : " + critique['conseil']) if critique.get('conseil') else ''))
+
+        try:
+            new_code = await repair_code(code, feedback, consigne, thread_id)
+        except Exception as _e:
+            print(f"[COANIMM] Correction du script impossible : {_e}")
+            break
+        if not new_code.strip() or _check_syntax(new_code) is not None:
+            break
+        code = new_code
+        result = _execute(code, args, workdir, thread_id)
+        result['script_id'] = script_id
+        result['code_corrige'] = code   # proposé à l'utilisateur, PAS enregistré
+
+    new_files = _scan_new_files(workdir, before)
+    result['files_info'], result['files_list'] = _route_new_files(new_files, thread_id)
+    result['files_count'] = len(new_files)
+    return result
+
+
 async def generate_code(consigne: str, thread_id: str = None,
                          provider_override: str = None) -> str:
     """Demande au LLM de générer un script Python à partir d'une consigne.

@@ -8854,8 +8854,9 @@ function _coanimmShowResult(data, label) {
     // Label stderr = élément précédent le textarea dans le DOM
     const stderrLabel = stderrEl ? stderrEl.previousElementSibling : null;
     if (data.status === 'ok') {
-        statusEl.textContent = `Terminé (code retour ${data.returncode}).`;
-        _coanimmAnnounce('Terminé.');
+        const _corrige = data.code_corrige ? " CoaNIMM a corrigé le script pour cette exécution ; le script enregistré n'a pas été modifié." : '';
+        statusEl.textContent = `Terminé (code retour ${data.returncode}).` + _corrige;
+        _coanimmAnnounce('Terminé.' + _corrige);
         stdoutEl.value = data.stdout || '';
     } else {
         statusEl.textContent = `Erreur : ${data.message || 'erreur inconnue.'}`;
