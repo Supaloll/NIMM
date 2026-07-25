@@ -420,6 +420,61 @@ def test_specificites_anthropic_confinees():
     ok("multi-fournisseurs : les spécificités Anthropic restent confinées")
 
 
+def test_avis_raison_arret():
+    """Une réponse coupée par la limite de longueur arrive tronquée SANS signal :
+    invisible pour qui lit en braille ou à la voix. On vérifie que l'avis est émis
+    pour les arrêts anormaux seulement, et jamais sur une fin normale."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    ns = {}
+    exec(src[src.find('_AVIS_STOP = {'):src.find('\ndef _anthropic_billable_input')], ns)
+    f = ns['_avis_stop_reason']
+    assert 'limite de longueur' in f('max_tokens')
+    assert 'préféré ne pas' in f('refusal')
+    assert 'pause' in f('pause_turn')
+    for normal in ('end_turn', 'tool_use', '', None):
+        assert f(normal) == '', f"aucun avis attendu pour {normal!r}"
+    ok("raison d'arrêt : troncature et refus annoncés, fin normale silencieuse")
+
+
+def test_repli_cache_refuse():
+    """cache_control part sur TOUS les appels Anthropic, chat en streaming compris.
+    Si l'API le refusait, plus aucune conversation ne passerait : on vérifie que le
+    refus désactive le cache et relance, et qu'aucune AUTRE erreur ne le déclenche."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    bloc = src[src.find('def _anthropic_desactiver_cache'):src.find('\ndef _anthropic_billable_input')]
+
+    faux_db = types.ModuleType('core.database')
+    reglages = {}
+    faux_db.set_setting = lambda k, v: reglages.__setitem__(k, v)
+    sys.modules['core.database'] = faux_db
+
+    class R:
+        def __init__(self, code, texte):
+            self.status_code, self.text = code, texte
+
+    class HSE(Exception):
+        def __init__(self, resp):
+            self.response = resp
+    faux_httpx = types.ModuleType('httpx')
+    faux_httpx.HTTPStatusError = HSE
+    sys.modules['httpx'] = faux_httpx
+
+    ns = {}
+    exec(bloc, ns)
+    f = ns['_anthropic_cache_fallback']
+    assert f(HSE(R(400, 'Unexpected field: cache_control'))) is True
+    assert reglages.get('anthropic_cache_active') == '0'
+    reglages.clear()
+    assert f(HSE(R(400, 'credit balance is too low'))) is False
+    assert f(HSE(R(429, 'rate limit'))) is False
+    assert f(ValueError('réseau')) is False
+    assert not reglages, "seul un refus du champ de cache doit le désactiver"
+    del sys.modules['core.database'], sys.modules['httpx']
+    ok("cache refusé : repli automatique, sans masquer les autres erreurs")
+
+
 def test_mcp_inerte_sans_serveur():
     """Sans serveur MCP configuré, rien ne doit changer dans l'appel : ni champ
     mcp_servers, ni en-tête bêta. Et le jeton ne doit jamais sortir en lecture."""
@@ -510,6 +565,7 @@ if __name__ == '__main__':
                test_fiabilite_ricochet, test_critique_desactivable, test_echeances,
                test_worker_marque_a_notifier, test_facturation_cache,
                test_specificites_anthropic_confinees, test_mcp_inerte_sans_serveur,
+               test_repli_cache_refuse, test_avis_raison_arret,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()

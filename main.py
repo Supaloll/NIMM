@@ -1664,6 +1664,33 @@ async def mcp_servers_delete(server_id: str):
         raise HTTPException(403, detail="Seul le propriétaire peut supprimer un serveur MCP.")
     return {"status": "ok", "servers": _db.remove_mcp_server(server_id)}
 
+class CoanimmAskDocsReq(BaseModel):
+    question: str = ""
+    k: int = 5
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/ask_documents")
+async def coanimm_ask_documents(req: CoanimmAskDocsReq):
+    """Répond à une question À PARTIR de la base de connaissances, en citant la
+    phrase exacte de chaque source. Complète search_documents, qui rend les
+    passages bruts sans rattacher les affirmations à leur origine."""
+    import core.database as _db
+    if "ask_documents" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil « interroger la base avec citations » désactivé.]"}
+    q = (req.question or "").strip()
+    if not q:
+        return {"result": "[Aucune question fournie.]"}
+    try:
+        from modules.enrichissement import search_documents
+        passages = search_documents(q, k=max(1, min(8, int(req.k or 5))))
+    except Exception as e:
+        return {"result": f"[Base de connaissances indisponible : {e}]"}
+    from core.engine import answer_with_citations_anthropic
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    return {"result": await answer_with_citations_anthropic(passages or [], q,
+                                                  api_keys=settings.get("api_keys", {}))}
+
 class CoanimmPdfVisualReq(BaseModel):
     path: str = ""
     question: Optional[str] = None
@@ -2497,6 +2524,7 @@ _COANIMM_TOOLS = [
     {"tool": "doc_search", "label": "Consulter la base de connaissances", "category": "Documents"},
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
     {"tool": "read_pdf_visual", "label": "Lire un PDF visuellement (mise en page, tableaux, scans)", "category": "Documents"},
+    {"tool": "ask_documents", "label": "Interroger la base de connaissances avec citations", "category": "Documents"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},
