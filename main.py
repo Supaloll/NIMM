@@ -178,6 +178,8 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_run_decay,        daemon=True).start()
     threading.Thread(target=_run_inference,    daemon=True).start()
     asyncio.create_task(memory_worker())
+    from modules.coanimm import schedule_worker
+    asyncio.create_task(schedule_worker())
     yield
 
 app = FastAPI(title="NIMM", lifespan=lifespan)
@@ -3270,6 +3272,58 @@ async def coanimm_workflows_run_stream(workflow_id: str, thread_id: str = "",
         yield "data: [DONE]\n\n"
 
     return SR(_gen(), media_type="text/event-stream")
+
+class CoanimmScheduleReq(BaseModel):
+    workflow_id: str = ""
+    jour: Optional[int] = None   # None = tous les jours ; 0 = lundi … 6 = dimanche
+    heure: int = 9
+    minute: int = 0
+    parametre: Optional[str] = None
+
+@app.get("/api/coanimm/schedules")
+async def coanimm_schedules_list():
+    """Ricochets planifiés + droit de gestion (propriétaire)."""
+    import core.database as _db
+    return {"schedules": _db.list_coanimm_schedules(), "is_owner": _db.is_current_user_admin()}
+
+@app.post("/api/coanimm/schedules")
+async def coanimm_schedules_add(req: CoanimmScheduleReq):
+    """Planifie un ricochet (réservé au propriétaire). jour None = tous les jours."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut planifier un ricochet.")
+    if req.jour is not None and not (0 <= int(req.jour) <= 6):
+        raise HTTPException(400, "jour invalide (0 = lundi … 6 = dimanche, ou vide = tous les jours).")
+    if not (0 <= int(req.heure) <= 23 and 0 <= int(req.minute) <= 59):
+        raise HTTPException(400, "heure invalide.")
+    wfs = _db.list_prompts('workflow')
+    wf = wfs.get(req.workflow_id or "")
+    if not wf:
+        raise HTTPException(404, "Ricochet introuvable.")
+    return {"status": "ok",
+            "schedules": _db.add_coanimm_schedule(req.workflow_id, wf.get('label', ''),
+                                                  req.jour, req.heure, req.minute,
+                                                  req.parametre or "")}
+
+@app.post("/api/coanimm/schedules/{sched_id}/toggle")
+async def coanimm_schedules_toggle(sched_id: str):
+    """Active/désactive une planification (réservé au propriétaire)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut modifier une planification.")
+    for s in _db.list_coanimm_schedules():
+        if s.get('id') == sched_id:
+            return {"status": "ok",
+                    "schedules": _db.update_coanimm_schedule(sched_id, actif=not s.get('actif', True))}
+    raise HTTPException(404, "Planification introuvable.")
+
+@app.delete("/api/coanimm/schedules/{sched_id}")
+async def coanimm_schedules_delete(sched_id: str):
+    """Supprime une planification (réservé au propriétaire)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut supprimer une planification.")
+    return {"status": "ok", "schedules": _db.remove_coanimm_schedule(sched_id)}
 
 @app.delete("/api/coanimm/workflows/{workflow_id}")
 async def coanimm_workflows_delete(workflow_id: str):

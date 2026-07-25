@@ -295,12 +295,29 @@ def test_critique_desactivable():
     ok("réglage : critique désactivée → verdict ok immédiat, sans appel IA")
 
 
+# ── 6. Planification (schedule_due, fonction pure) ─────────────────────
+
+def test_echeances():
+    import datetime as dt
+    lundi_10h = dt.datetime(2026, 7, 20, 10, 0)   # un lundi
+    base = {'actif': True, 'jour': None, 'heure': 9, 'minute': 30, 'dernier_run': ''}
+    assert C.schedule_due(dict(base), lundi_10h) is True                       # 9h30 passée, jamais lancée
+    assert C.schedule_due(dict(base, heure=11), lundi_10h) is False            # pas encore l'heure
+    assert C.schedule_due(dict(base, actif=False), lundi_10h) is False         # désactivée
+    assert C.schedule_due(dict(base, jour=0), lundi_10h) is True               # lundi = 0, on est lundi
+    assert C.schedule_due(dict(base, jour=3), lundi_10h) is False              # jeudi ≠ lundi
+    assert C.schedule_due(dict(base, dernier_run='2026-07-20T09:31:00'), lundi_10h) is False  # déjà lancée
+    assert C.schedule_due(dict(base, dernier_run='2026-07-19T09:31:00'), lundi_10h) is True   # lancée hier
+    assert C.schedule_due(dict(base, heure='zz'), lundi_10h) is False          # heure invalide → jamais
+    ok("planification : 8 cas d'échéance (heure, jour, actif, dernier_run, invalide)")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
                test_adaptation_appelee, test_sans_entree_pas_dadaptation, test_adaptation_invalide_repli,
                test_journalisation_succes, test_journalisation_refus_capacite, test_journalisation_echec_etape,
                test_chat_liste, test_chat_resolution_nom, test_chat_dispatch,
-               test_fiabilite_ricochet, test_critique_desactivable]:
+               test_fiabilite_ricochet, test_critique_desactivable, test_echeances]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

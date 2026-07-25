@@ -1778,6 +1778,74 @@ async def adapt_step_code(code: str, consigne: str, parametre: str,
 WORKFLOW_STEP_MAX_ITERATIONS = 2  # exécutions max d'une même étape (1 essai + 1 réparation)
 
 
+SCHEDULER_TICK_SECONDS = 30
+
+
+def schedule_due(sched: dict, now=None) -> bool:
+    """PURE et testable : la planification `sched` est-elle due à l'instant `now` ?
+
+    Règles : inactif → jamais ; jour (None = tous, 0 = lundi … 6 = dimanche) doit
+    correspondre ; due si now >= heure:minute du jour ET pas déjà exécutée pour
+    cette échéance (dernier_run >= échéance du jour). Si NIMM était éteint à
+    l'heure prévue, l'exécution RATTRAPE au démarrage suivant le même jour.
+    """
+    import datetime as _dt
+    now = now or _dt.datetime.now()
+    if not sched.get('actif', True):
+        return False
+    jour = sched.get('jour', None)
+    if jour is not None and int(jour) != now.weekday():
+        return False
+    try:
+        h = int(sched.get('heure', 0))
+        m = int(sched.get('minute', 0))
+    except (TypeError, ValueError):
+        return False
+    target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if now < target:
+        return False
+    dr = (sched.get('dernier_run') or '').strip()
+    if dr:
+        try:
+            if _dt.datetime.fromisoformat(dr) >= target:
+                return False  # déjà exécutée pour cette échéance
+        except ValueError:
+            pass
+    return True
+
+
+async def schedule_worker():
+    """Boucle de fond : lance les ricochets planifiés à leur échéance.
+
+    dernier_run est posé AVANT l'exécution (anti double-déclenchement pendant un
+    run long) ; dernier_statut reflète le résultat. Les exécutions passent par
+    run_workflow → mêmes garanties et journalisation que les autres lancements.
+    """
+    import asyncio as _asyncio
+    import datetime as _dt
+    print("[COANIMM-SCHED] Planificateur de ricochets démarré.")
+    while True:
+        try:
+            for s in db.list_coanimm_schedules():
+                if not schedule_due(s):
+                    continue
+                sid = s.get('id', '')
+                print(f"[COANIMM-SCHED] Échéance : {s.get('label', '')} ({sid[:8]})")
+                db.update_coanimm_schedule(sid,
+                                           dernier_run=_dt.datetime.now().isoformat(timespec='seconds'),
+                                           dernier_statut='en cours')
+                try:
+                    res = await run_workflow(s.get('workflow_id', ''), None,
+                                             parametre=s.get('parametre', '') or '')
+                    db.update_coanimm_schedule(sid, dernier_statut=res.get('status', 'error'))
+                except Exception as e:
+                    print(f"[COANIMM-SCHED] Erreur d'exécution : {e}")
+                    db.update_coanimm_schedule(sid, dernier_statut='error')
+        except Exception as e:
+            print(f"[COANIMM-SCHED] Tick ignoré : {e}")
+        await _asyncio.sleep(SCHEDULER_TICK_SECONDS)
+
+
 def _log_workflow_run(wf: dict, parametre: str, status: str, message: str,
                       files_count: int = 0, returncode=None,
                       workflow_id: str = None) -> None:

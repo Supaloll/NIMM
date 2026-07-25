@@ -1096,6 +1096,26 @@ Analyse les sentiments de : ..."
             </p>
             <!-- Liste des workflows existants -->
             <ul id="coanimm-workflows-list" style="list-style:none;padding:0;margin:0 0 10px;font-size:0.82rem;" aria-label="Ricochets enregistrés"></ul>
+            <details style="margin:0 0 10px;">
+                <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;">Ricochets planifiés</summary>
+                <p style="font-size:0.78rem;color:var(--text-muted);margin:6px 0;">Lance automatiquement un ricochet à heure fixe tant que NIMM est ouvert. Si NIMM était fermé à l'heure prévue, l'exécution rattrape à l'ouverture suivante, le même jour.</p>
+                <ul id="coanimm-schedules-list" style="list-style:none;padding:0;margin:0 0 10px;font-size:0.82rem;" aria-label="Ricochets planifiés"></ul>
+                <div id="coanimm-sched-form" style="display:flex;flex-direction:column;gap:6px;">
+                    <label for="coanimm-sched-wf" style="font-size:0.82rem;margin:0;">Ricochet à planifier</label>
+                    <select id="coanimm-sched-wf" style="font-size:0.85rem;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);"></select>
+                    <label for="coanimm-sched-jour" style="font-size:0.82rem;margin:0;">Jour</label>
+                    <select id="coanimm-sched-jour" style="font-size:0.85rem;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);">
+                        <option value="">Tous les jours</option>
+                        <option value="0">Lundi</option><option value="1">Mardi</option><option value="2">Mercredi</option>
+                        <option value="3">Jeudi</option><option value="4">Vendredi</option><option value="5">Samedi</option><option value="6">Dimanche</option>
+                    </select>
+                    <label for="coanimm-sched-heure" style="font-size:0.82rem;margin:0;">Heure</label>
+                    <input type="time" id="coanimm-sched-heure" value="09:00" style="font-size:0.85rem;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);width:auto;">
+                    <label for="coanimm-sched-entree" style="font-size:0.82rem;margin:0;">Entrée du ricochet (facultatif)</label>
+                    <input type="text" id="coanimm-sched-entree" autocomplete="off" style="font-size:0.85rem;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);">
+                    <button type="button" id="coanimm-sched-add-btn" style="align-self:flex-start;font-size:0.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Planifier ce ricochet</button>
+                </div>
+            </details>
             <!-- Résultat d'exécution d'un workflow -->
             <div style="margin:0 0 8px;">
                 <label for="coanimm-wf-input" style="display:block;font-size:0.82rem;margin-bottom:4px;">Entrée du ricochet (facultatif : sujet, fichier, lien ou texte — appliquée au prochain lancement)</label>
@@ -1787,7 +1807,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260724-critique-toggle"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260724-sched"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
