@@ -4205,6 +4205,11 @@ async def process_message_stream(
                         _last_usage = token
                     elif token.get('__truncated__'):
                         yield "data: [TRUNCATED]\n\n"
+                    elif token.get('__raisonnement__'):
+                        import json as _jr2
+                        yield ("data: [RAISONNEMENT]"
+                               + _jr2.dumps(token['__raisonnement__'], ensure_ascii=False)
+                               + "\n\n")
                     continue
                 full_reply += token
                 _yield_buf += token
@@ -4284,6 +4289,11 @@ async def process_message_stream(
                             elif token.get('__truncated__'):
                                 # Le frontend affiche alors le bouton « Continuer ».
                                 yield "data: [TRUNCATED]\n\n"
+                            elif token.get('__raisonnement__'):
+                                import json as _jr
+                                yield ("data: [RAISONNEMENT]"
+                                       + _jr.dumps(token['__raisonnement__'], ensure_ascii=False)
+                                       + "\n\n")
                             continue
                         full_reply += token
                         _yield_buf += token

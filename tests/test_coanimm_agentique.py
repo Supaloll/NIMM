@@ -469,6 +469,125 @@ def test_rag_ancrage_lexical():
     ok("base de connaissances : ancrage lexical contre les documents hors sujet")
 
 
+def test_caches_de_contexte():
+    """Gemini (2.5+) et DeepSeek mettent le contexte en cache AUTOMATIQUEMENT et
+    facturent les tokens relus 90 % moins cher, chacun dans ses propres champs.
+    Ne pas les distinguer SURÉVALUE la dépense — l'inverse du défaut trouvé sur
+    le cache Anthropic, où elle était sous-évaluée."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    lignes = src.splitlines(keepends=True)
+
+    def corps(nom):
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.FunctionDef) and n.name == nom:
+                return ''.join(lignes[n.lineno - 1:n.end_lineno])
+        raise AssertionError(f'{nom} introuvable')
+
+    ns = {'_REMISE_CACHE': 0.1}
+    exec(corps('_gemini_tokens_entree'), ns)
+    exec(corps('_oai_tokens_entree'), ns)
+    g, o = ns['_gemini_tokens_entree'], ns['_oai_tokens_entree']
+
+    # Gemini : le compte caché est INCLUS dans le total
+    assert g({'promptTokenCount': 1000}) == 1000
+    assert g({'promptTokenCount': 1000, 'cachedContentTokenCount': 800}) == 280
+    assert g({'promptTokenCount': 500, 'cachedContentTokenCount': 900}) == 50, \
+        'le cache ne peut pas dépasser le total'
+    assert g({}) == 0 and g(None) == 0
+
+    # DeepSeek : entrée éclatée en touché / manqué
+    assert o({'prompt_cache_hit_tokens': 1200, 'prompt_cache_miss_tokens': 300}) == 420
+    assert o({'prompt_tokens': 1500}) == 1500, 'fournisseur sans cache : inchangé'
+    assert o({'prompt_tokens': 1500, 'prompt_cache_hit_tokens': 1200,
+              'prompt_cache_miss_tokens': 300}) == 420, 'les champs de cache priment'
+    assert o({}) == 0 and o(None) == 0
+
+    # Plus aucun chemin ne doit journaliser l'entrée brute
+    assert "usage.get('prompt_tokens', 0)," not in src
+    assert "meta.get('promptTokenCount', 0)," not in src
+    ok("caches automatiques : entrée pondérée pour Gemini et DeepSeek")
+
+
+def test_specificites_gemini_et_openai():
+    """Deux dépenses et un refus silencieux, trouvés en lisant les docs :
+    — Gemini « pense » PAR DÉFAUT (séries 3.x et 2.5) et facture ces tokens à part ;
+      ne compter que la réponse sous-évaluait la dépense.
+    — Les modèles de raisonnement OpenAI (série o) refusent `max_tokens` et
+      `temperature` ; le catalogue interrogé en direct les propose désormais."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    lignes = src.splitlines(keepends=True)
+
+    def corps(nom):
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.FunctionDef) and n.name == nom:
+                return ''.join(lignes[n.lineno - 1:n.end_lineno])
+        raise AssertionError(f'{nom} introuvable')
+
+    ns = {}
+    exec(corps('_gemini_tokens_sortie'), ns)
+    g = ns['_gemini_tokens_sortie']
+    assert g({'candidatesTokenCount': 100}) == 100
+    assert g({'candidatesTokenCount': 100, 'thoughtsTokenCount': 297}) == 397, \
+        'les tokens de pensée sont facturés et doivent être comptés'
+    assert g({}) == 0 and g(None) == 0
+    assert "meta.get('candidatesTokenCount', 0))" not in src, \
+        'plus aucun comptage Gemini ne doit ignorer la pensée'
+
+    ns2 = {}
+    exec(corps('_modele_raisonnement_openai'), ns2)
+    o = ns2['_modele_raisonnement_openai']
+    for oui in ('o1', 'o1-mini', 'o3', 'o3-mini', 'O4-preview'):
+        assert o(oui), oui
+    for non in ('gpt-4o', 'gpt-4o-mini', 'gpt-5', 'mistral-large-latest', ''):
+        assert not o(non), f'faux positif : {non}'
+
+    for n in ast.walk(ast.parse(src)):
+        if getattr(n, 'name', '') == 'call_llm_stream_with_tools':
+            seg = ast.get_source_segment(src, n)
+            assert "'max_completion_tokens' if _raisonneur_oai else 'max_tokens'" in seg
+            assert 'if not _sans_outils and not _raisonneur_oai:' in seg
+    ok("Gemini : pensée facturée comptée ; OpenAI série o : bons paramètres")
+
+
+def test_modele_de_raisonnement():
+    """deepseek-reasoner : sa chaîne de pensée arrive dans un champ SÉPARÉ que NIMM
+    jetait, et il n'accepte NI les appels d'outils NI les paramètres
+    d'échantillonnage — que NIMM lui envoyait quand même."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    ns = {}
+    exec(eng[eng.find('_MODELES_SANS_OUTILS'):
+             eng.find('\ndef _anthropic_billable_input')], ns)
+    f = ns['_modele_sans_outils']
+    assert f('deepseek-reasoner') and f('DeepSeek-Reasoner'), 'casse indifférente'
+    for autre in ('deepseek-chat', 'mistral-large-latest', 'gpt-4o', ''):
+        assert not f(autre), f'garde trop large : {autre}'
+
+    for n in ast.walk(ast.parse(eng)):
+        if getattr(n, 'name', '') == 'call_llm_stream_with_tools':
+            seg = ast.get_source_segment(eng, n)
+            assert 'if not _sans_outils' in seg
+            assert "payload['tools'] = tools" in seg
+            assert "payload['temperature'] = temperature" in seg, \
+                'la température aussi doit être conditionnée'
+
+    # Chaîne de pensée : captée, émise, relayée, affichée repliée
+    assert "delta.get('reasoning_content', '')" in eng
+    assert "yield {'__raisonnement__'" in eng
+    assert hub.count('[RAISONNEMENT]') == 2, 'relayé sur les deux chemins'
+    assert "data.startsWith('[RAISONNEMENT]')" in app and '_ajouterRaisonnement' in app
+    # Elle ne doit jamais repartir en entrée : l'API renvoie 400 si on la lui renvoie
+    i = hub.find("elif token.get('__raisonnement__')")
+    assert i > 0 and 'continue' in hub[i:i + 400], \
+        'la sentinelle ne doit pas être concaténée à la réponse enregistrée'
+    ok("modèle de raisonnement : pensée conservée et repliée, outils non envoyés")
+
+
 def test_plan_de_la_reponse():
     """Une réponse se découvre linéairement à la voix ou en braille : on ignore où
     elle va et ce qu'il reste. Sa structure est donc annoncée AVANT la lecture,
@@ -977,6 +1096,8 @@ if __name__ == '__main__':
                test_rag_ancrage_lexical, test_pied_document_honnete,
                test_journal_de_fonctionnement, test_historique_purge_des_appels_en_texte,
                test_panne_fournisseur_reprise, test_plan_de_la_reponse,
+               test_modele_de_raisonnement, test_specificites_gemini_et_openai,
+               test_caches_de_contexte,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

@@ -178,6 +178,67 @@ def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
     return ''
 
 
+# Certains modèles de raisonnement n'acceptent NI les appels d'outils NI les
+# paramètres d'échantillonnage (deepseek-reasoner : « Not Supported Features:
+# Function Calling, FIM ; Not Supported Parameters: temperature, top_p… »).
+# Leur envoyer quand même produit au mieux une requête ignorée, au pire un refus.
+_MODELES_SANS_OUTILS = ('deepseek-reasoner',)
+
+
+# Les modèles de raisonnement OpenAI (série o) refusent `max_tokens` — il faut
+# `max_completion_tokens` — et n'acceptent pas `temperature`. Le catalogue de
+# modèles interrogé en direct les propose désormais : sans garde, les choisir
+# produirait une erreur 400 incompréhensible.
+def _modele_raisonnement_openai(model: str) -> bool:
+    import re as _re_o
+    return bool(_re_o.match(r'^o\d', (model or '').lower()))
+
+
+# Les caches de contexte sont AUTOMATIQUES chez Gemini (séries 2.5+) et DeepSeek :
+# rien à activer, et 90 % de remise sur les tokens servis par le cache. Mais chacun
+# le rapporte dans ses propres champs. Ne pas les distinguer surévalue la dépense
+# — symétrique du défaut inverse trouvé sur le cache Anthropic.
+_REMISE_CACHE = 0.1        # tokens relus = 10 % du prix plein
+
+
+def _gemini_tokens_entree(meta: dict) -> int:
+    """Tokens d'entrée Gemini en équivalent plein tarif (`cachedContentTokenCount`
+    est inclus dans `promptTokenCount` et facturé 10 %)."""
+    m = meta or {}
+    total = int(m.get('promptTokenCount', 0) or 0)
+    caches = int(m.get('cachedContentTokenCount', 0) or 0)
+    caches = min(caches, total)
+    return int(round((total - caches) + _REMISE_CACHE * caches))
+
+
+def _oai_tokens_entree(usage: dict) -> int:
+    """Idem pour les fournisseurs compatibles OpenAI. DeepSeek éclate l'entrée en
+    `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` ; ailleurs on retombe
+    sur `prompt_tokens`."""
+    u = usage or {}
+    hit = int(u.get('prompt_cache_hit_tokens', 0) or 0)
+    miss = int(u.get('prompt_cache_miss_tokens', 0) or 0)
+    if hit or miss:
+        return int(round(miss + _REMISE_CACHE * hit))
+    return int(u.get('prompt_tokens', 0) or 0)
+
+
+def _gemini_tokens_sortie(meta: dict) -> int:
+    """Tokens de sortie FACTURÉS par Gemini = réponse + PENSÉE.
+
+    La « pensée » est active par défaut sur les séries 3.x et 2.5, et sa
+    tarification s'ajoute à celle de la réponse (`thoughtsTokenCount` est distinct
+    de `candidatesTokenCount`). Ne compter que la réponse sous-évalue la dépense.
+    """
+    m = meta or {}
+    return int(m.get('candidatesTokenCount', 0) or 0) + int(m.get('thoughtsTokenCount', 0) or 0)
+
+
+def _modele_sans_outils(model: str) -> bool:
+    m = (model or '').lower()
+    return any(m.startswith(x) for x in _MODELES_SANS_OUTILS)
+
+
 def _anthropic_billable_input(usage: dict) -> int:
     """Tokens d'entrée FACTURABLES, exprimés en équivalent « tokens plein tarif ».
 
@@ -1000,7 +1061,7 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
         r.raise_for_status()
         data = r.json()
         usage = data.get('usage', {})
-        _log(provider_name, model, usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0))
+        _log(provider_name, model, _oai_tokens_entree(usage), usage.get('completion_tokens', 0))
         content = data['choices'][0]['message']['content'] or ''
         citations = (data.get('citations')
                      or data['choices'][0].get('message', {}).get('citations') or [])
@@ -1100,7 +1161,7 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
         r.raise_for_status()
         data = r.json()
         meta = data.get('usageMetadata', {})
-        _log('gemini', model, meta.get('promptTokenCount', 0), meta.get('candidatesTokenCount', 0))
+        _log('gemini', model, _gemini_tokens_entree(meta), _gemini_tokens_sortie(meta))
         parts = (data.get('candidates') or [{}])[0].get('content', {}).get('parts', []) or []
         return ''.join(p.get('text', '') for p in parts if 'text' in p)
 
@@ -1154,8 +1215,8 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
                 except Exception:
                     continue
                 meta = d.get('usageMetadata', {}) or {}
-                prompt_tokens = meta.get('promptTokenCount', prompt_tokens) or prompt_tokens
-                cand_tokens = meta.get('candidatesTokenCount', cand_tokens) or cand_tokens
+                prompt_tokens = _gemini_tokens_entree(meta) or prompt_tokens
+                cand_tokens = _gemini_tokens_sortie(meta) or cand_tokens
                 cand = (d.get('candidates') or [{}])[0]
                 finish_reason = cand.get('finishReason', finish_reason) or finish_reason
                 for p in (cand.get('content', {}).get('parts', []) or []):
@@ -1484,7 +1545,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                     if data.get('usage') and not data.get('choices'):
                         u = data['usage']
                         _usage_tokens = {
-                            'tokens_in':  u.get('prompt_tokens', 0),
+                            'tokens_in':  _oai_tokens_entree(u),
                             'tokens_out': u.get('completion_tokens', 0),
                         }
                         continue
@@ -1497,7 +1558,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                     if data.get('usage') and data.get('choices'):
                         u = data['usage']
                         _usage_tokens = {
-                            'tokens_in':  u.get('prompt_tokens', 0),
+                            'tokens_in':  _oai_tokens_entree(u),
                             'tokens_out': u.get('completion_tokens', 0),
                         }
                     if token:
@@ -1520,6 +1581,8 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
     # Émettre le sentinel d'usage (tokens réels si disponibles)
     if _usage_tokens and (_usage_tokens['tokens_in'] or _usage_tokens['tokens_out']):
         yield {'__usage__': True, **_usage_tokens}
+    if _raisonnement_acc.strip():
+        yield {'__raisonnement__': _raisonnement_acc.strip()}
     if _finish_reason == 'length':
         yield {'__truncated__': True}
 
@@ -1798,20 +1861,28 @@ async def call_llm_stream_with_tools(
     _only_builtins = tools and all(
         t.get('type') != 'function' for t in tools
     )
+    _sans_outils = _modele_sans_outils(_model)
+    _raisonneur_oai = _modele_raisonnement_openai(_model)
     payload = {
-        'model':       _model,
-        'messages':    oai_messages,
-        'max_tokens':  max_tokens,
-        'temperature': temperature,
-        'tools':       tools,
-        **({} if _only_builtins else {'tool_choice': 'auto'}),
-        'stream':      True,
+        'model':    _model,
+        'messages': oai_messages,
+        'stream':   True,
     }
+    # La série o d'OpenAI n'accepte que max_completion_tokens.
+    payload['max_completion_tokens' if _raisonneur_oai else 'max_tokens'] = max_tokens
+    if not _sans_outils and not _raisonneur_oai:
+        payload['temperature'] = temperature
+        payload['tools'] = tools
+        if not _only_builtins:
+            payload['tool_choice'] = 'auto'
+    else:
+        print(f"[ENGINE] {_model} : modèle de raisonnement — outils et température non transmis.")
 
     # Accumulateurs pour reconstruire les tool_calls fragmentés
     _tool_calls_acc = {}   # index → {"id": str, "name": str, "arguments": str}
     _finish_reason  = None
     _raw_acc        = ''   # accumule le content brut pour détecter le DSML
+    _raisonnement_acc = ''  # chaîne de pensée (deepseek-reasoner et similaires)
     _dsml_detected  = False
 
     async with httpx.AsyncClient(timeout=300) as client:
@@ -1841,6 +1912,13 @@ async def call_llm_stream_with_tools(
                     # au lieu du champ structuré tool_calls. On accumule tout le
                     # content brut ; dès qu'un bloc DSML est détecté on coupe le
                     # flux visible et on laisse le post-traitement gérer.
+                    # Chaîne de pensée des modèles de raisonnement : elle arrive
+                    # dans un champ SÉPARÉ et était purement perdue. Elle est déjà
+                    # payée — autant la rendre consultable.
+                    _rais = delta.get('reasoning_content', '')
+                    if _rais:
+                        _raisonnement_acc += _rais
+
                     text = delta.get('content', '')
                     if text:
                         _raw_acc += text
