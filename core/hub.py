@@ -35,7 +35,26 @@ _pending_citations: _ContextVar = _ContextVar('nimm_pending_citations', default=
 # ASSAINISSEUR D'HISTORIQUE (correctif 400 Mistral)
 # ══════════════════════════════════════════
 
-_DOCS_FOOTER_RE = re.compile(r'\n{0,2}—?[ \t]*\U0001f4c4[ \t]*Documents consult[^\n]*')
+_DOCS_FOOTER_RE = re.compile(
+    r'\n{0,2}—?[ \t]*\U0001f4c4[ \t]*(?:Documents consult|Source[ \t]*:[ \t]*ta base)[^\n]*')
+
+
+def _document_vraiment_utilise(reponse: str, doc_context: str) -> bool:
+    """La réponse s'appuie-t-elle réellement sur le document injecté ?
+
+    Le pied « Documents consultés » était ajouté dès qu'un document était PROPOSÉ
+    au modèle, même s'il ne s'en servait pas : on annonçait une consultation qui
+    n'avait pas eu lieu, sous la forme d'un nom de fichier brut, sans lien ni
+    citation. On exige donc un recouvrement de vocabulaire de fond.
+    """
+    import re as _re
+    if not reponse or not doc_context:
+        return False
+    mots_doc = set(_re.findall(r'\w{5,}', doc_context.lower()))
+    if not mots_doc:
+        return False
+    mots_rep = set(_re.findall(r'\w{5,}', reponse.lower()))
+    return len(mots_doc & mots_rep) >= 3
 
 
 def _strip_docs_footer(text):
@@ -3904,8 +3923,10 @@ async def process_message(
                 print(f"[HUB] Erreur sauvegarde anecdote: {e}")
 
     # 14. Sauvegarder les messages
-    if _doc_titles:
-        reply = _strip_docs_footer(reply or "").rstrip() + "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
+    if _doc_titles and _document_vraiment_utilise(reply, doc_context):
+        reply = _strip_docs_footer(reply or "").rstrip() + "\n\n— 📄 Source : ta base de connaissances — " + ", ".join(_doc_titles)
+    elif _doc_titles:
+        print(f"[HUB] 📄 Pied omis : la réponse n'utilise pas {_doc_titles}")
     _add_msg(thread_id, 'user',      user_message)
     _add_msg(thread_id, 'assistant', reply)
 
@@ -4304,10 +4325,12 @@ async def process_message_stream(
             except Exception as e:
                 print(f"[HUB] Erreur sauvegarde anecdote (stream): {e}")
 
-    if _doc_titles:
-        _doc_line = "— 📄 Documents consultés : " + ", ".join(_doc_titles)
+    if _doc_titles and _document_vraiment_utilise(reply, doc_context):
+        _doc_line = "— 📄 Source : ta base de connaissances — " + ", ".join(_doc_titles)
         reply = _strip_docs_footer(reply or "").rstrip() + "\n\n" + _doc_line
         yield f"data: \\n\\n{_doc_line}\n\n"
+    elif _doc_titles:
+        print(f"[HUB] 📄 Pied omis : la réponse n'utilise pas {_doc_titles}")
     _add_msg(thread_id, 'assistant', reply)
 
     # Stocker les tokens/coût et émettre [USAGE] vers le frontend
