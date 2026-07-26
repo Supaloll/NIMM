@@ -9907,9 +9907,37 @@ async function loadDiagnostics() {
     } catch (e) { /* silencieux */ }
 }
 
-document.getElementById('diagnostics-details')?.addEventListener('toggle', function () {
-    if (this.open) loadDiagnostics();
+// Le panneau ne se lit que si on l'ouvre : sans indication, une décision
+// importante (panne de fournisseur, cache désactivé) passerait inaperçue.
+// Le titre du panneau porte donc le nombre d'entrées non lues.
+async function _majBadgeDiagnostics() {
+    const som = document.querySelector('#diagnostics-details > summary');
+    if (!som) return;
+    try {
+        const r = await fetch('/api/diagnostics');
+        const d = await r.json();
+        const lignes = d.diagnostics || [];
+        let vu = '';
+        try { vu = localStorage.getItem('diagnostics_vu') || ''; } catch (e) {}
+        const nouveaux = lignes.filter(e => (e.ts || '') > vu).length;
+        som.textContent = '🩺 Journal de fonctionnement'
+            + (nouveaux ? ` — ${nouveaux} nouvelle${nouveaux > 1 ? 's' : ''} entrée${nouveaux > 1 ? 's' : ''}` : '');
+    } catch (e) { /* silencieux */ }
+}
+
+document.getElementById('diagnostics-details')?.addEventListener('toggle', async function () {
+    if (!this.open) return;
+    await loadDiagnostics();
+    try {
+        const r = await fetch('/api/diagnostics');
+        const d = await r.json();
+        const plus_recent = (d.diagnostics || [])[0];
+        if (plus_recent) localStorage.setItem('diagnostics_vu', plus_recent.ts || '');
+    } catch (e) {}
+    _majBadgeDiagnostics();
 });
+_majBadgeDiagnostics();
+setInterval(_majBadgeDiagnostics, 120000);
 document.getElementById('diagnostics-clear-btn')?.addEventListener('click', async () => {
     try {
         await fetch('/api/diagnostics', { method: 'DELETE' });

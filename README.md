@@ -58,6 +58,15 @@ NIMM tire parti des fonctionnalités avancées de chaque fournisseur, sans jamai
 - **Lecture visuelle des PDF** et **recherche web avec sources citées**, quand le texte seul ne suffit pas.
 - **Serveurs MCP distants** pour brancher vos propres outils.
 
+### 🛟 Quand quelque chose ne va pas
+
+NIMM est pensé pour rester utilisable même quand un service défaille, et pour dire ce qu'il fait plutôt que de le taire :
+
+- **Panne d'un fournisseur** — crédit épuisé, service surchargé, limite de débit : le message est traduit en clair, et NIMM reprend automatiquement avec un autre fournisseur configuré, en vous prévenant.
+- **Réponse trop longue** — la coupure est annoncée et un bouton « Continuer » permet de reprendre là où elle s'est arrêtée.
+- **Vérifier les faits** — depuis le menu d'une réponse, NIMM confronte les affirmations vérifiables à des recherches web et rend un bilan en une ligne, dépliable, les erreurs d'abord.
+- **Journal de fonctionnement** — les décisions internes (document écarté de la base de connaissances et pourquoi, appel d'outil rattrapé, mise en cache désactivée) sont consultables en clair, avec un compteur de nouveautés.
+
 ### 🧰 Les outils de CoaNIMM
 
 CoaNIMM dispose d'une boîte à outils que ses scripts peuvent appeler. Chaque outil est **activable ou désactivable** depuis le panneau « Outils de CoaNIMM » (rangés par catégories repliables), et un outil sensible apparaît dans l'aperçu avant exécution et le journal de sécurité :
