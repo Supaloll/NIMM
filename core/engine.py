@@ -5,6 +5,7 @@
 # ============================================
 
 import os
+import re
 import json
 import httpx
 from typing import Optional
@@ -92,6 +93,32 @@ _AVIS_STOP = {
 def _avis_stop_reason(stop_reason: str) -> str:
     """Message à ajouter à la réponse selon la raison d'arrêt ('' si fin normale)."""
     return _AVIS_STOP.get((stop_reason or '').strip(), '')
+
+
+# Certains modèles (Llama et dérivés notamment) écrivent leurs appels d'outils
+# EN TEXTE au lieu du champ structuré : « <function=nom>{"arg": …}</function> ».
+# Sans traitement, l'utilisateur voit passer ce charabia à la place d'une réponse.
+_RE_APPEL_TEXTE = re.compile(
+    r'<function\s*=\s*([A-Za-z0-9_\-]+)\s*>\s*(\{.*?\})\s*(?:</function>)?',
+    re.DOTALL)
+
+
+def _contient_appel_texte(texte: str) -> bool:
+    return bool(texte) and '<function=' in texte
+
+
+def _parse_appels_texte(texte: str) -> list:
+    """Extrait les appels d'outils écrits en texte. Renvoie [{'id','name','args'}]."""
+    appels = []
+    for i, m in enumerate(_RE_APPEL_TEXTE.finditer(texte or '')):
+        nom = m.group(1).strip()
+        try:
+            args = json.loads(m.group(2))
+        except Exception:
+            continue                      # JSON illisible : on ignore cet appel
+        if isinstance(args, dict):
+            appels.append({'id': f'txt_{i}_{nom}', 'name': nom, 'args': args})
+    return appels
 
 
 def _anthropic_billable_input(usage: dict) -> int:
@@ -325,35 +352,48 @@ async def verify_claims_anthropic(texte: str, model: str = None, api_keys: dict 
     }
     if _anthropic_cache_enabled():
         payload['cache_control'] = {'type': 'ephemeral'}
+    txt, sources, vus = [], [], set()
+    entete = {'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+              'content-type': 'application/json'}
+    # La recherche web est un outil SERVEUR : le tour peut rendre la main en
+    # « pause_turn » avant d'avoir rédigé sa conclusion. Il faut alors relancer
+    # en renvoyant ce qui a déjà été produit — sinon on n'obtient aucun verdict.
+    stop = ''
     try:
         async with httpx.AsyncClient(timeout=120) as client:
-            r = await client.post(
-                'https://api.anthropic.com/v1/messages',
-                headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01',
-                         'content-type': 'application/json'},
-                json=payload)
-            r.raise_for_status()
-            data = r.json()
+            for _tour in range(4):
+                r = await client.post('https://api.anthropic.com/v1/messages',
+                                      headers=entete, json=payload)
+                r.raise_for_status()
+                data = r.json()
+                usage = data.get('usage', {})
+                _log('anthropic', payload['model'], _anthropic_billable_input(usage),
+                     usage.get('output_tokens', 0), 'verification')
+                contenu = data.get('content', []) or []
+                for b in contenu:
+                    if b.get('type') != 'text':
+                        continue
+                    txt.append(b.get('text', ''))
+                    for c in (b.get('citations') or []):
+                        url = c.get('url', '')
+                        if url and url not in vus:
+                            vus.add(url)
+                            sources.append({'url': url, 'title': c.get('title') or url,
+                                            'snippet': (c.get('cited_text') or '')[:200]})
+                stop = data.get('stop_reason', '')
+                if stop != 'pause_turn':
+                    break
+                # On relance en conservant le contexte déjà produit.
+                payload['messages'] = payload['messages'] + [
+                    {'role': 'assistant', 'content': contenu}]
     except Exception as e:
-        return {'verdict': f"[Vérification impossible ({e})]", 'sources': []}
+        return {'verdict': f"[Vérification impossible ({e})]", 'sources': sources}
 
-    usage = data.get('usage', {})
-    _log('anthropic', payload['model'], _anthropic_billable_input(usage),
-         usage.get('output_tokens', 0), 'verification')
-    txt, sources, vus = [], [], set()
-    for b in data.get('content', []):
-        if b.get('type') != 'text':
-            continue
-        txt.append(b.get('text', ''))
-        for c in (b.get('citations') or []):
-            url = c.get('url', '')
-            if url and url not in vus:
-                vus.add(url)
-                sources.append({'url': url, 'title': c.get('title') or url,
-                                'snippet': (c.get('cited_text') or '')[:200]})
-    return {'verdict': (''.join(txt) + _avis_stop_reason(data.get('stop_reason', ''))).strip()
-                       or "[Aucun verdict rendu.]",
-            'sources': sources}
+    verdict = (''.join(txt) + _avis_stop_reason(stop)).strip()
+    if not verdict:
+        verdict = ("Aucune affirmation vérifiable n'a pu être évaluée dans ce message "
+                   "(il ne contient peut-être pas de fait à contrôler).")
+    return {'verdict': verdict, 'sources': sources}
 
 
 async def analyze_pdf_anthropic(pdf_bytes: bytes, question: str = '', model: str = None,
@@ -742,6 +782,7 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
         payload['cache_control'] = {'type': 'ephemeral'}
 
     texte_total = []
+    appel_en_texte = False
     blocs_outils = {}      # index du bloc → {'id', 'name', 'json'}
     tokens_in = tokens_out = 0
     stop_reason = ''
@@ -789,7 +830,14 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
                         morceau = delta.get('text', '')
                         if morceau:
                             texte_total.append(morceau)
-                            yield {'type': 'token', 'text': morceau}
+                            # Si le modèle se met à écrire son appel d'outil en
+                            # texte, on cesse d'afficher : le repli le convertira.
+                            if not appel_en_texte and _contient_appel_texte(''.join(texte_total)):
+                                appel_en_texte = True
+                                print("[ENGINE] ⚠️ Anthropic a écrit un appel d'outil en texte "
+                                      "— conversion automatique.")
+                            if not appel_en_texte:
+                                yield {'type': 'token', 'text': morceau}
                     elif delta.get('type') == 'input_json_delta':
                         b = blocs_outils.get(d.get('index'))
                         if b is not None:
@@ -799,6 +847,18 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
                     stop_reason = (d.get('delta', {}) or {}).get('stop_reason', stop_reason)
 
     _log('anthropic', model, tokens_in, tokens_out)
+
+    if not blocs_outils and appel_en_texte:
+        _appels = _parse_appels_texte(''.join(texte_total))
+        if _appels:
+            yield {'type': 'tool_calls', 'calls': _appels,
+                   'assistant_msg': {'role': 'assistant', 'content': None,
+                                     'tool_calls': [
+                                         {'id': c['id'], 'type': 'function',
+                                          'function': {'name': c['name'],
+                                                       'arguments': json.dumps(c['args'], ensure_ascii=False)}}
+                                         for c in _appels]}}
+            return
 
     if blocs_outils:
         calls, oai_tcs = [], []
@@ -1723,6 +1783,8 @@ async def call_llm_stream_with_tools(
                         _raw_acc += text
                         if not _dsml_detected and '\uff5c\uff5cDSML\uff5c\uff5c' in _raw_acc:
                             _dsml_detected = True
+                        if not _dsml_detected and _contient_appel_texte(_raw_acc):
+                            _dsml_detected = True   # appel d'outil en texte : on coupe l'affichage
                         if not _dsml_detected:
                             import re as _re
                             clean = _re.sub(r'<｜[^｜>]*(?:｜[^>]*)?>?', '', text)
@@ -1754,6 +1816,19 @@ async def call_llm_stream_with_tools(
 
                 except Exception:
                     continue
+
+    # ── Repli : appel d'outil écrit en texte (« <function=nom>{…} ») ──
+    if not _tool_calls_acc and _contient_appel_texte(_raw_acc):
+        _appels = _parse_appels_texte(_raw_acc)
+        if _appels:
+            yield {'type': 'tool_calls', 'calls': _appels,
+                   'assistant_msg': {'role': 'assistant', 'content': None,
+                                     'tool_calls': [
+                                         {'id': c['id'], 'type': 'function',
+                                          'function': {'name': c['name'],
+                                                       'arguments': json.dumps(c['args'], ensure_ascii=False)}}
+                                         for c in _appels]}}
+            return
 
     # ── Fallback DSML : DeepSeek a mis le tool_call dans le content ──
     if not _tool_calls_acc and _dsml_detected:

@@ -1327,17 +1327,34 @@ def _match_documents(user_message: str):
         _mots_utiles = set(m for m in _re_doc.findall(r'\w+', msg.lower())
                            if len(m) > 2 and m not in _MOTS_VIDES)
         _n_mots = max(1, len(_mots_utiles))
+        # ANCRAGE LEXICAL (réglage 'rag_ancrage_lexical', actif par défaut) :
+        # un score sémantique élevé ne suffit pas. Deux textes français sans aucun
+        # rapport atteignent couramment 0,5 de similarité — d'où des documents hors
+        # sujet servis en pleine conversation. On exige donc qu'au moins un mot de
+        # fond (4 lettres ou plus) soit RÉELLEMENT commun au message et au passage.
+        try:
+            _ancrage = str(get_setting('rag_ancrage_lexical', '1')) not in ('0', 'false', 'False')
+        except Exception:
+            _ancrage = True
+        _mots_fond = set(m for m in _mots_utiles if len(m) >= 4)
+
         retenus = []
         for pp in passages:
             sc = pp.get('score', 0) or 0
+            _hay = (pp.get('passage') or '').lower()
+            _titre_bas = (pp.get('titre') or '').lower()
             if pp.get('mode') == 'keyword':
                 # Mode mots-clés : recouvrement des mots UTILES (hors mots vides) dans le
                 # passage — exige au moins 2 mots ET une couverture >= 60 % des mots utiles.
-                _hay = (pp.get('passage') or '').lower()
                 _hits = sum(1 for m in _mots_utiles if m in _hay)
                 if _hits >= 2 and _hits >= 0.6 * _n_mots:
                     retenus.append(pp)
             elif sc >= _seuil_sem:
+                _communs = [m for m in _mots_fond if m in _hay or m in _titre_bas]
+                if _ancrage and not _communs:
+                    print(f"[HUB] 📄 Document écarté (score {sc:.2f} mais aucun mot commun) : "
+                          f"{pp.get('titre', '?')[:60]}")
+                    continue
                 retenus.append(pp)
         if not retenus:
             return '', []
@@ -1349,7 +1366,9 @@ def _match_documents(user_message: str):
             blocs.append(entete + '\n' + (pp.get('passage') or '').strip()[:1200])
             if titre not in titres:
                 titres.append(titre)
-        print(f"[HUB] 📄 Documents match -> {len(blocs)} passage(s)")
+        print(f"[HUB] 📄 Documents match -> {len(blocs)} passage(s) : "
+              + ', '.join(f"{p.get('titre', '?')[:40]} ({p.get('mode', 'sem')} {p.get('score', 0):.2f})"
+                          for p in retenus))
         return '\n\n'.join(blocs), titres
     except Exception as e:
         print(f"[HUB] Erreur match_documents : {e}")
