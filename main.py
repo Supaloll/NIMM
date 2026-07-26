@@ -1664,6 +1664,21 @@ async def mcp_servers_delete(server_id: str):
         raise HTTPException(403, detail="Seul le propriétaire peut supprimer un serveur MCP.")
     return {"status": "ok", "servers": _db.remove_mcp_server(server_id)}
 
+class VerifyReq(BaseModel):
+    text: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/verify")
+async def verify_text(req: VerifyReq):
+    """Vérifie les affirmations factuelles d'une réponse par recherche web.
+    Pensé pour qui ne peut pas survoler un texte du regard : erreurs d'abord,
+    sources ensuite."""
+    from core.engine import verify_claims_anthropic
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    return await verify_claims_anthropic(req.text or "",
+                                         api_keys=settings.get("api_keys", {}))
+
 class CoanimmAskDocsReq(BaseModel):
     question: str = ""
     k: int = 5

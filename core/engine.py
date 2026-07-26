@@ -289,6 +289,73 @@ async def answer_with_citations_anthropic(passages: list, question: str, model: 
     return sortie
 
 
+VERIFY_SYSTEM_PROMPT = (
+    "Tu vérifies un texte à l'aide de recherches web. Procède ainsi :\n"
+    "1. Repère les affirmations FACTUELLES et vérifiables (dates, chiffres, noms, "
+    "événements). Ignore les opinions, les conseils et les formulations vagues.\n"
+    "2. Cherche sur le web pour les confronter.\n"
+    "3. Rends un verdict COURT et lisible à voix haute, dans cet ordre : d'abord ce "
+    "qui est ERRONÉ ou douteux, ensuite ce qui est confirmé, enfin ce que tu n'as pas "
+    "pu vérifier. Une ligne par point, sans tableau ni mise en forme complexe.\n"
+    "Si tout est correct, dis-le en une phrase. Si le texte ne contient aucune "
+    "affirmation vérifiable, dis-le simplement. Ne réécris jamais le texte."
+)
+
+
+async def verify_claims_anthropic(texte: str, model: str = None, api_keys: dict = None,
+                                  max_tokens: int = 1500) -> dict:
+    """Vérifie les affirmations factuelles d'un texte par recherche web.
+
+    Rendu pour quelqu'un qui ne peut pas survoler une réponse du regard : les
+    erreurs d'abord, sources listées ensuite. Renvoie {'verdict', 'sources'}.
+    """
+    api_key = get_api_key('anthropic', api_keys)
+    if not api_key:
+        return {'verdict': "[Vérification : clé Anthropic non configurée.]", 'sources': []}
+    texte = (texte or '').strip()
+    if len(texte) < 40:
+        return {'verdict': "[Texte trop court pour être vérifié.]", 'sources': []}
+    payload = {
+        'model': _resolve_model('anthropic', model),
+        'max_tokens': max_tokens,
+        'system': VERIFY_SYSTEM_PROMPT,
+        'messages': [{'role': 'user',
+                      'content': "Vérifie ce texte :\n\n" + texte[:6000]}],
+        'tools': [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 4}],
+    }
+    if _anthropic_cache_enabled():
+        payload['cache_control'] = {'type': 'ephemeral'}
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(
+                'https://api.anthropic.com/v1/messages',
+                headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+                         'content-type': 'application/json'},
+                json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return {'verdict': f"[Vérification impossible ({e})]", 'sources': []}
+
+    usage = data.get('usage', {})
+    _log('anthropic', payload['model'], _anthropic_billable_input(usage),
+         usage.get('output_tokens', 0), 'verification')
+    txt, sources, vus = [], [], set()
+    for b in data.get('content', []):
+        if b.get('type') != 'text':
+            continue
+        txt.append(b.get('text', ''))
+        for c in (b.get('citations') or []):
+            url = c.get('url', '')
+            if url and url not in vus:
+                vus.add(url)
+                sources.append({'url': url, 'title': c.get('title') or url,
+                                'snippet': (c.get('cited_text') or '')[:200]})
+    return {'verdict': (''.join(txt) + _avis_stop_reason(data.get('stop_reason', ''))).strip()
+                       or "[Aucun verdict rendu.]",
+            'sources': sources}
+
+
 async def analyze_pdf_anthropic(pdf_bytes: bytes, question: str = '', model: str = None,
                                 api_keys: dict = None, max_tokens: int = 4000) -> str:
     """Envoie un PDF NATIVEMENT à Claude (compréhension VISUELLE de la page).
