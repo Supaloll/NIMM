@@ -706,6 +706,54 @@
             </details>
         </div>
 
+        <!-- ── DOCUMENTS ÉPINGLÉS (cache explicite Gemini) ── -->
+        <div class="setting-group" id="gemini-pins-section" data-needs-key="gemini">
+            <details id="gemini-pins-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">📌 Documents épinglés (Gemini)</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Épingle un long document chez Gemini : on paie sa lecture une seule fois,
+                    puis chaque question ne coûte plus qu'une fraction. Idéal pour interroger
+                    longuement une même étude. Minimum environ 2000 jetons ; le document
+                    s'efface tout seul à l'échéance choisie.
+                </p>
+                <div class="setting-group">
+                    <label for="pin-file-path">Chemin du document (PDF, Word, texte…)</label>
+                    <input type="text" id="pin-file-path" placeholder="C:\Users\...\etude.pdf"
+                        aria-label="Chemin du document à épingler"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="pin-title">Titre (pour le retrouver ensuite)</label>
+                    <input type="text" id="pin-title" placeholder="Étude accessibilité 2026"
+                        aria-label="Titre du document épinglé"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="pin-duree">Durée de conservation (heures)</label>
+                    <input type="number" id="pin-duree" value="2" min="0.1" max="48" step="0.5"
+                        aria-label="Durée de conservation en heures" style="width:100px;">
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="pin-create-btn" class="btn-primary" aria-label="Épingler ce document">Épingler</button>
+                    <button id="pin-refresh-btn" class="btn-secondary" aria-label="Rafraîchir la liste des documents épinglés">Rafraîchir la liste</button>
+                </div>
+                <div id="pin-status-out" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:6px;min-height:1.2em;"></div>
+                <div class="setting-group" style="margin-top:10px;">
+                    <label for="pin-question">Question au document épinglé</label>
+                    <select id="pin-select" aria-label="Document épinglé à interroger"
+                        style="width:100%;box-sizing:border-box;margin-bottom:6px;"></select>
+                    <textarea id="pin-question" rows="3" placeholder="Que dit ce document sur les délais de mise en conformité ?"
+                        aria-label="Question à poser au document épinglé"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;"></textarea>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+                        <button id="pin-ask-btn" class="btn-primary" aria-label="Poser la question au document épinglé">Interroger</button>
+                        <button id="pin-delete-btn" class="btn-secondary" aria-label="Libérer le document épinglé sélectionné">Libérer ce document</button>
+                    </div>
+                </div>
+                <div id="pin-answer-out" role="region" aria-label="Réponse du document épinglé" style="margin-top:8px;"></div>
+            </details>
+        </div>
+
         <!-- ── MISTRAL BATCH ── -->
         <div class="setting-group" id="mistral-batch-section">
             <details id="mistral-batch-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
@@ -719,11 +767,12 @@
                     <select id="batch-provider-select" aria-label="Fournisseur pour le traitement par lots">
                         <option value="mistral" data-needs-key="mistral">🔵 Mistral</option>
                         <option value="anthropic" data-needs-key="anthropic">🟣 Claude (Anthropic) — moitié prix</option>
+                        <option value="gemini" data-needs-key="gemini">🔴 Gemini (Google) — moitié prix</option>
                     </select>
                 </div>
                 <div class="setting-group">
                     <label for="batch-model-select">Modèle</label>
-                    <select id="batch-model-select" aria-label="Modèle Mistral pour le batch">
+                    <select id="batch-model-select" aria-label="Modèle pour le traitement par lots">
                         <option value="mistral-small-latest">Mistral Small (rapide, économique)</option>
                         <option value="mistral-medium-latest">Mistral Medium</option>
                         <option value="mistral-large-latest">Mistral Large</option>

@@ -11892,6 +11892,133 @@ setupSettingsTabs();
 init();
 
 // ══════════════════════════════════════════
+// DOCUMENTS ÉPINGLÉS (cache explicite Gemini)
+// ══════════════════════════════════════════
+(function () {
+    var _pins = [];
+
+    function _pinStatus(msg) {
+        var el = document.getElementById('pin-status-out');
+        if (el) el.textContent = msg;
+    }
+
+    // Combien de temps reste-t-il ? Une durée relative se lit mieux à la
+    // synthèse vocale qu'un horodatage ISO.
+    function _pinRestant(expire) {
+        if (!expire) return '';
+        var ms = new Date(expire).getTime() - Date.now();
+        if (isNaN(ms)) return '';
+        if (ms <= 0) return ' — expiré';
+        var min = Math.round(ms / 60000);
+        if (min < 60) return ' — encore ' + min + ' min';
+        return ' — encore ' + Math.floor(min / 60) + ' h ' + (min % 60) + ' min';
+    }
+
+    async function _pinRefresh(silencieux) {
+        var sel = document.getElementById('pin-select');
+        if (!sel) return;
+        try {
+            var r = await fetch('/api/gemini/pins');
+            var d = await r.json();
+            _pins = d.pins || [];
+        } catch (e) {
+            if (!silencieux) _pinStatus('Liste indisponible : ' + e.message);
+            return;
+        }
+        sel.innerHTML = _pins.length
+            ? _pins.map(function (p) {
+                  var t = (p.titre || p.name);
+                  return '<option value="' + p.name + '">' + t
+                       + ' (' + (p.nb_tokens || 0) + ' jetons)' + _pinRestant(p.expire) + '</option>';
+              }).join('')
+            : '<option value="">Aucun document épinglé</option>';
+        if (!silencieux) {
+            _pinStatus(_pins.length
+                ? _pins.length + ' document(s) épinglé(s).'
+                : 'Aucun document épinglé pour l\'instant.');
+        }
+    }
+
+    document.getElementById('pin-create-btn')?.addEventListener('click', async function () {
+        var chemin = (document.getElementById('pin-file-path')?.value || '').trim();
+        var titre  = (document.getElementById('pin-title')?.value || '').trim();
+        var duree  = parseFloat(document.getElementById('pin-duree')?.value || '2');
+        if (!chemin) { _pinStatus('Indique le chemin du document à épingler.'); return; }
+        _pinStatus('Lecture puis mise en cache… (cela peut prendre une minute)');
+        try {
+            var r = await fetch('/api/gemini/pins', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chemin: chemin, titre: titre, duree_h: duree })
+            });
+            var d = await r.json();
+            if (!d.ok) { _pinStatus('Échec : ' + (d.erreur || 'raison inconnue')); return; }
+            _pinStatus('Épinglé : « ' + (d.titre || titre) + ' », ' + (d.nb_tokens || 0)
+                     + ' jetons. Les questions suivantes coûteront une fraction du prix.');
+            await _pinRefresh(true);
+        } catch (e) { _pinStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('pin-refresh-btn')?.addEventListener('click', function () { _pinRefresh(false); });
+
+    document.getElementById('pin-ask-btn')?.addEventListener('click', async function () {
+        var ref = document.getElementById('pin-select')?.value || '';
+        var q   = (document.getElementById('pin-question')?.value || '').trim();
+        var out = document.getElementById('pin-answer-out');
+        if (!ref) { _pinStatus('Aucun document épinglé à interroger.'); return; }
+        if (!q)   { _pinStatus('Écris ta question.'); return; }
+        _pinStatus('Interrogation du document…');
+        try {
+            var r = await fetch('/api/gemini/pins/ask', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reference: ref, question: q })
+            });
+            var d = await r.json();
+            _pinStatus('Réponse reçue.');
+            if (out) {
+                out.innerHTML = '';
+                var pre = document.createElement('pre');
+                pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;font-size:0.85rem;margin:0;';
+                pre.textContent = d.result || '(vide)';
+                var copie = document.createElement('button');
+                copie.textContent = 'Copier la réponse';
+                copie.className = 'btn-secondary';
+                copie.style.cssText = 'font-size:0.75rem;margin-top:6px;';
+                copie.setAttribute('aria-label', 'Copier la réponse du document épinglé');
+                copie.addEventListener('click', function () {
+                    navigator.clipboard.writeText(pre.textContent).then(function () {
+                        copie.textContent = 'Copié !';
+                        setTimeout(function () { copie.textContent = 'Copier la réponse'; }, 1500);
+                    });
+                });
+                out.appendChild(pre);
+                out.appendChild(copie);
+                pre.setAttribute('tabindex', '-1');
+                pre.focus();
+            }
+        } catch (e) { _pinStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('pin-delete-btn')?.addEventListener('click', async function () {
+        var ref = document.getElementById('pin-select')?.value || '';
+        if (!ref) return;
+        if (!confirm('Libérer ce document épinglé ? Il faudra le réépingler pour l\'interroger à nouveau.')) return;
+        try {
+            await fetch('/api/gemini/pins?name=' + encodeURIComponent(ref), { method: 'DELETE' });
+            _pinStatus('Document libéré.');
+            await _pinRefresh(true);
+        } catch (e) { _pinStatus('Erreur : ' + e.message); }
+    });
+
+    // On ne charge la liste qu'à l'ouverture du panneau : inutile d'appeler
+    // Gemini à chaque démarrage de NIMM.
+    document.getElementById('gemini-pins-details')?.addEventListener('toggle', function () {
+        if (this.open) _pinRefresh(false);
+    });
+})();
+
+// ══════════════════════════════════════════
 // MISTRAL BATCH
 // ══════════════════════════════════════════
 (function () {
@@ -11913,24 +12040,31 @@ init();
             ['magistral-medium-latest', 'Magistral Medium (raisonnement)'],
         ],
         anthropic: [],
+        gemini: [],
     };
     var _BATCH_ANTHROPIC_REPLI = [
         ['claude-haiku-4-5-20251001', 'Claude Haiku (rapide, économique)'],
         ['claude-sonnet-4-6', 'Claude Sonnet (équilibre)'],
+    ];
+    var _BATCH_GEMINI_REPLI = [
+        ['gemini-2.5-flash', 'Gemini Flash (rapide, économique)'],
+        ['gemini-2.5-pro', 'Gemini Pro (plus fin)'],
     ];
     async function _batchPopulateModels() {
         var sel = document.getElementById('batch-model-select');
         if (!sel) return;
         var p = _batchProvider();
         var liste = _BATCH_MODELS[p] || [];
-        if (p === 'anthropic' && !liste.length) {
+        // Mistral garde une liste écrite en dur ; pour les deux autres on
+        // interroge le fournisseur, avec une liste de repli s'il ne répond pas.
+        if ((p === 'anthropic' || p === 'gemini') && !liste.length) {
             try {
-                var r = await fetch('/api/models/anthropic');
+                var r = await fetch('/api/models/' + p);
                 var d = await r.json();
                 liste = (d.models || []).map(function (m) { return [m.id, m.label || m.id]; });
             } catch (e) { /* repli */ }
-            if (!liste.length) liste = _BATCH_ANTHROPIC_REPLI;
-            _BATCH_MODELS.anthropic = liste;
+            if (!liste.length) liste = (p === 'gemini' ? _BATCH_GEMINI_REPLI : _BATCH_ANTHROPIC_REPLI);
+            _BATCH_MODELS[p] = liste;
         }
         sel.innerHTML = liste.map(function (m) {
             return '<option value="' + m[0] + '">' + m[1] + '</option>';
@@ -11993,7 +12127,8 @@ init();
                 detail = ' | ' + (d.succeeded || 0) + ' réussies, ' + (d.errored || 0)
                        + ' en erreur, ' + (d.processing || 0) + ' en cours';
             }
-            _batchSetStatus('Statut : ' + d.status + detail);
+            _batchSetStatus('Statut : ' + (d.libelle || d.status) + detail
+                          + (d.erreur ? ' — ' + d.erreur : ''));
         } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
     });
 

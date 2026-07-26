@@ -1226,6 +1226,147 @@ def test_script_blocage_securite_pas_de_retry():
     ok("script enregistré : blocage sécurité → aucun nouvel essai")
 
 
+def test_description_audio():
+    """Un fichier son ne se réduit pas à ses paroles : Whisper transcrit déjà en
+    local, mais il ne dit ni qui parle, ni sur quel ton, ni ce qu'on entend
+    derrière. Gemini sait le faire — et c'est précisément l'information qu'une
+    transcription fait perdre."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    coa = open(os.path.join(racine, 'modules', 'coanimm.py'), encoding='utf-8').read()
+    saf = open(os.path.join(racine, 'modules', 'coanimm_safety.py'), encoding='utf-8').read()
+
+    seg = ''
+    for n in ast.walk(ast.parse(eng)):
+        if getattr(n, 'name', '') == 'describe_audio_gemini':
+            seg = ast.get_source_segment(eng, n) or ''
+    assert seg, 'describe_audio_gemini introuvable'
+    assert "startswith(('http://', 'https://'))" in seg, 'un lien doit être accepté tel quel'
+    assert "'file_data'" in seg and "'inline_data'" in seg, 'lien ET fichier local'
+    assert '18 * 1024 * 1024' in seg, 'garde de taille pour l’envoi direct'
+    assert 'MAX_TOKENS' in seg, 'une description tronquée doit être signalée'
+    assert 'TRANSCRIPTION' in seg and 'OBSERVATIONS' in seg, 'séparer les deux registres'
+    assert 'minute:seconde' in seg, 'des repères de temps pour se situer'
+    assert "N'invente rien" in seg, 'consigne factuelle'
+    assert '_gemini_tokens_sortie' in seg, 'la facturation doit être comptée'
+
+    assert '/api/coanimm/describe_audio' in mn
+    assert '"describe_audio" in _db.list_coanimm_disabled_tools()' in mn, 'désactivable'
+    assert coa.count('nimm_describe_audio') >= 3, 'helper + prologue + doc'
+    assert "'nimm_describe_audio': 'recherche'" in saf, "l'audio part au cloud"
+    ok("description sonore : au-delà de la transcription, désactivable, comptée")
+
+
+def test_documents_epingles():
+    """Cache EXPLICITE de Gemini : on paie la lecture d'une longue étude une seule
+    fois, puis chaque question ne coûte plus qu'une fraction. Le piège est le
+    plancher de jetons imposé par l'API : sans contrôle en amont, Fernando
+    recevrait une erreur HTTP brute en anglais après une minute d'attente."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    dbs = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    coa = open(os.path.join(racine, 'modules', 'coanimm.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    noms = {}
+    for n in ast.walk(ast.parse(eng)):
+        if getattr(n, 'name', '') in ('create_cache_gemini', 'ask_cache_gemini',
+                                      'list_caches_gemini', 'delete_cache_gemini'):
+            noms[n.name] = ast.get_source_segment(eng, n) or ''
+    assert len(noms) == 4, 'les quatre opérations du cycle de vie sont requises'
+
+    crea = noms['create_cache_gemini']
+    assert '_GEMINI_CACHE_MIN_TOKENS' in crea, 'plancher de jetons vérifié AVANT appel'
+    assert 'count_tokens' in crea, 'on compte avant de payer'
+    assert 'cachedContents' in crea and "'ttl'" in crea, 'endpoint et durée de vie'
+    assert 'displayName' in crea, 'un titre lisible pour retrouver le document'
+    interro = noms['ask_cache_gemini']
+    assert "'cachedContent'" in interro, 'la question doit référencer le cache'
+    assert '_gemini_tokens_entree' in interro, 'la remise de cache doit être comptée'
+
+    # Message d'erreur traduit plutôt qu'un code HTTP nu
+    assert '_gemini_message_erreur' in eng
+    assert 'expiré' in eng, 'un cache disparu doit être expliqué, pas subi'
+
+    # Magasin local : métadonnées seulement, jamais le contenu confidentiel
+    for f in ('list_gemini_pins', 'add_gemini_pin', 'remove_gemini_pin', 'find_gemini_pin'):
+        assert 'def %s(' % f in dbs, f
+    assert 'MÉTADONNÉES' in dbs, 'le contenu du document ne doit pas être recopié en local'
+
+    # Routes + croisement avec la réalité distante (pas de fantôme expiré)
+    assert '/api/gemini/pins' in mn and '/api/gemini/pins/ask' in mn
+    assert 'list_caches_gemini' in mn and '_save_gemini_pins(vivants)' in mn, \
+        'les caches expirés doivent disparaître de la liste locale'
+
+    # Outils CoaNIMM : une seule case à cocher pour toute la famille
+    for f in ('nimm_pin_document', 'nimm_ask_pinned', 'nimm_list_pinned', 'nimm_unpin_document'):
+        assert f in coa, f
+    assert '"pin_document" not in _disabled' in coa, 'famille pilotée par une seule entrée'
+    assert '"tool": "pin_document"' in mn, 'présent au catalogue'
+
+    # Interface : réservée à Gemini, et copiable
+    assert 'id="gemini-pins-section" data-needs-key="gemini"' in html
+    assert 'aria-live="polite"' in html
+    assert "navigator.clipboard.writeText" in app
+    assert '_pinRestant' in app, 'une durée relative se lit mieux qu’un horodatage ISO'
+    ok("documents épinglés : plancher vérifié, expirés purgés, une seule case, panneau Gemini")
+
+
+def test_lot_gemini():
+    """Le panneau de lots existait pour Mistral puis Anthropic. Gemini complète le
+    trio. Deux pièges propres à Gemini : l'identifiant contient une barre oblique
+    (batches/123), et les résultats se rangent tantôt sous response, tantôt sous
+    dest — accepter une seule forme, c'est risquer une page blanche après une
+    heure d'attente."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    assert ':batchGenerateContent' in mn, 'endpoint de soumission'
+    assert 'input_config' in mn and '"requests": {"requests"' in mn, 'requêtes en ligne'
+    assert '{batch_id:path}' in mn, "l'identifiant Gemini contient une barre oblique"
+    assert mn.count('{batch_id:path}') >= 3, 'statut, résultats et annulation'
+    assert 'JOB_STATE_SUCCEEDED' in mn and '_GEMINI_ETATS' in mn, 'états traduits en français'
+
+    # Souplesse sur la forme des résultats
+    seg = ''
+    for n in ast.walk(ast.parse(mn)):
+        if getattr(n, 'name', '') == '_gemini_batch_extraire':
+            seg = ast.get_source_segment(mn, n) or ''
+    assert seg, '_gemini_batch_extraire introuvable'
+    assert '"response"' in seg and '"dest"' in seg, 'les deux emplacements possibles'
+    assert 'isinstance(brut, dict)' in seg, 'liste parfois encapsulée une fois de plus'
+    assert 'sorties.sort(key=_rang)' in seg, "l'ordre de soumission doit être restitué"
+
+    # L'ordre est vraiment restitué, y compris au-delà de dix requêtes
+    mod = {}
+    exec(compile(ast.Module(body=[n for n in ast.parse(mn).body
+                                  if getattr(n, 'name', '') == '_gemini_batch_extraire'],
+                            type_ignores=[]), '<extrait>', 'exec'), mod)
+    faux = {'response': {'inlinedResponses': [
+        {'metadata': {'key': 'req_%d' % i},
+         'response': {'candidates': [{'content': {'parts': [{'text': 'r%d' % i}]}}]}}
+        for i in (11, 2, 0, 10, 1)]}}
+    res = mod['_gemini_batch_extraire'](faux)
+    assert [r['text'] for r in res] == ['r0', 'r1', 'r2', 'r10', 'r11'], \
+        'tri numérique, pas alphabétique'
+    # Forme « dest », et une erreur par requête
+    autre = {'dest': {'inlinedResponses': [
+        {'metadata': {'key': 'req_0'}, 'error': {'message': 'quota'}}]}}
+    r2 = mod['_gemini_batch_extraire'](autre)
+    assert r2 and r2[0]['error'] == 'quota' and r2[0]['text'] == ''
+
+    assert 'value="gemini" data-needs-key="gemini"' in html, 'option grisée sans clé Gemini'
+    assert '_BATCH_GEMINI_REPLI' in app, 'liste de repli si Gemini ne répond pas'
+    assert "'/api/models/' + p" in app, 'modèles interrogés dynamiquement'
+    assert 'd.libelle' in app, "l'état doit être annoncé en français"
+    ok("lot Gemini : identifiant à barre oblique, résultats réordonnés, deux formes acceptées")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -1246,6 +1387,7 @@ if __name__ == '__main__':
                test_caches_de_contexte, test_visibilite_selon_les_cles,
                test_description_video, test_correlation_modele_agent_recherche,
                test_reprise_sans_couture,
+               test_description_audio, test_documents_epingles, test_lot_gemini,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

@@ -592,6 +592,209 @@ async def continuer_reponse_stream(messages: list, prefixe: str, provider: str,
                     continue
 
 
+_GEMINI_CACHE_MIN_TOKENS = 2048   # plancher imposé par l'API (2.5) ; 4096 sur 3.5
+
+
+async def create_cache_gemini(contenu: str, titre: str = '', consigne: str = '',
+                              duree_h: float = 1.0, model: str = None,
+                              api_keys: dict = None) -> dict:
+    """Épingle un long texte chez Gemini pour l'interroger ensuite à tarif réduit.
+
+    C'est le cache EXPLICITE, à ne pas confondre avec le cache implicite déjà
+    exploité ailleurs : ici on paie une fois la lecture, puis chaque question
+    ne coûte plus qu'une fraction. Utile pour « je charge une étude de cent
+    pages et je pose dix questions dessus ».
+    """
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return {'ok': False, 'erreur': "Clé Gemini non configurée."}
+    contenu = (contenu or '').strip()
+    if not contenu:
+        return {'ok': False, 'erreur': "Rien à épingler : le contenu est vide."}
+
+    m = _resolve_model('gemini', model)
+    nb = await count_tokens('gemini', contenu, model=m, api_keys=api_keys)
+    if nb != -1 and nb < _GEMINI_CACHE_MIN_TOKENS:
+        return {'ok': False, 'nb_tokens': nb, 'erreur': (
+            "Document trop court pour être épinglé : Gemini exige au moins "
+            f"{_GEMINI_CACHE_MIN_TOKENS} jetons, celui-ci en fait environ {nb}. "
+            "Pour un texte de cette taille, une lecture normale coûte moins cher "
+            "que la mise en cache.")}
+
+    ttl = max(60, int(float(duree_h or 1.0) * 3600))
+    payload = {
+        'model': f'models/{m}',
+        'contents': [{'role': 'user', 'parts': [{'text': contenu}]}],
+        'ttl': f'{ttl}s',
+        'displayName': (titre or 'Document NIMM')[:120],
+    }
+    if (consigne or '').strip():
+        payload['systemInstruction'] = {'parts': [{'text': consigne.strip()}]}
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post(
+                f'https://generativelanguage.googleapis.com/v1beta/cachedContents?key={api_key}',
+                json=payload)
+            if r.status_code >= 400:
+                return {'ok': False, 'erreur': _gemini_message_erreur(r)}
+            data = r.json()
+    except Exception as e:
+        return {'ok': False, 'erreur': f"Mise en cache impossible ({e})"}
+
+    return {
+        'ok': True,
+        'name': data.get('name', ''),
+        'model': m,
+        'titre': data.get('displayName', titre),
+        'expire': data.get('expireTime', ''),
+        'nb_tokens': int((data.get('usageMetadata') or {}).get('totalTokenCount') or nb or 0),
+    }
+
+
+def _gemini_message_erreur(r) -> str:
+    """Traduit une erreur HTTP Gemini en une phrase lisible à la synthèse vocale."""
+    try:
+        det = (r.json().get('error') or {}).get('message') or ''
+    except Exception:
+        det = (r.text or '')[:300]
+    if r.status_code == 400 and 'token' in det.lower():
+        return ("Gemini refuse : le contenu est trop court pour un cache explicite "
+                f"(minimum {_GEMINI_CACHE_MIN_TOKENS} jetons).")
+    if r.status_code in (401, 403):
+        return "Gemini refuse la clé d'API (401/403)."
+    if r.status_code == 404:
+        return "Ce cache n'existe plus : il a sans doute expiré."
+    if r.status_code == 429:
+        return "Gemini est saturé ou le quota est atteint (429). Réessaie plus tard."
+    return f"Erreur Gemini {r.status_code} : {det[:200]}"
+
+
+async def ask_cache_gemini(cache_name: str, question: str, model: str = None,
+                           api_keys: dict = None, max_tokens: int = 4000) -> str:
+    """Pose une question à un document déjà épinglé (cache explicite Gemini)."""
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return "[Clé Gemini non configurée.]"
+    if not (cache_name or '').strip():
+        return "[Aucun document épinglé indiqué.]"
+    m = _resolve_model('gemini', model)
+    payload = {'contents': [{'role': 'user', 'parts': [{'text': question or ''}]}],
+               'cachedContent': cache_name,
+               'generationConfig': {'maxOutputTokens': max_tokens}}
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}',
+                json=payload)
+            if r.status_code >= 400:
+                return f"[{_gemini_message_erreur(r)}]"
+            data = r.json()
+    except Exception as e:
+        return f"[Interrogation impossible ({e})]"
+
+    meta = data.get('usageMetadata', {}) or {}
+    _log('gemini', m, _gemini_tokens_entree(meta), _gemini_tokens_sortie(meta), 'cache')
+    cand = (data.get('candidates') or [{}])[0]
+    texte = ''.join(p.get('text', '') for p in (cand.get('content', {}).get('parts') or [])
+                    if 'text' in p)
+    if cand.get('finishReason') == 'MAX_TOKENS':
+        texte += "\n\n⚠️ Réponse interrompue : la limite de longueur a été atteinte."
+    return texte.strip() or "[Aucune réponse produite.]"
+
+
+async def list_caches_gemini(api_keys: dict = None) -> list:
+    """Liste les documents épinglés côté Gemini (métadonnées seules : le contenu
+    n'est pas relisible, c'est une garantie de l'API)."""
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.get(
+                f'https://generativelanguage.googleapis.com/v1beta/cachedContents?key={api_key}')
+            r.raise_for_status()
+            items = r.json().get('cachedContents') or []
+    except Exception:
+        return []
+    return [{'name': c.get('name', ''), 'titre': c.get('displayName', ''),
+             'model': (c.get('model', '') or '').replace('models/', ''),
+             'expire': c.get('expireTime', ''),
+             'nb_tokens': int((c.get('usageMetadata') or {}).get('totalTokenCount') or 0)}
+            for c in items]
+
+
+async def delete_cache_gemini(cache_name: str, api_keys: dict = None) -> bool:
+    """Libère un document épinglé (on cesse de payer le stockage)."""
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key or not (cache_name or '').strip():
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.delete(
+                f'https://generativelanguage.googleapis.com/v1beta/{cache_name}?key={api_key}')
+            return r.status_code < 400 or r.status_code == 404
+    except Exception:
+        return False
+
+
+async def describe_audio_gemini(source: str, question: str = '', model: str = None,
+                                api_keys: dict = None, max_tokens: int = 3000) -> str:
+    """Décrit un fichier AUDIO : au-delà des paroles, ce qui s'entend.
+
+    Différent d'une transcription (Whisper le fait déjà, en local) : ici on veut
+    qui parle, le ton, les bruits, la musique, les silences — tout ce qu'un
+    document sonore porte et qu'un texte brut perd.
+    """
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return "[Audio : clé Gemini non configurée.]"
+    src_txt = (source or '').strip()
+    if not src_txt:
+        return "[Audio : aucun fichier ni lien fourni.]"
+
+    consigne = (question or '').strip() or (
+        "Décris ce document sonore : qui parle et sur quel ton, ce qui est dit "
+        "(transcris les passages importants), les bruits de fond, la musique, les "
+        "silences marquants. Donne des repères de temps (minute:seconde). Sépare "
+        "clairement la TRANSCRIPTION de tes OBSERVATIONS. N'invente rien.")
+
+    if src_txt.lower().startswith(('http://', 'https://')):
+        partie = {'file_data': {'file_uri': src_txt}}
+    else:
+        import base64 as _b64, os as _os, mimetypes as _mt
+        if not _os.path.isfile(src_txt):
+            return f"[Audio introuvable : {src_txt}]"
+        if _os.path.getsize(src_txt) > 18 * 1024 * 1024:
+            return ("[Audio trop volumineux pour un envoi direct (plus de 18 Mo). "
+                    "Fournis un lien, ou découpe-le.]")
+        mime = _mt.guess_type(src_txt)[0] or 'audio/mpeg'
+        with open(src_txt, 'rb') as fh:
+            partie = {'inline_data': {'mime_type': mime,
+                                      'data': _b64.standard_b64encode(fh.read()).decode()}}
+
+    m = _resolve_model('gemini', model)
+    payload = {'contents': [{'parts': [partie, {'text': consigne}]}],
+               'generationConfig': {'maxOutputTokens': max_tokens}}
+    try:
+        async with httpx.AsyncClient(timeout=600) as client:
+            r = await client.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}',
+                json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return f"[Audio : description impossible ({e})]"
+
+    meta = data.get('usageMetadata', {}) or {}
+    _log('gemini', m, _gemini_tokens_entree(meta), _gemini_tokens_sortie(meta), 'audio')
+    cand = (data.get('candidates') or [{}])[0]
+    texte = ''.join(p.get('text', '') for p in (cand.get('content', {}).get('parts') or [])
+                    if 'text' in p)
+    if cand.get('finishReason') == 'MAX_TOKENS':
+        texte += "\n\n⚠️ Description interrompue : la limite de longueur a été atteinte."
+    return texte.strip() or "[Aucune description produite.]"
+
+
 async def describe_video_gemini(source: str, question: str = '', model: str = None,
                                 api_keys: dict = None, max_tokens: int = 3000) -> str:
     """Décrit une vidéo — fichier local ou lien YouTube — avec repères de temps.

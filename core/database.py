@@ -2283,6 +2283,54 @@ def clear_diagnostics() -> None:
 
 _COANIMM_SCHEDULES_MAX = 50
 
+def list_gemini_pins() -> list:
+    """Documents épinglés dans le cache explicite Gemini.
+
+    On ne garde ici que des MÉTADONNÉES (titre, identifiant du cache, modèle,
+    date d'expiration, nombre de jetons) : le contenu du document reste chez
+    Gemini et n'est de toute façon pas relisible via l'API. Rien de
+    confidentiel n'est donc recopié dans la base locale.
+    """
+    raw = get_setting('gemini_pins', '[]')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def _save_gemini_pins(pins: list) -> list:
+    set_setting('gemini_pins', json.dumps(pins[:50], ensure_ascii=False))
+    return pins[:50]
+
+def add_gemini_pin(name: str, titre: str, model: str, expire: str, nb_tokens: int = 0) -> list:
+    pins = [p for p in list_gemini_pins() if p.get('name') != name]
+    pins.insert(0, {'name': name, 'titre': (titre or 'Document')[:200], 'model': model,
+                    'expire': expire, 'nb_tokens': int(nb_tokens or 0),
+                    'cree_le': datetime.now().isoformat(timespec='seconds')})
+    return _save_gemini_pins(pins)
+
+def remove_gemini_pin(name: str) -> list:
+    return _save_gemini_pins([p for p in list_gemini_pins() if p.get('name') != name])
+
+def find_gemini_pin(reference: str) -> dict:
+    """Retrouve un document épinglé par son identifiant exact OU par son titre
+    (comparaison souple : casse et espaces ignorés). Rend {} si rien ne colle."""
+    ref = (reference or '').strip()
+    if not ref:
+        return {}
+    pins = list_gemini_pins()
+    for p in pins:
+        if p.get('name') == ref:
+            return p
+    cible = ref.casefold().strip()
+    for p in pins:
+        if (p.get('titre') or '').casefold().strip() == cible:
+            return p
+    for p in pins:
+        if cible and cible in (p.get('titre') or '').casefold():
+            return p
+    return {}
+
 def list_coanimm_schedules() -> list:
     """Ricochets planifiés : [{id, workflow_id, label, jour (None=tous, 0=lundi..6),
     heure, minute, parametre, actif, dernier_run, dernier_statut}]."""
