@@ -3611,6 +3611,13 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                 if (data === '[DONE]') break;
 
                 if (data === '[TRUNCATED]') { _streamTruncated = true; continue; }
+                if (data.startsWith('[RAISONNEMENT]')) {
+                    // Chaîne de pensée d'un modèle de raisonnement : déjà payée,
+                    // rendue consultable — mais repliée, pour ne pas doubler la
+                    // longueur de ce qu'il y a à lire.
+                    try { _streamRaisonnement = JSON.parse(data.slice(14)); } catch (e) {}
+                    continue;
+                }
 
                 if (data.startsWith('[META]')) {
                     try {
@@ -3844,6 +3851,10 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
         _srAnnounce(_plan ? `NIMM t'a répondu — ${_plan}` : "NIMM t'a répondu.");
 
         // Bouton Continuer si réponse tronquée (max_tokens)
+        if (_streamRaisonnement) {
+            _ajouterRaisonnement(bubble, _streamRaisonnement);
+            _streamRaisonnement = '';
+        }
         if (_streamTruncated) {
             _streamTruncated = false;
             addContinueButton(div, conversationId);
@@ -9879,6 +9890,29 @@ async function _verifierReponse(texte, bulle) {
         }
         _srAnnounce('Vérification impossible.');
     }
+}
+
+// ── Raisonnement des modèles de pensée (deepseek-reasoner…) ──
+// Il arrive dans un champ séparé et était jeté. On l'expose REPLIÉ : disponible
+// pour qui veut comprendre, invisible pour qui veut juste la réponse.
+let _streamRaisonnement = '';
+
+function _ajouterRaisonnement(bulle, texte) {
+    if (!bulle || !texte) return;
+    bulle.querySelector('.raisonnement-bloc')?.remove();
+    const bloc = document.createElement('details');
+    bloc.className = 'raisonnement-bloc';
+    bloc.style.cssText = 'margin-top:6px;font-size:0.84rem;';
+    const som = document.createElement('summary');
+    const mots = texte.split(/\s+/).length;
+    som.textContent = `Raisonnement du modèle (environ ${Math.round(mots / 10) * 10} mots)`;
+    som.style.cursor = 'pointer';
+    bloc.appendChild(som);
+    const corps = document.createElement('div');
+    corps.style.cssText = 'white-space:pre-wrap;padding-left:8px;border-left:2px solid var(--border);margin-top:4px;color:var(--text-muted);';
+    corps.textContent = texte;
+    bloc.appendChild(corps);
+    bulle.appendChild(bloc);
 }
 
 // ── Orientation dans une réponse longue ──
