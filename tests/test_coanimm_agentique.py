@@ -469,6 +469,34 @@ def test_rag_ancrage_lexical():
     ok("base de connaissances : ancrage lexical contre les documents hors sujet")
 
 
+def test_historique_purge_des_appels_en_texte():
+    """Un appel d'outil écrit en texte est ENREGISTRÉ comme une réponse ordinaire :
+    il repart au modèle à chaque tour, qui voit le motif et le reproduit. Le défaut
+    s'auto-entretient dans le fil. L'historique doit donc en être purgé."""
+    import re as _re
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    assert '_strip_appels_texte' in hub
+    assert 'content = _strip_appels_texte(content).strip()' in hub, \
+        "le nettoyage doit être appliqué à l'historique envoyé au modèle"
+    assert 'if not content and not m.get' in hub, \
+        'un message réduit à néant doit être écarté'
+
+    ns = {'re': _re}
+    exec(hub[hub.find('_RE_APPEL_TEXTE_HIST = re.compile'):
+             hub.find('\ndef _document_vraiment_utilise')], ns)
+    f = ns['_strip_appels_texte']
+    cas = '<function=search_web>\n{"query": "Boursorama Bank GBP frais"}'
+    assert f(cas).strip() == '', 'cas vécu : doit disparaître'
+    mixte = 'Je cherche.\n<function=search_web>{"query": "x"}</function>\nLa suite.'
+    r = f(mixte)
+    assert '<function=' not in r and 'Je cherche.' in r and 'La suite.' in r
+    for normal in ('La fonction f(x) = 2x.', "Le code <function> n'existe pas."):
+        assert f(normal) == normal, normal
+    assert f(None) is None and f('') == ''
+    ok("historique : appels d'outils en texte purgés, boucle d'imitation brisée")
+
+
 def test_journal_de_fonctionnement():
     """Les décisions techniques de NIMM (document écarté, appel d'outil rattrapé,
     cache désactivé) n'existaient que dans la console — inaccessible à qui pilote
@@ -867,7 +895,7 @@ if __name__ == '__main__':
                test_anthropic_diffuse_en_continu, test_tous_fournisseurs_diffusent,
                test_verification_des_faits, test_appel_outil_ecrit_en_texte,
                test_rag_ancrage_lexical, test_pied_document_honnete,
-               test_journal_de_fonctionnement,
+               test_journal_de_fonctionnement, test_historique_purge_des_appels_en_texte,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
