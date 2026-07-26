@@ -469,6 +469,43 @@ def test_rag_ancrage_lexical():
     ok("base de connaissances : ancrage lexical contre les documents hors sujet")
 
 
+def test_plan_de_la_reponse():
+    """Une réponse se découvre linéairement à la voix ou en braille : on ignore où
+    elle va et ce qu'il reste. Sa structure est donc annoncée AVANT la lecture,
+    à partir des titres réellement rendus. Purement local : aucun appel, aucun coût."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    assert '_planDeLaReponse' in app and '_PLAN_SEUIL_MOTS' in app
+    assert "querySelectorAll('h1, h2, h3, h4')" in app, \
+        'les titres rendus sont aussi les repères de navigation du lecteur d\'écran'
+    assert "NIMM t'a répondu — ${_plan}" in app, "l'annonce doit porter le plan"
+
+    # Règle telle qu'implémentée
+    def plan(texte, titres=(), puces=0, code=0, seuil=120):
+        mots = len(texte.split()) if texte.strip() else 0
+        if mots < seuil:
+            return ''
+        titres = [t for t in titres if t]
+        if len(titres) >= 2:
+            reste = f", et {len(titres) - 6} autres" if len(titres) > 6 else ''
+            return f"{len(titres)} sections : {', '.join(titres[:6])}{reste}."
+        parties = [f"environ {round(mots / 10) * 10} mots"]
+        if puces >= 3:
+            parties.append(f"{puces} points")
+        if code:
+            parties.append(f"{code} bloc{'s' if code > 1 else ''} de code")
+        return ', '.join(parties) + '.'
+
+    assert plan('mot ' * 50) == '', 'réponse courte : annoncer serait du bruit'
+    long = 'mot ' * 300
+    assert plan(long, ['Frais', 'Plafonds', 'Conseil']) == '3 sections : Frais, Plafonds, Conseil.'
+    assert 'et 3 autres' in plan(long, [f'T{i}' for i in range(9)])
+    assert 'sections' not in plan(long, ['Un seul titre']), 'un titre isolé ne fait pas un plan'
+    r = plan(long, puces=7, code=1)
+    assert 'environ 300 mots' in r and '7 points' in r and '1 bloc de code' in r
+    ok("réponse longue : structure annoncée avant la lecture, silence si courte")
+
+
 def test_panne_fournisseur_reprise():
     """Une panne de fournisseur affichait son message technique brut, en anglais,
     lu tel quel par la synthèse vocale, sans aucune récupération. On traduit, on
@@ -939,7 +976,7 @@ if __name__ == '__main__':
                test_verification_des_faits, test_appel_outil_ecrit_en_texte,
                test_rag_ancrage_lexical, test_pied_document_honnete,
                test_journal_de_fonctionnement, test_historique_purge_des_appels_en_texte,
-               test_panne_fournisseur_reprise,
+               test_panne_fournisseur_reprise, test_plan_de_la_reponse,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
