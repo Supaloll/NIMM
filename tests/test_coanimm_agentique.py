@@ -427,7 +427,8 @@ def test_avis_raison_arret():
     pour les arrêts anormaux seulement, et jamais sur une fin normale."""
     racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
-    ns = {}
+    import re as _re          # la tranche exécutée contient aussi des motifs compilés
+    ns = {'re': _re, 'json': __import__('json')}
     exec(src[src.find('_AVIS_STOP = {'):src.find('\ndef _anthropic_billable_input')], ns)
     f = ns['_avis_stop_reason']
     assert 'limite de longueur' in f('max_tokens')
@@ -436,6 +437,104 @@ def test_avis_raison_arret():
     for normal in ('end_turn', 'tool_use', '', None):
         assert f(normal) == '', f"aucun avis attendu pour {normal!r}"
     ok("raison d'arrêt : troncature et refus annoncés, fin normale silencieuse")
+
+
+def test_rag_ancrage_lexical():
+    """Un score sémantique élevé ne suffit pas : deux textes français sans rapport
+    atteignent couramment 0,5 de similarité. Cas vécu — un PDF sur l'accessibilité
+    des livres numériques servi en pleine conversation bancaire."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    assert 'rag_ancrage_lexical' in hub, 'ancrage lexical absent'
+    assert 'Document écarté' in hub, 'un rejet doit être tracé pour pouvoir régler'
+    assert "len(m) >= 4" in hub, "seuls les mots de fond servent d'ancrage"
+
+    # Règle telle qu'implémentée
+    def retenu(mots, passage, titre, score, seuil=0.5, ancrage=True):
+        fond = {m for m in mots if len(m) >= 4}
+        if score < seuil:
+            return False
+        communs = [m for m in fond if m in passage.lower() or m in titre.lower()]
+        return not (ancrage and not communs)
+
+    q = {'récapitulatif', 'économies', 'possibles', 'ultim', 'metal', 'welcome'}
+    hs = "Étude sur l'accessibilité effective des sites de vente de livres numériques"
+    assert not retenu(q, hs, hs, 0.55), 'le document hors sujet doit être écarté'
+    q2 = {'frais', 'conversion', 'devise'}
+    ok2 = "Les frais de conversion en devise étrangère sont facturés 2 %."
+    assert retenu(q2, ok2, 'Guide bancaire', 0.55), 'un document pertinent doit passer'
+    assert not retenu({'gbp', 'eur'}, 'Texte sans rapport.', 'Doc', 0.9), 'mots courts ignorés'
+    assert retenu(q, hs, hs, 0.55, ancrage=False), 'le réglage doit pouvoir être coupé'
+    assert not retenu(q2, ok2, 'Guide', 0.3), 'le seuil sémantique reste prioritaire'
+    ok("base de connaissances : ancrage lexical contre les documents hors sujet")
+
+
+def test_appel_outil_ecrit_en_texte():
+    """Certains modèles écrivent leurs appels d'outils EN TEXTE
+    (« <function=search_web>{…} ») au lieu du champ structuré. Sans traitement,
+    l'utilisateur voit ce charabia à la place d'une réponse — cas vécu."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+
+    # L'import de `re` doit précéder la compilation du motif, sinon le module
+    # entier refuse de s'importer et NIMM ne démarre plus.
+    arbre = ast.parse(src)
+    ligne_re = next((n.lineno for n in arbre.body if isinstance(n, ast.Import)
+                     and any(a.name == 're' for a in n.names)), None)
+    ligne_cst = next((n.lineno for n in arbre.body if isinstance(n, ast.Assign)
+                      and any(getattr(t, 'id', '') == '_RE_APPEL_TEXTE' for t in n.targets)), None)
+    assert ligne_re and ligne_cst and ligne_re < ligne_cst, "import re manquant ou trop tardif"
+
+    import re as _re
+    ns = {'re': _re, 'json': __import__('json')}
+    exec(src[src.find('_RE_APPEL_TEXTE = re.compile'):src.find('\ndef _anthropic_billable_input')], ns)
+    parse, detecte = ns['_parse_appels_texte'], ns['_contient_appel_texte']
+
+    reel = ('<function=search_web>\n{"query": "Boursorama Bank GBP compte devise '
+            '2026 frais conversion taux"}')
+    assert detecte(reel)
+    r = parse(reel)
+    assert len(r) == 1 and r[0]['name'] == 'search_web'
+    assert r[0]['args']['query'].startswith('Boursorama')
+    # deux appels, balise fermante
+    r2 = parse('<function=a>{"x":1}</function> bla <function=b>{"y":"z"}</function>')
+    assert [x['name'] for x in r2] == ['a', 'b']
+    # robustesse : JSON illisible ignoré, texte normal intact
+    assert parse('<function=c>{pas du json}') == []
+    assert not detecte('Voici la réponse. La fonction f(x) = 2x.')
+
+    # Le repli doit couvrir TOUS les chemins, Anthropic compris (cas vécu).
+    chemins = {}
+    for n in ast.walk(arbre):
+        nom = getattr(n, 'name', '') or ''
+        if nom in ('_anthropic_tools_turn', 'call_llm_stream_with_tools'):
+            chemins[nom] = ast.get_source_segment(src, n) or ''
+    assert len(chemins) == 2
+    for nom, seg in chemins.items():
+        assert '_contient_appel_texte' in seg, f"{nom} n'intercepte pas l'appel en texte"
+        assert '_parse_appels_texte' in seg, f"{nom} ne le convertit pas"
+    ok("appel d'outil écrit en texte : reconnu et converti sur tous les chemins")
+
+
+def test_verification_relance_sur_pause():
+    """La recherche web est un outil SERVEUR : le tour peut rendre la main en
+    « pause_turn » avant d'avoir rédigé sa conclusion. Sans relance, la
+    vérification ne rendait aucun verdict — cas vécu."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    seg = ''
+    for n in ast.walk(ast.parse(src)):
+        if getattr(n, 'name', '') == 'verify_claims_anthropic':
+            seg = ast.get_source_segment(src, n) or ''
+    assert seg, 'verify_claims_anthropic introuvable'
+    assert 'pause_turn' in seg, 'la pause du tour doit être traitée'
+    assert 'for _tour in range' in seg, 'il faut relancer, avec une borne'
+    assert "'role': 'assistant', 'content': contenu" in seg, \
+        'la relance doit renvoyer ce qui a déjà été produit'
+    assert "Aucune affirmation vérifiable" in seg, \
+        'un verdict vide doit être expliqué, pas laissé brut'
+    assert '[Aucun verdict rendu.]' not in seg, 'message technique remplacé'
+    ok("vérification : relance bornée sur pause du tour, verdict vide expliqué")
 
 
 def test_verification_des_faits():
@@ -455,8 +554,12 @@ def test_verification_des_faits():
     assert "'web_search_20250305'" in eng, 'la vérification doit chercher sur le web'
 
     assert '/api/verify' in mn and 'verify_claims_anthropic' in mn
-    assert app.count('_verifierReponse') == 2, 'fonction + branchement au menu'
-    assert 'data-action="verify"' in app
+    # DEUX menus construisent les actions d'un message : celui des messages
+    # rechargés et celui de la réponse en cours de génération. L'entrée doit être
+    # dans les deux, sinon elle disparaît sur les réponses fraîches (cas vécu).
+    assert app.count('data-action="verify"') == 4, \
+        'entrée + branchement, dans les DEUX menus (rechargé et streaming)'
+    assert app.count('_verifierReponse(') >= 2, 'la fonction doit être appelée des deux menus'
     assert 'Sources de la vérification' in app, 'les sources doivent être étiquetées'
     # Rendu LÉGER : le résultat s'insère replié (une ligne), et se retire
     assert '_verifBilanCourt' in app, 'un bilan court doit résumer le verdict'
@@ -586,7 +689,8 @@ def test_repli_cache_refuse():
     faux_httpx.HTTPStatusError = HSE
     sys.modules['httpx'] = faux_httpx
 
-    ns = {}
+    import re as _re          # la tranche exécutée contient aussi des motifs compilés
+    ns = {'re': _re, 'json': __import__('json')}
     exec(bloc, ns)
     f = ns['_anthropic_cache_fallback']
     assert f(HSE(R(400, 'Unexpected field: cache_control'))) is True
@@ -693,7 +797,9 @@ if __name__ == '__main__':
                test_repli_cache_refuse, test_avis_raison_arret,
                test_facturation_cache_partout, test_signal_troncature_bout_en_bout,
                test_anthropic_diffuse_en_continu, test_tous_fournisseurs_diffusent,
-               test_verification_des_faits,
+               test_verification_des_faits, test_appel_outil_ecrit_en_texte,
+               test_rag_ancrage_lexical,
+               test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()

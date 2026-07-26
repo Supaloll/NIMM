@@ -3487,6 +3487,7 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
             <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
             <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
             <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
+            <button class="copy-menu-item" role="menuitem" data-action="verify" aria-label="Vérifier les faits de cette réponse">🔎 Vérifier les faits</button>
         `;
         actBtn.setAttribute('aria-haspopup', 'menu');
         actBtn.setAttribute('aria-expanded', 'false');
@@ -3879,6 +3880,11 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
             _toggleExportMark(div, finalContent, 'assistant');
             const btn = actMenu.querySelector('[data-action="mark"]');
             btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
+        });
+
+        actMenu.querySelector('[data-action="verify"]')?.addEventListener('click', () => {
+            actMenu.style.display = 'none'; actBtn.focus();
+            _verifierReponse(bubble?.dataset.rawText || bubble?.textContent || '', bubble);
         });
 
         // Appliquer l'expression finale
