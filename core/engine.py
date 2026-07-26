@@ -514,6 +514,84 @@ async def verify_claims_anthropic(texte: str, model: str = None, api_keys: dict 
     return {'verdict': verdict, 'sources': sources}
 
 
+# Reprendre une réponse tronquée en envoyant « Continue. » fait redémarrer le
+# modèle : préambule (« Bien sûr, je reprends… »), redites, parfois une phrase
+# recommencée. Trois fournisseurs savent reprendre EXACTEMENT où ils se sont
+# arrêtés — en leur donnant le début de leur propre réponse à poursuivre.
+#   • Anthropic : préremplissage natif (dernier message = assistant).
+#   • Mistral et DeepSeek : champ `prefix` sur le dernier message assistant
+#     (DeepSeek exige son point d'entrée bêta).
+_PREFIXE_SUPPORTE = {'anthropic', 'mistral', 'deepseek'}
+
+
+def supporte_prefixe(provider: str) -> bool:
+    return (provider or '').lower() in _PREFIXE_SUPPORTE
+
+
+async def continuer_reponse_stream(messages: list, prefixe: str, provider: str,
+                                   model: str = None, system_prompt: str = None,
+                                   max_tokens: int = 1024, temperature: float = 0.7,
+                                   api_keys: dict = None):
+    """Poursuit une réponse tronquée, sans couture quand le fournisseur le permet.
+
+    Repli sur un tour « Continue. » pour les autres : le comportement d'avant.
+    """
+    provider = (provider or '').lower()
+    prefixe = (prefixe or '').strip()
+
+    if not prefixe or not supporte_prefixe(provider):
+        async for t in call_llm_stream(
+                messages=messages + [{'role': 'user', 'content': 'Continue.'}],
+                provider=provider, model=model, system_prompt=system_prompt,
+                max_tokens=max_tokens, temperature=temperature, api_keys=api_keys):
+            yield t
+        return
+
+    if provider == 'anthropic':
+        # Le dernier message étant de l'assistant, Claude le poursuit tel quel.
+        async for t in _call_anthropic_stream(
+                messages + [{'role': 'assistant', 'content': prefixe}],
+                _resolve_model('anthropic', model), system_prompt, max_tokens,
+                temperature, api_keys, None):
+            yield t
+        return
+
+    # Mistral / DeepSeek : dernier message assistant marqué `prefix`.
+    api_key = get_api_key(provider, api_keys)
+    if not api_key:
+        raise ValueError(f"Clé API {provider} manquante.")
+    base = ('https://api.deepseek.com/beta' if provider == 'deepseek'
+            else 'https://api.mistral.ai/v1')
+    oai = ([{'role': 'system', 'content': system_prompt}] if system_prompt else [])
+    oai += [{'role': m['role'], 'content': m.get('content', '')}
+            for m in messages if m.get('role') != 'system']
+    oai.append({'role': 'assistant', 'content': prefixe, 'prefix': True})
+    payload = {'model': _resolve_model(provider, model), 'messages': oai,
+               'max_tokens': max_tokens, 'temperature': temperature, 'stream': True}
+    async with httpx.AsyncClient(timeout=300) as client:
+        async with client.stream('POST', f'{base}/chat/completions',
+                                 headers={'Authorization': f'Bearer {api_key}',
+                                          'Content-Type': 'application/json'},
+                                 json=payload) as r:
+            r.raise_for_status()
+            async for ligne in r.aiter_lines():
+                if not ligne.startswith('data:'):
+                    continue
+                bout = ligne[5:].strip()
+                if bout == '[DONE]':
+                    break
+                try:
+                    d = json.loads(bout)
+                    ch = (d.get('choices') or [{}])[0]
+                    morceau = (ch.get('delta') or {}).get('content', '')
+                    if morceau:
+                        yield morceau
+                    if ch.get('finish_reason') == 'length':
+                        yield {'__truncated__': True}
+                except Exception:
+                    continue
+
+
 async def describe_video_gemini(source: str, question: str = '', model: str = None,
                                 api_keys: dict = None, max_tokens: int = 3000) -> str:
     """Décrit une vidéo — fichier local ou lien YouTube — avec repères de temps.

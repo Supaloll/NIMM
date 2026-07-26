@@ -498,14 +498,19 @@ async def continue_thread_route(thread_id: str):
         mask = {'system_prompt': 'Tu es un assistant utile.'}
 
     system_prompt = mask.get('system_prompt', '')
-    # Ajouter un user turn de continuation — non sauvegardé en DB
-    continuation_msgs = msgs + [{'role': 'user', 'content': 'Continue.'}]
+    # Reprise SANS COUTURE quand le fournisseur sait poursuivre son propre texte
+    # (Anthropic, Mistral, DeepSeek) : on lui redonne la fin de sa réponse plutôt
+    # qu'un « Continue. » qui le fait redémarrer avec préambule et redites.
+    _derniere = next((m for m in reversed(msgs) if m.get('role') == 'assistant'), None)
+    _prefixe = (_derniere or {}).get('content', '') if _derniere else ''
+    _msgs_avant = msgs[:-1] if (_derniere is msgs[-1] if msgs else False) else msgs
 
     async def _stream():
         accumulated = ''
         try:
-            async for token in engine.call_llm_stream(
-                messages=continuation_msgs,
+            async for token in engine.continuer_reponse_stream(
+                messages=_msgs_avant,
+                prefixe=_prefixe,
                 provider=provider,
                 model=model,
                 system_prompt=system_prompt,
@@ -514,6 +519,8 @@ async def continue_thread_route(thread_id: str):
                 api_keys=api_keys,
             ):
                 if isinstance(token, dict):
+                    if token.get('__truncated__'):
+                        yield "data: [TRUNCATED]\n\n"
                     continue
                 accumulated += token
                 yield f"data: {token}\n\n"
