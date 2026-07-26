@@ -469,6 +469,49 @@ def test_rag_ancrage_lexical():
     ok("base de connaissances : ancrage lexical contre les documents hors sujet")
 
 
+def test_panne_fournisseur_reprise():
+    """Une panne de fournisseur affichait son message technique brut, en anglais,
+    lu tel quel par la synthèse vocale, sans aucune récupération. On traduit, on
+    distingue le récupérable, et on reprend avec un autre fournisseur."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+
+    ns = {'get_api_key': lambda p, k=None: (k or {}).get(p)}
+    exec(eng[eng.find('def classer_erreur_fournisseur'):
+             eng.find('\ndef _anthropic_billable_input')], ns)
+    cl, sec = ns['classer_erreur_fournisseur'], ns['fournisseur_de_secours']
+
+    class R:
+        def __init__(s, c, t=''):
+            s.status_code, s.text = c, t
+
+    class E(Exception):
+        def __init__(s, r):
+            s.response = r
+
+    assert cl(E(R(401)), 'Anthropic')['categorie'] == 'clé'
+    assert cl(E(R(401)), 'Anthropic')['recuperable'] is False, \
+        'une clé refusée ne se règle pas en changeant de fournisseur'
+    for exc, cat in ((E(R(400, 'Your credit balance is too low')), 'crédit'),
+                     (E(R(429)), 'débit'), (E(R(529, 'Overloaded')), 'surcharge'),
+                     (Exception('Connection timed out'), 'délai')):
+        d = cl(exc, 'Anthropic')
+        assert d['categorie'] == cat and d['recuperable'] is True, cat
+    m = cl(E(R(400, 'Your credit balance is too low')), 'Anthropic')['message']
+    assert 'crédit' in m and 'balance' not in m, 'message à traduire en français'
+
+    cles = {'anthropic': 'a', 'mistral': 'm'}
+    assert sec('anthropic', cles) == 'mistral' and sec('mistral', cles) == 'anthropic'
+    assert sec('anthropic', {'anthropic': 'a'}) == '', 'aucun autre fournisseur'
+
+    # La reprise ne doit avoir lieu que si RIEN n'a encore été affiché
+    assert 'not full_reply' in hub, 'pas de reprise après un affichage partiel'
+    assert 'Je reprends avec' in hub, "le changement doit être annoncé"
+    assert "add_diagnostic('fournisseur'" in hub, 'la panne doit être consignée'
+    ok("panne de fournisseur : message clair, reprise sur un autre, sans doublon")
+
+
 def test_historique_purge_des_appels_en_texte():
     """Un appel d'outil écrit en texte est ENREGISTRÉ comme une réponse ordinaire :
     il repart au modèle à chaque tour, qui voit le motif et le reproduit. Le défaut
@@ -896,6 +939,7 @@ if __name__ == '__main__':
                test_verification_des_faits, test_appel_outil_ecrit_en_texte,
                test_rag_ancrage_lexical, test_pied_document_honnete,
                test_journal_de_fonctionnement, test_historique_purge_des_appels_en_texte,
+               test_panne_fournisseur_reprise,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

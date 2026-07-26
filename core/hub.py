@@ -4291,13 +4291,49 @@ async def process_message_stream(
                             yield f"data: {chunk}\n\n"
 
     except Exception as e:
-        print(f"[HUB] Erreur stream : {e}")
+        from core.engine import (classer_erreur_fournisseur, fournisseur_de_secours,
+                                 call_llm as _call_secours)
+        _diag = classer_erreur_fournisseur(e, settings.get('provider', ''))
+        print(f"[HUB] Erreur stream ({_diag['categorie']}) : {e}")
+        try:
+            from core.database import add_diagnostic
+            add_diagnostic('fournisseur', _diag['message'])
+        except Exception:
+            pass
+
+        # Rien n'a encore été affiché : on peut tenter un autre fournisseur sans
+        # risque de doublon. Mieux vaut une réponse d'un autre modèle qu'une
+        # erreur technique lue à voix haute.
+        _secours = (fournisseur_de_secours(settings.get('provider', ''), settings['api_keys'])
+                    if (_diag['recuperable'] and not full_reply) else '')
+        if _secours:
+            _avis = f"⚠️ {_diag['message']} Je reprends avec {_secours}.\n\n"
+            yield f"data: {_avis}"
+            try:
+                _txt = await _call_secours(
+                    messages=messages, provider=_secours, model=None,
+                    system_prompt=system_prompt, max_tokens=settings['max_tokens'],
+                    temperature=settings['temperature'], api_keys=settings['api_keys'])
+                if _txt and _txt.strip():
+                    for _c in [_txt[_i:_i + 400] for _i in range(0, len(_txt), 400)]:
+                        yield f"data: {_c}\n\n"
+                    _add_msg(thread_id, 'assistant', _avis + _txt)
+                    try:
+                        from core.database import add_diagnostic as _ad
+                        _ad('fournisseur', f"Réponse obtenue via {_secours} après l'échec.")
+                    except Exception:
+                        pass
+                    yield "data: [DONE]\n\n"
+                    return
+            except Exception as _e2:
+                print(f"[HUB] Secours {_secours} en échec : {_e2}")
+
         if full_reply:
             partial, _, _, _, _, _, _ = extract_all_tags(full_reply)
             _add_msg(thread_id, 'assistant', partial or "[Réponse interrompue]")
         else:
-            _add_msg(thread_id, 'assistant', "[Réponse interrompue — erreur de connexion]")
-        yield f"data: [ERREUR: {str(e)}]\n\n"
+            _add_msg(thread_id, 'assistant', f"[Réponse interrompue — {_diag['message']}]")
+        yield f"data: [ERREUR: {_diag['message']}]\n\n"
         return
 
     # 7. Extraire tous les tags (MEM, DOMINANT, ANECDOTE, SITUATION, RAPPEL)
