@@ -1664,6 +1664,19 @@ async def mcp_servers_delete(server_id: str):
         raise HTTPException(403, detail="Seul le propriétaire peut supprimer un serveur MCP.")
     return {"status": "ok", "servers": _db.remove_mcp_server(server_id)}
 
+@app.get("/api/diagnostics")
+async def diagnostics_list():
+    """Journal de fonctionnement : les décisions techniques de NIMM, en clair.
+    Elles n'existaient que dans la console — illisible au lecteur d'écran."""
+    import core.database as _db
+    return {"diagnostics": _db.list_diagnostics()}
+
+@app.delete("/api/diagnostics")
+async def diagnostics_clear():
+    import core.database as _db
+    _db.clear_diagnostics()
+    return {"status": "ok", "diagnostics": []}
+
 class VerifyReq(BaseModel):
     text: str = ""
     thread_id: Optional[str] = None

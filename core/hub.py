@@ -145,7 +145,7 @@ async def generate_tab_title(content: str) -> str:
 
 CARNET_WINDOW    = 50     # seuil d'injection du Carnet dans le system prompt
 CARNET_INTERVAL  = 5      # une note tous les 5 echanges (10 messages)
-MAX_TOKENS_CHAT  = 3500
+MAX_TOKENS_CHAT  = 8000
 MAX_TOKENS_MEM   = 2000
 MEMORY_SIM_THRESHOLD = 0.80
 
@@ -1371,8 +1371,14 @@ def _match_documents(user_message: str):
             elif sc >= _seuil_sem:
                 _communs = [m for m in _mots_fond if m in _hay or m in _titre_bas]
                 if _ancrage and not _communs:
-                    print(f"[HUB] 📄 Document écarté (score {sc:.2f} mais aucun mot commun) : "
-                          f"{pp.get('titre', '?')[:60]}")
+                    _msg_diag = (f"Document écarté de la réponse : « {pp.get('titre', '?')[:80]} » "
+                                 f"— proche par le sens (score {sc:.2f}) mais aucun mot en commun.")
+                    print(f"[HUB] 📄 {_msg_diag}")
+                    try:
+                        from core.database import add_diagnostic
+                        add_diagnostic('base de connaissances', _msg_diag)
+                    except Exception:
+                        pass
                     continue
                 retenus.append(pp)
         if not retenus:
@@ -3926,7 +3932,13 @@ async def process_message(
     if _doc_titles and _document_vraiment_utilise(reply, doc_context):
         reply = _strip_docs_footer(reply or "").rstrip() + "\n\n— 📄 Source : ta base de connaissances — " + ", ".join(_doc_titles)
     elif _doc_titles:
-        print(f"[HUB] 📄 Pied omis : la réponse n'utilise pas {_doc_titles}")
+        _m = f"Mention de source omise : la réponse ne s'appuie pas sur {', '.join(_doc_titles)}."
+        print(f"[HUB] 📄 {_m}")
+        try:
+            from core.database import add_diagnostic
+            add_diagnostic('base de connaissances', _m)
+        except Exception:
+            pass
     _add_msg(thread_id, 'user',      user_message)
     _add_msg(thread_id, 'assistant', reply)
 
@@ -4330,7 +4342,13 @@ async def process_message_stream(
         reply = _strip_docs_footer(reply or "").rstrip() + "\n\n" + _doc_line
         yield f"data: \\n\\n{_doc_line}\n\n"
     elif _doc_titles:
-        print(f"[HUB] 📄 Pied omis : la réponse n'utilise pas {_doc_titles}")
+        _m = f"Mention de source omise : la réponse ne s'appuie pas sur {', '.join(_doc_titles)}."
+        print(f"[HUB] 📄 {_m}")
+        try:
+            from core.database import add_diagnostic
+            add_diagnostic('base de connaissances', _m)
+        except Exception:
+            pass
     _add_msg(thread_id, 'assistant', reply)
 
     # Stocker les tokens/coût et émettre [USAGE] vers le frontend

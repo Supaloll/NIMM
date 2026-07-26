@@ -9880,6 +9880,44 @@ async function _verifierReponse(texte, bulle) {
     }
 }
 
+// ── Journal de fonctionnement ──
+// Ces décisions n'existaient que dans la console : inaccessible en pratique.
+async function loadDiagnostics() {
+    const ul = document.getElementById('diagnostics-list');
+    if (!ul) return;
+    try {
+        const r = await fetch('/api/diagnostics');
+        const d = await r.json();
+        const lignes = d.diagnostics || [];
+        ul.innerHTML = '';
+        if (!lignes.length) {
+            const li = document.createElement('li');
+            li.textContent = 'Rien à signaler pour le moment.';
+            li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+            ul.appendChild(li);
+            return;
+        }
+        lignes.forEach(e => {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:4px 0;border-bottom:1px solid var(--border);';
+            const quand = (e.ts || '').replace('T', ' à ').slice(0, 16);
+            li.textContent = `${quand} — ${e.categorie} : ${e.message}`;
+            ul.appendChild(li);
+        });
+    } catch (e) { /* silencieux */ }
+}
+
+document.getElementById('diagnostics-details')?.addEventListener('toggle', function () {
+    if (this.open) loadDiagnostics();
+});
+document.getElementById('diagnostics-clear-btn')?.addEventListener('click', async () => {
+    try {
+        await fetch('/api/diagnostics', { method: 'DELETE' });
+        await loadDiagnostics();
+        _coanimmAnnounce('Journal de fonctionnement vidé.');
+    } catch (e) { /* silencieux */ }
+});
+
 // ── Serveurs MCP distants ──
 async function loadMcpServers() {
     try {

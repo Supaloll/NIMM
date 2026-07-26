@@ -2251,6 +2251,36 @@ def remove_mcp_server(server_id: str) -> list:
     _save_mcp_servers([s for s in _raw_mcp_servers() if s.get('id') != server_id])
     return list_mcp_servers()
 
+# ── Journal de fonctionnement ──
+# Les décisions techniques de NIMM (document écarté, appel d'outil converti, cache
+# désactivé…) partaient uniquement dans la console. Inutilisable pour qui pilote
+# NIMM au lecteur d'écran : on les consigne ici pour les rendre consultables.
+_DIAG_MAX = 80
+
+def list_diagnostics() -> list:
+    raw = get_setting('nimm_diagnostics', '[]')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def add_diagnostic(categorie: str, message: str) -> None:
+    """Consigne une décision technique. Silencieux : ne doit jamais gêner le chat."""
+    try:
+        journal = list_diagnostics()
+        journal.insert(0, {
+            'ts': datetime.now().isoformat(timespec='seconds'),
+            'categorie': (categorie or 'info')[:40],
+            'message': (message or '')[:300],
+        })
+        set_setting('nimm_diagnostics', json.dumps(journal[:_DIAG_MAX], ensure_ascii=False))
+    except Exception:
+        pass
+
+def clear_diagnostics() -> None:
+    set_setting('nimm_diagnostics', '[]')
+
 _COANIMM_SCHEDULES_MAX = 50
 
 def list_coanimm_schedules() -> list:
