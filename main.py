@@ -1692,6 +1692,25 @@ async def verify_text(req: VerifyReq):
     return await verify_claims_anthropic(req.text or "",
                                          api_keys=settings.get("api_keys", {}))
 
+class CoanimmVideoReq(BaseModel):
+    source: str = ""          # chemin local ou lien (YouTube accepté)
+    question: Optional[str] = None
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/describe_video")
+async def coanimm_describe_video(req: CoanimmVideoReq):
+    """Décrit une vidéo (fichier local ou lien) avec repères de temps. Une vidéo est
+    le contenu le plus opaque quand on ne voit pas : la bande-son ne dit presque
+    jamais ce qui est montré."""
+    import core.database as _db
+    if "describe_video" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil « décrire une vidéo » désactivé dans le catalogue.]"}
+    from core.engine import describe_video_gemini
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    return {"result": await describe_video_gemini(req.source or "", req.question or "",
+                                                  api_keys=settings.get("api_keys", {}))}
+
 class CoanimmAskDocsReq(BaseModel):
     question: str = ""
     k: int = 5
@@ -2553,6 +2572,7 @@ _COANIMM_TOOLS = [
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
     {"tool": "read_pdf_visual", "label": "Lire un PDF visuellement (mise en page, tableaux, scans)", "category": "Documents"},
     {"tool": "ask_documents", "label": "Interroger la base de connaissances avec citations", "category": "Documents"},
+    {"tool": "describe_video", "label": "Décrire une vidéo (fichier ou lien)", "category": "Images"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},
