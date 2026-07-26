@@ -438,6 +438,63 @@ def test_avis_raison_arret():
     ok("raison d'arrêt : troncature et refus annoncés, fin normale silencieuse")
 
 
+def test_tous_fournisseurs_diffusent():
+    """TOUS les fournisseurs doivent diffuser au fil de l'eau et signaler la
+    troncature. Sans streaming, rien ne s'affiche tant que la réponse n'est pas
+    entièrement générée : un long silence, sans indice visuel ni sonore.
+    Anthropic, Gemini et Ollama avaient ce défaut ; les OpenAI-compat non."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    arbre = ast.parse(eng)
+
+    phases = {}
+    for n in ast.walk(arbre):
+        nom = getattr(n, 'name', None) or ''
+        if nom.endswith('_tools_turn'):
+            phases[nom] = ast.get_source_segment(eng, n) or ''
+    assert {'_anthropic_tools_turn', '_gemini_tools_turn', '_ollama_tools_turn'} <= set(phases)
+    for nom, seg in phases.items():
+        assert 'aiter_lines' in seg or 'client.stream' in seg, f"{nom} ne diffuse pas"
+        assert "'truncated'" in seg, f"{nom} ne signale pas la troncature"
+        assert '_log(' in seg, f"{nom} ne journalise pas les coûts"
+
+    # Le chemin OpenAI-compat (Mistral, DeepSeek, OpenAI, OpenRouter)
+    for n in ast.walk(arbre):
+        if getattr(n, 'name', None) == 'call_llm_stream_with_tools':
+            seg = ast.get_source_segment(eng, n)
+            assert 'aiter_lines' in seg and "'stream'" in seg
+    ok(f"diffusion en continu + troncature : {len(phases)} chemins + OpenAI-compat")
+
+
+def test_anthropic_diffuse_en_continu():
+    """Le chat Anthropic doit diffuser au fil de l'eau, comme les fournisseurs
+    OpenAI-compat. Sans streaming, rien ne s'affiche tant que la réponse n'est pas
+    entièrement générée : long silence avant que la voix ne démarre."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    trouve = False
+    for n in ast.walk(ast.parse(eng)):
+        if getattr(n, 'name', '') != '_anthropic_tools_turn':
+            continue
+        trouve = True
+        seg = ast.get_source_segment(eng, n)
+        # stream doit valoir True dans le payload
+        stream_ok = False
+        for sub in ast.walk(n):
+            if isinstance(sub, ast.Dict):
+                cles = [k.value for k in sub.keys if isinstance(k, ast.Constant)]
+                if 'stream' in cles:
+                    stream_ok = ast.literal_eval(sub.values[cles.index('stream')]) is True
+        assert stream_ok, "le chat Anthropic doit demander le streaming"
+        assert 'aiter_lines' in seg, "la réponse doit être lue au fil de l'eau"
+        # Contrat d'événements inchangé pour le hub
+        assert "yield {'type': 'tool_calls'" in seg
+        assert "yield {'type': 'truncated'}" in seg
+        assert '_anthropic_billable_input' in seg, "facturation pondérée conservée"
+    assert trouve, "_anthropic_tools_turn introuvable"
+    ok("chat Anthropic : diffusion en continu, contrat d'événements préservé")
+
+
 def test_signal_troncature_bout_en_bout():
     """Le frontend attendait un signal [TRUNCATED] pour afficher son bouton
     « Continuer », mais AUCUN code serveur ne l'émettait : le bouton n'apparaissait
@@ -607,6 +664,7 @@ if __name__ == '__main__':
                test_specificites_anthropic_confinees, test_mcp_inerte_sans_serveur,
                test_repli_cache_refuse, test_avis_raison_arret,
                test_facturation_cache_partout, test_signal_troncature_bout_en_bout,
+               test_anthropic_diffuse_en_continu, test_tous_fournisseurs_diffusent,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()

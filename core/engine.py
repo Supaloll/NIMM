@@ -646,8 +646,16 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
 
 
 async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
-    """Phase 1 Anthropic : un appel avec outils. Émet soit un événement tool_calls,
-    soit le texte en tokens."""
+    """Phase 1 Anthropic : un appel avec outils, DIFFUSÉ EN CONTINU.
+
+    Historiquement cet appel n'était pas streamé : le texte n'arrivait qu'une fois
+    la réponse entièrement générée, d'où un long silence avant que la synthèse
+    vocale ne démarre — alors que les fournisseurs OpenAI-compat, eux, diffusaient
+    au fil de l'eau. Même contrat d'événements qu'avant :
+      {'type':'token','text':…}  au fil de l'eau
+      {'type':'tool_calls', 'calls':[…], 'assistant_msg':{…}}  si outils demandés
+      {'type':'truncated'}  si la limite de longueur est atteinte
+    """
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
         raise ValueError("Clé API Anthropic manquante.")
@@ -659,45 +667,92 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
         'temperature': temperature,
         'messages':    _oai_msgs_to_anthropic(messages),
         'tools':       _oai_tools_to_anthropic(tools),
+        'stream':      True,
     }
     if system_prompt:
         payload['system'] = system_prompt
     if _anthropic_cache_enabled():
         payload['cache_control'] = {'type': 'ephemeral'}
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(
-            'https://api.anthropic.com/v1/messages',
-            headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
-            json=payload
-        )
-        r.raise_for_status()
-        data = r.json()
+    texte_total = []
+    blocs_outils = {}      # index du bloc → {'id', 'name', 'json'}
+    tokens_in = tokens_out = 0
+    stop_reason = ''
 
-    usage = data.get('usage', {})
-    _log('anthropic', model, _anthropic_billable_input(usage), usage.get('output_tokens', 0))
-    content = data.get('content', []) or []
-    tool_uses = [b for b in content if b.get('type') == 'tool_use']
-    if tool_uses:
+    async with httpx.AsyncClient(timeout=300) as client:
+        if 'cache_control' in payload and not _anthropic_cache_enabled():
+            payload.pop('cache_control', None)
+        async with client.stream(
+            'POST',
+            'https://api.anthropic.com/v1/messages',
+            headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+                     'content-type': 'application/json'},
+            json=payload
+        ) as r:
+            if r.status_code == 400 and 'cache_control' in payload:
+                await r.aread()
+                _err = httpx.HTTPStatusError('400', request=r.request, response=r)
+                if _anthropic_cache_fallback(_err):
+                    payload.pop('cache_control', None)
+                    async for _ev in _anthropic_tools_turn(
+                            messages, tools, model, system_prompt, max_tokens,
+                            temperature, api_keys):
+                        yield _ev
+                    return
+            r.raise_for_status()
+            async for ligne in r.aiter_lines():
+                if not ligne.startswith('data:'):
+                    continue
+                try:
+                    d = json.loads(ligne[5:].strip())
+                except Exception:
+                    continue
+                evt = d.get('type', '')
+                if evt == 'message_start':
+                    tokens_in = _anthropic_billable_input(
+                        d.get('message', {}).get('usage', {}))
+                elif evt == 'content_block_start':
+                    bloc = d.get('content_block', {}) or {}
+                    if bloc.get('type') == 'tool_use':
+                        blocs_outils[d.get('index')] = {
+                            'id': bloc.get('id', ''), 'name': bloc.get('name', ''), 'json': ''}
+                elif evt == 'content_block_delta':
+                    delta = d.get('delta', {}) or {}
+                    if delta.get('type') == 'text_delta':
+                        morceau = delta.get('text', '')
+                        if morceau:
+                            texte_total.append(morceau)
+                            yield {'type': 'token', 'text': morceau}
+                    elif delta.get('type') == 'input_json_delta':
+                        b = blocs_outils.get(d.get('index'))
+                        if b is not None:
+                            b['json'] += delta.get('partial_json', '')
+                elif evt == 'message_delta':
+                    tokens_out = (d.get('usage', {}) or {}).get('output_tokens', tokens_out)
+                    stop_reason = (d.get('delta', {}) or {}).get('stop_reason', stop_reason)
+
+    _log('anthropic', model, tokens_in, tokens_out)
+
+    if blocs_outils:
         calls, oai_tcs = [], []
-        for b in tool_uses:
-            calls.append({'name': b.get('name', ''), 'args': b.get('input', {}) or {}, 'id': b.get('id', '')})
-            oai_tcs.append({
-                'id': b.get('id', ''), 'type': 'function',
-                'function': {'name': b.get('name', ''),
-                             'arguments': json.dumps(b.get('input', {}) or {}, ensure_ascii=False)}
-            })
-        text = ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
-        assistant_msg = {'role': 'assistant', 'content': text, 'tool_calls': oai_tcs}
-        yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
+        for b in blocs_outils.values():
+            try:
+                args = json.loads(b['json']) if b['json'].strip() else {}
+            except Exception:
+                args = {}
+            calls.append({'name': b['name'], 'args': args, 'id': b['id']})
+            oai_tcs.append({'id': b['id'], 'type': 'function',
+                            'function': {'name': b['name'],
+                                         'arguments': json.dumps(args, ensure_ascii=False)}})
+        yield {'type': 'tool_calls', 'calls': calls,
+               'assistant_msg': {'role': 'assistant', 'content': ''.join(texte_total),
+                                 'tool_calls': oai_tcs}}
+    elif stop_reason == 'max_tokens':
+        yield {'type': 'truncated'}
     else:
-        _sr = data.get('stop_reason', '')
-        text = ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
-        if _sr == 'max_tokens':
-            yield {'type': 'token', 'text': text}
-            yield {'type': 'truncated'}
-        else:
-            yield {'type': 'token', 'text': text + _avis_stop_reason(_sr)}
+        avis = _avis_stop_reason(stop_reason)
+        if avis:
+            yield {'type': 'token', 'text': avis}
 
 
 # ══════════════════════════════════════════
@@ -861,15 +916,18 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
 
 
 async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
-    """Phase 1 Gemini : un appel avec outils. Émet soit un événement tool_calls,
-    soit le texte en tokens.
+    """Phase 1 Gemini : un appel avec outils, DIFFUSÉ EN CONTINU.
+
+    Utilise `streamGenerateContent?alt=sse` : le texte arrive au fil de l'eau, au
+    lieu d'attendre la génération complète. Les appels de fonction et les sources
+    du grounding ne sont émis qu'une fois le flux terminé (ils n'arrivent pas
+    fragmentés). Contrat d'événements identique aux autres fournisseurs.
     Si tools contient {'google_search': {}}, active le grounding natif Google Search."""
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
         raise ValueError("Clé API Gemini manquante.")
     model = model or 'gemini-3.5-flash'
 
-    # Détecter si on demande le grounding Google Search
     _grounding = any(isinstance(t, dict) and 'google_search' in t for t in (tools or []))
 
     payload = {
@@ -887,40 +945,54 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
     if system_prompt:
         payload['systemInstruction'] = {'parts': [{'text': system_prompt}]}
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(
-            f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}',
-            json=payload
-        )
-        r.raise_for_status()
-        resp = r.json()
+    texte, fcalls, citations = [], [], []
+    prompt_tokens = cand_tokens = 0
+    finish_reason = ''
 
-    meta = resp.get('usageMetadata', {})
-    _log('gemini', model, meta.get('promptTokenCount', 0), meta.get('candidatesTokenCount', 0))
-    candidate = (resp.get('candidates') or [{}])[0]
-    parts  = candidate.get('content', {}).get('parts', []) or []
-    text   = ''.join(p.get('text', '') for p in parts if 'text' in p)
+    async with httpx.AsyncClient(timeout=120) as client:
+        async with client.stream(
+            'POST',
+            f'https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={api_key}',
+            json=payload
+        ) as r:
+            r.raise_for_status()
+            async for ligne in r.aiter_lines():
+                if not ligne.startswith('data:'):
+                    continue
+                try:
+                    d = json.loads(ligne[5:].strip())
+                except Exception:
+                    continue
+                meta = d.get('usageMetadata', {}) or {}
+                prompt_tokens = meta.get('promptTokenCount', prompt_tokens) or prompt_tokens
+                cand_tokens = meta.get('candidatesTokenCount', cand_tokens) or cand_tokens
+                cand = (d.get('candidates') or [{}])[0]
+                finish_reason = cand.get('finishReason', finish_reason) or finish_reason
+                for p in (cand.get('content', {}).get('parts', []) or []):
+                    if 'text' in p and p['text']:
+                        texte.append(p['text'])
+                        yield {'type': 'token', 'text': p['text']}
+                    elif 'functionCall' in p:
+                        fcalls.append(p['functionCall'])
+                gm = cand.get('groundingMetadata', {}) or {}
+                queries = gm.get('webSearchQueries', []) or []
+                for c in (gm.get('groundingChunks', []) or []):
+                    uri = c.get('web', {}).get('uri', '')
+                    if uri and not any(x['url'] == uri for x in citations):
+                        citations.append({'url': uri,
+                                          'title': c.get('web', {}).get('title', ''),
+                                          'snippet': '',
+                                          'query': queries[0] if queries else ''})
+
+    _log('gemini', model, prompt_tokens, cand_tokens)
 
     if _grounding:
-        # Extraire les sources depuis groundingMetadata
-        grounding_meta = candidate.get('groundingMetadata', {})
-        chunks = grounding_meta.get('groundingChunks', [])
-        queries = grounding_meta.get('webSearchQueries', [])
-        citations = [
-            {
-                'url':     c.get('web', {}).get('uri', ''),
-                'title':   c.get('web', {}).get('title', ''),
-                'snippet': '',
-                'query':   queries[0] if queries else '',
-            }
-            for c in chunks if c.get('web', {}).get('uri')
-        ]
         if citations:
             yield {'type': 'citations', 'citations': citations}
-        yield {'type': 'token', 'text': text}
+        if finish_reason == 'MAX_TOKENS':
+            yield {'type': 'truncated'}
         return
 
-    fcalls = [p['functionCall'] for p in parts if 'functionCall' in p]
     if fcalls:
         calls, oai_tcs = [], []
         for i, fc in enumerate(fcalls):
@@ -932,10 +1004,10 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
                 'id': cid, 'type': 'function',
                 'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)}
             })
-        assistant_msg = {'role': 'assistant', 'content': text, 'tool_calls': oai_tcs}
+        assistant_msg = {'role': 'assistant', 'content': ''.join(texte), 'tool_calls': oai_tcs}
         yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
-    else:
-        yield {'type': 'token', 'text': text}
+    elif finish_reason == 'MAX_TOKENS':
+        yield {'type': 'truncated'}
 
 
 # ══════════════════════════════════════════
@@ -993,30 +1065,55 @@ async def _call_ollama(messages, model, system_prompt, max_tokens, temperature):
 
 
 async def _ollama_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature):
-    """Phase 1 Ollama : un appel avec outils. Émet soit un événement tool_calls,
-    soit le texte en tokens. Ollama accepte le format d'outils OpenAI tel quel."""
+    """Phase 1 Ollama : un appel avec outils, DIFFUSÉ EN CONTINU.
+
+    Ollama répond en NDJSON (un objet JSON par ligne). Les appels d'outils, eux,
+    n'arrivent pas fragmentés : on les récolte au fil des lignes. Même contrat
+    d'événements que les autres fournisseurs."""
     ollama_messages = []
     if system_prompt:
         ollama_messages.append({'role': 'system', 'content': system_prompt})
     ollama_messages.extend(_oai_msgs_to_ollama(messages))
 
+    texte, tcs = [], []
+    prompt_tokens = eval_tokens = 0
+    done_reason = ''
+
     async with httpx.AsyncClient(timeout=180) as client:
-        r = await client.post(
+        async with client.stream(
+            'POST',
             'http://localhost:11434/api/chat',
             json={
                 'model':    model or 'llama3.1',
                 'messages': ollama_messages,
                 'tools':    tools,
-                'stream':   False,
+                'stream':   True,
                 'options':  {'num_predict': max_tokens, 'temperature': temperature},
             }
-        )
-        r.raise_for_status()
-        data = r.json()
+        ) as r:
+            r.raise_for_status()
+            async for ligne in r.aiter_lines():
+                ligne = (ligne or '').strip()
+                if not ligne:
+                    continue
+                try:
+                    d = json.loads(ligne)
+                except Exception:
+                    continue
+                msg = d.get('message', {}) or {}
+                morceau = msg.get('content', '')
+                if morceau:
+                    texte.append(morceau)
+                    yield {'type': 'token', 'text': morceau}
+                if msg.get('tool_calls'):
+                    tcs.extend(msg['tool_calls'])
+                if d.get('done'):
+                    prompt_tokens = d.get('prompt_eval_count', 0) or 0
+                    eval_tokens = d.get('eval_count', 0) or 0
+                    done_reason = d.get('done_reason', '') or ''
 
-    msg = data.get('message', {}) or {}
-    _log('ollama', model or 'llama3.1', data.get('prompt_eval_count', 0), data.get('eval_count', 0))
-    tcs = msg.get('tool_calls') or []
+    _log('ollama', model or 'llama3.1', prompt_tokens, eval_tokens)
+
     if tcs:
         calls, oai_tcs = [], []
         for i, tc in enumerate(tcs):
@@ -1032,10 +1129,10 @@ async def _ollama_tools_turn(messages, tools, model, system_prompt, max_tokens, 
                 'id': cid, 'type': 'function',
                 'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)}
             })
-        assistant_msg = {'role': 'assistant', 'content': msg.get('content') or '', 'tool_calls': oai_tcs}
+        assistant_msg = {'role': 'assistant', 'content': ''.join(texte), 'tool_calls': oai_tcs}
         yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
-    else:
-        yield {'type': 'token', 'text': msg.get('content', '')}
+    elif done_reason == 'length':
+        yield {'type': 'truncated'}
 
 
 # ══════════════════════════════════════════
