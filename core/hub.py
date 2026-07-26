@@ -39,6 +39,22 @@ _DOCS_FOOTER_RE = re.compile(
     r'\n{0,2}—?[ \t]*\U0001f4c4[ \t]*(?:Documents consult|Source[ \t]*:[ \t]*ta base)[^\n]*')
 
 
+# Un appel d'outil écrit en texte par le modèle (« <function=nom>{…} ») est
+# ENREGISTRÉ dans le fil comme une réponse ordinaire. Il est donc renvoyé au modèle
+# à chaque tour suivant, qui voit le motif et le reproduit : le défaut s'auto-entretient
+# dans ce fil. On le retire de l'historique pour briser la boucle.
+_RE_APPEL_TEXTE_HIST = re.compile(
+    r'<function\s*=\s*[A-Za-z0-9_\-]+\s*>\s*\{.*?\}\s*(?:</function>)?',
+    re.DOTALL)
+
+
+def _strip_appels_texte(text):
+    """Retire d'un contenu les appels d'outils écrits en texte."""
+    if not text or not isinstance(text, str):
+        return text
+    return _RE_APPEL_TEXTE_HIST.sub('', text)
+
+
 def _document_vraiment_utilise(reponse: str, doc_context: str) -> bool:
     """La réponse s'appuie-t-elle réellement sur le document injecté ?
 
@@ -81,6 +97,7 @@ def _sanitize_history(messages: list) -> list:
         content = m.get('content')
         if isinstance(content, str):
             content = _strip_docs_footer(content)
+            content = _strip_appels_texte(content).strip()
         if not content and not m.get('tool_calls'):
             continue
         if cleaned and cleaned[-1]['role'] == m['role'] and not m.get('tool_calls') and not cleaned[-1].get('tool_calls'):
