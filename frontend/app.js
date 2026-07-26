@@ -3840,7 +3840,8 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
         if (!_userScrolledUp) messagesDiv.scrollTop = messagesDiv.scrollHeight;
         const finalContent = bubble.textContent;
         _updateFloatTTS(finalContent, div);
-        _srAnnounce('NIMM t\'a répondu.');
+        const _plan = _planDeLaReponse(bubble);
+        _srAnnounce(_plan ? `NIMM t'a répondu — ${_plan}` : "NIMM t'a répondu.");
 
         // Bouton Continuer si réponse tronquée (max_tokens)
         if (_streamTruncated) {
@@ -9878,6 +9879,36 @@ async function _verifierReponse(texte, bulle) {
         }
         _srAnnounce('Vérification impossible.');
     }
+}
+
+// ── Orientation dans une réponse longue ──
+// Une réponse se découvre linéairement à la voix ou en braille : on ne sait pas où
+// elle va ni combien il reste. On annonce donc sa structure AVANT de la lire, à
+// partir des titres réellement rendus (qui sont aussi les points de navigation du
+// lecteur d'écran). Purement local : aucun appel, aucun coût.
+const _PLAN_SEUIL_MOTS = 120;   // en dessous, l'annonce serait du bruit
+
+function _planDeLaReponse(bulle) {
+    if (!bulle) return '';
+    const texte = (bulle.textContent || '').trim();
+    const mots = texte ? texte.split(/\s+/).length : 0;
+    if (mots < _PLAN_SEUIL_MOTS) return '';
+
+    const titres = Array.from(bulle.querySelectorAll('h1, h2, h3, h4'))
+        .map(h => (h.textContent || '').trim())
+        .filter(Boolean);
+    if (titres.length >= 2) {
+        const liste = titres.slice(0, 6).join(', ');
+        const reste = titres.length > 6 ? `, et ${titres.length - 6} autres` : '';
+        return `${titres.length} sections : ${liste}${reste}.`;
+    }
+    // Pas de titres : on situe au moins l'ampleur et la forme
+    const puces = bulle.querySelectorAll('li').length;
+    const blocsCode = bulle.querySelectorAll('pre').length;
+    const parties = [`environ ${Math.round(mots / 10) * 10} mots`];
+    if (puces >= 3) parties.push(`${puces} points`);
+    if (blocsCode) parties.push(`${blocsCode} bloc${blocsCode > 1 ? 's' : ''} de code`);
+    return parties.join(', ') + '.';
 }
 
 // ── Journal de fonctionnement ──
