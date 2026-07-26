@@ -1699,6 +1699,117 @@ async def verify_text(req: VerifyReq):
     return await verify_claims_anthropic(req.text or "",
                                          api_keys=settings.get("api_keys", {}))
 
+class GeminiPinReq(BaseModel):
+    contenu: str = ""
+    chemin: Optional[str] = None
+    titre: Optional[str] = None
+    consigne: Optional[str] = None
+    duree_h: float = 1.0
+    thread_id: Optional[str] = None
+
+@app.post("/api/gemini/pins")
+async def gemini_pin_creer(req: GeminiPinReq):
+    """Épingle un long document chez Gemini (cache explicite) pour l'interroger
+    ensuite à tarif réduit. Le contenu part chez Gemini ; seules les
+    métadonnées sont conservées localement."""
+    import core.database as _db, os as _os, asyncio as _aio, functools as _ft
+    from core.engine import create_cache_gemini
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    contenu = req.contenu or ""
+    titre = (req.titre or "").strip()
+    if (req.chemin or "").strip():
+        chemin = _os.path.abspath(_os.path.expanduser(req.chemin.strip()))
+        if not _os.path.isfile(chemin):
+            return {"ok": False, "erreur": f"Fichier introuvable : {req.chemin}"}
+        try:
+            from modules.enrichissement import extract_any, mistral_key_from_settings
+            contenu = await _aio.get_event_loop().run_in_executor(
+                None, _ft.partial(extract_any, chemin, _os.path.basename(chemin),
+                                  mistral_key=mistral_key_from_settings(settings)))
+        except Exception as e:
+            return {"ok": False, "erreur": f"Lecture impossible : {e}"}
+        titre = titre or _os.path.basename(chemin)
+    res = await create_cache_gemini(contenu, titre, req.consigne or "",
+                                    req.duree_h or 1.0,
+                                    api_keys=settings.get("api_keys", {}))
+    if res.get("ok"):
+        _db.add_gemini_pin(res["name"], res.get("titre") or titre, res.get("model", ""),
+                           res.get("expire", ""), res.get("nb_tokens", 0))
+        _db.add_diagnostic("gemini", "Document épinglé",
+                           f"« {res.get('titre') or titre} » — {res.get('nb_tokens', 0)} jetons")
+    return res
+
+@app.get("/api/gemini/pins")
+async def gemini_pin_lister(thread_id: Optional[str] = None):
+    """Liste les documents épinglés. On croise le magasin local avec ce que
+    Gemini connaît vraiment, pour ne jamais annoncer un document expiré."""
+    import core.database as _db
+    from core.engine import list_caches_gemini
+    from core.hub import load_settings
+    settings = load_settings(thread_id)
+    distants = await list_caches_gemini(settings.get("api_keys", {}))
+    connus = {c["name"] for c in distants}
+    locaux = _db.list_gemini_pins()
+    vivants = [p for p in locaux if p.get("name") in connus]
+    if len(vivants) != len(locaux):
+        _db._save_gemini_pins(vivants)
+    par_nom = {c["name"]: c for c in distants}
+    for p in vivants:
+        p["expire"] = par_nom.get(p["name"], {}).get("expire", p.get("expire", ""))
+    return {"pins": vivants, "expires": len(locaux) - len(vivants)}
+
+@app.delete("/api/gemini/pins")
+async def gemini_pin_liberer(name: str, thread_id: Optional[str] = None):
+    """Libère un document épinglé : on cesse d'en payer le stockage."""
+    import core.database as _db
+    from core.engine import delete_cache_gemini
+    from core.hub import load_settings
+    settings = load_settings(thread_id)
+    ok = await delete_cache_gemini(name, settings.get("api_keys", {}))
+    _db.remove_gemini_pin(name)
+    return {"ok": ok}
+
+class GeminiPinAskReq(BaseModel):
+    reference: str = ""
+    question: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/gemini/pins/ask")
+async def gemini_pin_interroger(req: GeminiPinAskReq):
+    """Pose une question à un document épinglé, désigné par son titre ou son identifiant."""
+    import core.database as _db
+    from core.engine import ask_cache_gemini
+    from core.hub import load_settings
+    pin = _db.find_gemini_pin(req.reference or "")
+    if not pin:
+        dispo = ", ".join(p.get("titre", "?") for p in _db.list_gemini_pins()) or "aucun"
+        return {"result": f"[Aucun document épinglé ne correspond à « {req.reference} ». "
+                          f"Documents disponibles : {dispo}.]"}
+    settings = load_settings(req.thread_id)
+    texte = await ask_cache_gemini(pin["name"], req.question or "",
+                                   model=pin.get("model") or None,
+                                   api_keys=settings.get("api_keys", {}))
+    return {"result": texte, "titre": pin.get("titre", "")}
+
+class CoanimmAudioReq(BaseModel):
+    source: str = ""
+    question: Optional[str] = None
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/describe_audio")
+async def coanimm_describe_audio(req: CoanimmAudioReq):
+    """Décrit un document sonore : au-delà des paroles (que Whisper transcrit déjà
+    en local), qui parle, sur quel ton, les bruits, la musique, les silences."""
+    import core.database as _db
+    if "describe_audio" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil « décrire un audio » désactivé dans le catalogue.]"}
+    from core.engine import describe_audio_gemini
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    return {"result": await describe_audio_gemini(req.source or "", req.question or "",
+                                                  api_keys=settings.get("api_keys", {}))}
+
 class CoanimmVideoReq(BaseModel):
     source: str = ""          # chemin local ou lien (YouTube accepté)
     question: Optional[str] = None
@@ -2580,6 +2691,8 @@ _COANIMM_TOOLS = [
     {"tool": "read_pdf_visual", "label": "Lire un PDF visuellement (mise en page, tableaux, scans)", "category": "Documents"},
     {"tool": "ask_documents", "label": "Interroger la base de connaissances avec citations", "category": "Documents"},
     {"tool": "describe_video", "label": "Décrire une vidéo (fichier ou lien)", "category": "Images"},
+    {"tool": "describe_audio", "label": "Décrire un document sonore (ton, bruits, musique)", "category": "Audio & voix"},
+    {"tool": "pin_document", "label": "Épingler un document et l'interroger (cache Gemini)", "category": "Documents"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},
@@ -4821,6 +4934,178 @@ class AnthropicBatchSubmitReq(BaseModel):
     max_tokens: int = 1024
     temperature: float = 0.7
     system: Optional[str] = None
+
+def _gemini_batch_headers():
+    from core.database import get_api_keys
+    key = (get_api_keys().get('gemini') or '').strip()
+    if not key:
+        raise HTTPException(400, "Clé Gemini non configurée")
+    return {"x-goog-api-key": key, "content-type": "application/json"}
+
+_GEMINI_ETATS = {
+    "JOB_STATE_PENDING": "en attente",
+    "JOB_STATE_QUEUED": "en file d'attente",
+    "JOB_STATE_RUNNING": "en cours",
+    "JOB_STATE_SUCCEEDED": "terminé",
+    "JOB_STATE_FAILED": "échoué",
+    "JOB_STATE_CANCELLED": "annulé",
+    "JOB_STATE_EXPIRED": "expiré (48 h dépassées)",
+}
+
+class GeminiBatchSubmitReq(BaseModel):
+    prompts: List = []
+    model: Optional[str] = None
+    system: Optional[str] = None
+    max_tokens: int = 1024
+    temperature: float = 0.7
+
+@app.post("/api/gemini/batch/submit")
+async def gemini_batch_submit(req: GeminiBatchSubmitReq):
+    """Soumet un lot de requêtes à l'API Batch de Gemini (moitié prix, asynchrone,
+    48 h maximum). Chaque élément de `prompts` est une chaîne ou {system, user}."""
+    import httpx
+    from core.engine import _resolve_model
+    if not req.prompts:
+        raise HTTPException(400, "Aucune requête à envoyer.")
+    modele = _resolve_model('gemini', req.model)
+    requetes = []
+    for i, p in enumerate(req.prompts):
+        sys_p, user_p = req.system or "", p
+        if isinstance(p, dict):
+            sys_p = p.get("system") or sys_p
+            user_p = p.get("user", "")
+        r = {"contents": [{"role": "user", "parts": [{"text": str(user_p)}]}],
+             "generation_config": {"maxOutputTokens": req.max_tokens,
+                                   "temperature": req.temperature}}
+        if sys_p:
+            r["system_instruction"] = {"parts": [{"text": sys_p}]}
+        requetes.append({"request": r, "metadata": {"key": f"req_{i}"}})
+    corps = {"batch": {"display_name": f"NIMM {len(requetes)} requêtes",
+                       "input_config": {"requests": {"requests": requetes}}}}
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{modele}:batchGenerateContent",
+            headers=_gemini_batch_headers(), json=corps)
+        if r.status_code >= 400:
+            from core.engine import _gemini_message_erreur
+            raise HTTPException(r.status_code, _gemini_message_erreur(r))
+        data = r.json()
+    return {"batch_id": data.get("name", ""), "status": "JOB_STATE_PENDING",
+            "total": len(requetes)}
+
+def _gemini_batch_etat(data: dict) -> str:
+    """L'état vit dans metadata.state, mais certaines réponses le placent à la
+    racine : on regarde les deux plutôt que d'annoncer « inconnu » à tort."""
+    meta = data.get("metadata") or {}
+    return (meta.get("state") or data.get("state")
+            or ("JOB_STATE_SUCCEEDED" if data.get("done") else "JOB_STATE_RUNNING"))
+
+@app.get("/api/gemini/batch/status/{batch_id:path}")
+async def gemini_batch_status(batch_id: str):
+    """Avancement d'un lot Gemini. `batch_id` est de la forme « batches/123 »."""
+    import httpx
+    nom = batch_id if batch_id.startswith("batches/") else f"batches/{batch_id}"
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.get(f"https://generativelanguage.googleapis.com/v1beta/{nom}",
+                             headers=_gemini_batch_headers())
+        if r.status_code >= 400:
+            from core.engine import _gemini_message_erreur
+            raise HTTPException(r.status_code, _gemini_message_erreur(r))
+        data = r.json()
+    etat = _gemini_batch_etat(data)
+    fini = etat in ("JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED",
+                    "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED")
+    return {"batch_id": nom, "status": etat,
+            "libelle": _GEMINI_ETATS.get(etat, etat), "termine": fini,
+            "erreur": str((data.get("error") or {}).get("message") or "")}
+
+def _gemini_batch_extraire(data: dict) -> list:
+    """Remet les réponses d'un lot dans l'ordre de soumission.
+
+    Gemini range les résultats tantôt sous response.inlinedResponses, tantôt
+    sous dest.inlinedResponses, et la liste elle-même est parfois encapsulée
+    une fois de plus. On accepte les trois formes : mieux vaut un peu de
+    souplesse ici qu'une page blanche après une heure d'attente.
+    """
+    brut = ((data.get("response") or {}).get("inlinedResponses")
+            or (data.get("dest") or {}).get("inlinedResponses") or [])
+    if isinstance(brut, dict):
+        brut = brut.get("inlinedResponses") or []
+    sorties = []
+    for i, item in enumerate(brut):
+        cle = ((item.get("metadata") or {}).get("key")
+               or item.get("key") or f"req_{i}")
+        texte, erreur = "", ""
+        rep = item.get("response") or {}
+        if item.get("error"):
+            e = item["error"]
+            erreur = str(e.get("message") if isinstance(e, dict) else e)
+        else:
+            cand = (rep.get("candidates") or [{}])[0]
+            texte = "".join(pp.get("text", "")
+                            for pp in ((cand.get("content") or {}).get("parts") or [])
+                            if "text" in pp)
+            if not texte and cand.get("finishReason") in ("SAFETY", "RECITATION"):
+                erreur = f"réponse bloquée ({cand['finishReason']})"
+        sorties.append({"custom_id": cle, "text": texte, "error": erreur})
+    def _rang(e):
+        try:
+            return int(str(e["custom_id"]).rsplit("_", 1)[-1])
+        except (ValueError, KeyError):
+            return 1 << 30
+    sorties.sort(key=_rang)
+    return sorties
+
+@app.get("/api/gemini/batch/results/{batch_id:path}")
+async def gemini_batch_results(batch_id: str):
+    """Résultats d'un lot Gemini terminé. Si Gemini a déposé les résultats dans
+    un fichier plutôt qu'en ligne, on le télécharge."""
+    import httpx, json as _json
+    nom = batch_id if batch_id.startswith("batches/") else f"batches/{batch_id}"
+    async with httpx.AsyncClient(timeout=180) as client:
+        r = await client.get(f"https://generativelanguage.googleapis.com/v1beta/{nom}",
+                             headers=_gemini_batch_headers())
+        if r.status_code >= 400:
+            from core.engine import _gemini_message_erreur
+            raise HTTPException(r.status_code, _gemini_message_erreur(r))
+        data = r.json()
+        etat = _gemini_batch_etat(data)
+        if etat != "JOB_STATE_SUCCEEDED":
+            return {"status": etat, "results": [],
+                    "message": f"Le lot est {_GEMINI_ETATS.get(etat, etat)}."}
+        sorties = _gemini_batch_extraire(data)
+        if not sorties:
+            fichier = ((data.get("response") or {}).get("responsesFile")
+                       or (data.get("dest") or {}).get("fileName") or "")
+            if fichier:
+                d = await client.get(
+                    f"https://generativelanguage.googleapis.com/download/v1beta/{fichier}:download?alt=media",
+                    headers=_gemini_batch_headers())
+                if d.status_code < 400:
+                    lignes = []
+                    for ligne in d.text.splitlines():
+                        ligne = ligne.strip()
+                        if not ligne:
+                            continue
+                        try:
+                            lignes.append(_json.loads(ligne))
+                        except Exception:
+                            continue
+                    sorties = _gemini_batch_extraire({"response": {"inlinedResponses": lignes}})
+    return {"status": "ended", "results": sorties}
+
+@app.delete("/api/gemini/batch/{batch_id:path}")
+async def gemini_batch_cancel(batch_id: str):
+    """Annule un lot Gemini en cours."""
+    import httpx
+    nom = batch_id if batch_id.startswith("batches/") else f"batches/{batch_id}"
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(f"https://generativelanguage.googleapis.com/v1beta/{nom}:cancel",
+                              headers=_gemini_batch_headers())
+        if r.status_code >= 400:
+            from core.engine import _gemini_message_erreur
+            raise HTTPException(r.status_code, _gemini_message_erreur(r))
+    return {"status": "ok", "batch": "JOB_STATE_CANCELLED"}
 
 def _anthropic_batch_headers():
     from core.database import get_api_keys
