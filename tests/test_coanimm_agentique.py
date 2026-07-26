@@ -469,6 +469,44 @@ def test_rag_ancrage_lexical():
     ok("base de connaissances : ancrage lexical contre les documents hors sujet")
 
 
+def test_reprise_sans_couture():
+    """Reprendre par un « Continue. » fait redémarrer le modèle : préambule,
+    redites, phrase recommencée. Anthropic, Mistral et DeepSeek savent poursuivre
+    leur propre texte — on leur redonne la fin de leur réponse."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    lignes = eng.splitlines(keepends=True)
+
+    def corps(nom):
+        for n in ast.walk(ast.parse(eng)):
+            if getattr(n, 'name', '') == nom:
+                return ''.join(lignes[n.lineno - 1:n.end_lineno])
+        raise AssertionError(f'{nom} introuvable')
+
+    ns = {'_PREFIXE_SUPPORTE': {'anthropic', 'mistral', 'deepseek'}}
+    exec(corps('supporte_prefixe'), ns, ns)
+    f = ns['supporte_prefixe']
+    for oui in ('anthropic', 'mistral', 'deepseek', 'MISTRAL'):
+        assert f(oui), oui
+    for non in ('gemini', 'openai', 'ollama', 'openrouter', ''):
+        assert not f(non), f'{non} ne supporte pas la reprise par préfixe'
+
+    seg = corps('continuer_reponse_stream')
+    assert 'if not prefixe or not supporte_prefixe(provider):' in seg, \
+        'repli si non supporté OU si rien à poursuivre'
+    assert "'content': 'Continue.'" in seg, "le repli garde le comportement d'avant"
+    assert "{'role': 'assistant', 'content': prefixe}" in seg, 'Anthropic : préremplissage'
+    assert "'prefix': True" in seg, 'Mistral et DeepSeek : champ prefix'
+    assert 'https://api.deepseek.com/beta' in seg, "DeepSeek exige son point d'entrée bêta"
+    assert "'__truncated__'" in seg, 'une reprise peut être tronquée à son tour'
+
+    assert 'continuer_reponse_stream' in mn
+    assert "m.get('role') == 'assistant'" in mn, 'le préfixe est la dernière réponse'
+    assert 'data: [TRUNCATED]' in mn, 'le bouton doit pouvoir réapparaître'
+    ok("reprise : sans couture chez trois fournisseurs, repli ailleurs")
+
+
 def test_correlation_modele_agent_recherche():
     """Le bouton « recherche web » se calait sur le MODÈLE ACTIF et ignorait le
     réglage : choisir Claude puis discuter avec Gemini donnait l'ancrage Google,
@@ -1038,7 +1076,8 @@ def test_signal_troncature_bout_en_bout():
     app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
 
     # Émission : Anthropic ET les fournisseurs OpenAI-compat (Mistral, DeepSeek…)
-    assert eng.count("yield {'__truncated__': True}") == 2
+    # Anthropic, OpenAI-compat, et la reprise (qui peut être tronquée à son tour)
+    assert eng.count("yield {'__truncated__': True}") == 3
     assert "yield {'type': 'truncated'}" in eng, "phase 1 avec outils"
     # _finish_reason doit vivre dans la fonction qui l'utilise (sinon NameError)
     for node in ast.walk(ast.parse(eng)):
@@ -1206,6 +1245,7 @@ if __name__ == '__main__':
                test_modele_de_raisonnement, test_specificites_gemini_et_openai,
                test_caches_de_contexte, test_visibilite_selon_les_cles,
                test_description_video, test_correlation_modele_agent_recherche,
+               test_reprise_sans_couture,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
