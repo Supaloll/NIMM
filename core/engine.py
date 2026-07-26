@@ -127,6 +127,57 @@ def _parse_appels_texte(texte: str) -> list:
     return appels
 
 
+# Une panne de fournisseur affichait son message technique brut, en anglais, lu tel
+# quel par la synthèse vocale. On la traduit, et on distingue ce qui est
+# RÉCUPÉRABLE (essayer un autre fournisseur a du sens) de ce qui ne l'est pas
+# (clé absente : changer de fournisseur ne réglera rien).
+def classer_erreur_fournisseur(exc, provider: str = '') -> dict:
+    """{'categorie', 'message', 'recuperable'} à partir d'une exception d'appel."""
+    txt = ''
+    code = 0
+    try:
+        rep = getattr(exc, 'response', None)
+        if rep is not None:
+            code = int(getattr(rep, 'status_code', 0) or 0)
+            txt = (getattr(rep, 'text', '') or '')[:800]
+    except Exception:
+        pass
+    txt = (txt + ' ' + str(exc)).lower()
+    nom = provider or 'le fournisseur'
+
+    if code == 401 or 'invalid x-api-key' in txt or 'invalid api key' in txt or 'unauthorized' in txt:
+        return {'categorie': 'clé', 'recuperable': False,
+                'message': f"La clé API de {nom} est refusée. Vérifie-la dans les réglages."}
+    if code == 402 or 'credit balance' in txt or 'insufficient' in txt or 'quota' in txt:
+        return {'categorie': 'crédit', 'recuperable': True,
+                'message': f"Le crédit de {nom} est épuisé."}
+    if code == 429 or 'rate limit' in txt or 'too many requests' in txt:
+        return {'categorie': 'débit', 'recuperable': True,
+                'message': f"{nom} limite le débit : trop de requêtes en peu de temps."}
+    if code in (500, 502, 503, 529) or 'overloaded' in txt or 'service unavailable' in txt:
+        return {'categorie': 'surcharge', 'recuperable': True,
+                'message': f"{nom} est momentanément surchargé ou indisponible."}
+    if 'timeout' in txt or 'timed out' in txt:
+        return {'categorie': 'délai', 'recuperable': True,
+                'message': f"{nom} n'a pas répondu dans le délai imparti."}
+    if 'connect' in txt or 'network' in txt or 'name resolution' in txt:
+        return {'categorie': 'réseau', 'recuperable': True,
+                'message': "La connexion réseau a échoué."}
+    return {'categorie': 'erreur', 'recuperable': False,
+            'message': f"Erreur inattendue de {nom} : {str(exc)[:200]}"}
+
+
+def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
+    """Premier fournisseur configuré autre que celui qui vient d'échouer, ou ''."""
+    ordre = ['mistral', 'anthropic', 'openai', 'gemini', 'deepseek', 'openrouter']
+    for p in ordre:
+        if p == (provider_courant or '').lower():
+            continue
+        if get_api_key(p, api_keys):
+            return p
+    return ''
+
+
 def _anthropic_billable_input(usage: dict) -> int:
     """Tokens d'entrée FACTURABLES, exprimés en équivalent « tokens plein tarif ».
 
