@@ -3839,6 +3839,8 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
         if (_streamTruncated) {
             _streamTruncated = false;
             addContinueButton(div, conversationId);
+            _srAnnounce("Réponse interrompue : elle a atteint la limite de longueur. "
+                      + "Un bouton Continuer est disponible en fin de message.");
         }
 
         // Brancher le bouton TTS individuel de cette bulle

@@ -675,7 +675,7 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
         data = r.json()
 
     usage = data.get('usage', {})
-    _log('anthropic', model, usage.get('input_tokens', 0), usage.get('output_tokens', 0))
+    _log('anthropic', model, _anthropic_billable_input(usage), usage.get('output_tokens', 0))
     content = data.get('content', []) or []
     tool_uses = [b for b in content if b.get('type') == 'tool_use']
     if tool_uses:
@@ -691,8 +691,13 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
         assistant_msg = {'role': 'assistant', 'content': text, 'tool_calls': oai_tcs}
         yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
     else:
+        _sr = data.get('stop_reason', '')
         text = ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
-        yield {'type': 'token', 'text': text}
+        if _sr == 'max_tokens':
+            yield {'type': 'token', 'text': text}
+            yield {'type': 'truncated'}
+        else:
+            yield {'type': 'token', 'text': text + _avis_stop_reason(_sr)}
 
 
 # ══════════════════════════════════════════
@@ -1162,6 +1167,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
     _dsml_stream = False
     _usage_tokens = None  # {'tokens_in': N, 'tokens_out': M} si l'API retourne l'usage réel
 
+    _finish_reason = None
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
             'POST',
@@ -1195,6 +1201,10 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                             'tokens_out': u.get('completion_tokens', 0),
                         }
                         continue
+                    if data.get('choices'):
+                        _fr = data['choices'][0].get('finish_reason')
+                        if _fr:
+                            _finish_reason = _fr
                     token = data['choices'][0]['delta'].get('content', '') if data.get('choices') else ''
                     # Certaines APIs incluent usage dans le dernier chunk avec choices
                     if data.get('usage') and data.get('choices'):
@@ -1223,6 +1233,8 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
     # Émettre le sentinel d'usage (tokens réels si disponibles)
     if _usage_tokens and (_usage_tokens['tokens_in'] or _usage_tokens['tokens_out']):
         yield {'__usage__': True, **_usage_tokens}
+    if _finish_reason == 'length':
+        yield {'__truncated__': True}
 
 async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None):
     """Stream tokens via API Anthropic."""
@@ -1302,10 +1314,15 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                     elif evt == 'message_delta':
                         u = data.get('usage', {})
                         _ant_tokens_out = u.get('output_tokens', 0)
-                        _avis = _avis_stop_reason(
-                            (data.get('delta') or {}).get('stop_reason', ''))
-                        if _avis:
-                            yield _avis
+                        _sr = (data.get('delta') or {}).get('stop_reason', '')
+                        if _sr == 'max_tokens':
+                            # Sentinelle : hub la traduit en [TRUNCATED] et le
+                            # frontend affiche le bouton « Continuer ».
+                            yield {'__truncated__': True}
+                        else:
+                            _avis = _avis_stop_reason(_sr)
+                            if _avis:
+                                yield _avis
                     elif evt == 'content_block_delta':
                         token = data.get('delta', {}).get('text', '')
                         if token:
@@ -1338,8 +1355,11 @@ async def call_llm_stream(
     try:
         if provider == 'anthropic':
             async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools):
-                if isinstance(token, dict) and token.get('__usage__'):
-                    _real_usage = token
+                if isinstance(token, dict):
+                    if token.get('__usage__'):
+                        _real_usage = token
+                    else:
+                        yield token      # sentinelle (troncature) : transmise, non accumulée
                 else:
                     _accumulated.append(token)
                     yield token
@@ -1360,8 +1380,11 @@ async def call_llm_stream(
                 messages, model or models[provider], system_prompt,
                 max_tokens, temperature, api_keys, provider, urls[provider], tools=tools
             ):
-                if isinstance(token, dict) and token.get('__usage__'):
-                    _real_usage = token
+                if isinstance(token, dict):
+                    if token.get('__usage__'):
+                        _real_usage = token
+                    else:
+                        yield token      # sentinelle (troncature) : transmise, non accumulée
                 else:
                     _accumulated.append(token)
                     yield token

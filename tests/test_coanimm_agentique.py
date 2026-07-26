@@ -7,6 +7,7 @@ _execute, critique_result, repair_code et adapt_step_code par des doublures.
 Exécution : python tests/test_coanimm_agentique.py  (depuis la racine du projet)
 Sortie : une ligne « OK » par scénario, « TOUS LES TESTS PASSENT » à la fin.
 """
+import ast
 import asyncio
 import os
 import sys
@@ -437,6 +438,45 @@ def test_avis_raison_arret():
     ok("raison d'arrêt : troncature et refus annoncés, fin normale silencieuse")
 
 
+def test_signal_troncature_bout_en_bout():
+    """Le frontend attendait un signal [TRUNCATED] pour afficher son bouton
+    « Continuer », mais AUCUN code serveur ne l'émettait : le bouton n'apparaissait
+    jamais, pour aucun fournisseur, et les réponses étaient coupées en silence."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    # Émission : Anthropic ET les fournisseurs OpenAI-compat (Mistral, DeepSeek…)
+    assert eng.count("yield {'__truncated__': True}") == 2
+    assert "yield {'type': 'truncated'}" in eng, "phase 1 avec outils"
+    # _finish_reason doit vivre dans la fonction qui l'utilise (sinon NameError)
+    for node in ast.walk(ast.parse(eng)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.name == '_call_openai_compat_stream':
+            seg = ast.get_source_segment(eng, node)
+            assert '_finish_reason = None' in seg and '_finish_reason = _fr' in seg
+
+    # Relais et réception
+    assert hub.count('data: [TRUNCATED]') == 3
+    assert "elif event['type'] == 'truncated':" in hub
+    assert app.count("'[TRUNCATED]'") == 2 and 'addContinueButton' in app
+    assert 'Un bouton Continuer est disponible' in app, "la troncature doit être annoncée"
+    ok("troncature : signal émis, relayé, reçu — bouton « Continuer » et annonce")
+
+
+def test_facturation_cache_partout():
+    """Tous les chemins Anthropic doivent utiliser la facturation pondérée.
+    _anthropic_tools_turn (phase 1 du chat) l'avait été oublié : avec le cache,
+    input_tokens ne compte que le non-caché → coûts sous-évalués."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    assert "usage.get('input_tokens', 0)" not in src, \
+        "un chemin Anthropic journalise encore les tokens d'entrée bruts"
+    assert src.count('_anthropic_billable_input(') >= 4
+    ok("facturation pondérée sur TOUS les chemins Anthropic")
+
+
 def test_repli_cache_refuse():
     """cache_control part sur TOUS les appels Anthropic, chat en streaming compris.
     Si l'API le refusait, plus aucune conversation ne passerait : on vérifie que le
@@ -566,6 +606,7 @@ if __name__ == '__main__':
                test_worker_marque_a_notifier, test_facturation_cache,
                test_specificites_anthropic_confinees, test_mcp_inerte_sans_serveur,
                test_repli_cache_refuse, test_avis_raison_arret,
+               test_facturation_cache_partout, test_signal_troncature_bout_en_bout,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()

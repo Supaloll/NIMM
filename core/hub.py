@@ -4134,6 +4134,8 @@ async def process_message_stream(
                 if isinstance(token, dict):
                     if token.get('type') == 'usage':
                         _last_usage = token
+                    elif token.get('__truncated__'):
+                        yield "data: [TRUNCATED]\n\n"
                     continue
                 full_reply += token
                 _yield_buf += token
@@ -4161,6 +4163,9 @@ async def process_message_stream(
 
                 elif event['type'] == 'usage':
                     _last_usage = event
+
+                elif event['type'] == 'truncated':
+                    yield "data: [TRUNCATED]\n\n"
 
                 elif event['type'] == 'citations':
                     import json as _json_cit
@@ -4207,6 +4212,9 @@ async def process_message_stream(
                         if isinstance(token, dict):
                             if token.get('type') == 'usage':
                                 _last_usage = token
+                            elif token.get('__truncated__'):
+                                # Le frontend affiche alors le bouton « Continuer ».
+                                yield "data: [TRUNCATED]\n\n"
                             continue
                         full_reply += token
                         _yield_buf += token
