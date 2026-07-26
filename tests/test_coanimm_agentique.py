@@ -469,6 +469,41 @@ def test_rag_ancrage_lexical():
     ok("base de connaissances : ancrage lexical contre les documents hors sujet")
 
 
+def test_journal_de_fonctionnement():
+    """Les décisions techniques de NIMM (document écarté, appel d'outil rattrapé,
+    cache désactivé) n'existaient que dans la console — inaccessible à qui pilote
+    NIMM au lecteur d'écran. Elles doivent être consignées et consultables."""
+    import json as _json
+    from datetime import datetime as _dt
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    db = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+
+    # Les points de diagnostic alimentent bien le journal
+    assert eng.count('add_diagnostic') >= 2, 'moteur : cache refusé, appel en texte'
+    assert '/api/diagnostics' in mn
+    assert 'loadDiagnostics' in app and 'diagnostics-clear-btn' in app
+
+    # Comportement du magasin : plafonné, plus récent en tête, jamais bloquant
+    store = {'v': '[]'}
+    ns = {'json': _json, 'datetime': _dt,
+          'get_setting': lambda k, d=None: store['v'],
+          'set_setting': lambda k, v: store.__setitem__('v', v)}
+    exec(db[db.find('_DIAG_MAX = 80'):db.find('_COANIMM_SCHEDULES_MAX')], ns)
+    add, lister = ns['add_diagnostic'], ns['list_diagnostics']
+    for n in range(100):
+        add('test', f'message {n}')
+    j = lister()
+    assert len(j) == 80 and j[0]['message'] == 'message 99'
+    ns['set_setting'] = lambda k, v: (_ for _ in ()).throw(RuntimeError('disque'))
+    add('test', 'malgré la panne')          # ne doit pas lever
+    store['v'] = 'pas du json'
+    assert lister() == [], 'journal illisible → liste vide'
+    ok("journal de fonctionnement : consultable, plafonné, jamais bloquant")
+
+
 def test_pied_document_honnete():
     """Le pied « Documents consultés » s'ajoutait dès qu'un document était PROPOSÉ
     au modèle, même inutilisé : une ligne annonçant une consultation qui n'avait pas
@@ -477,7 +512,8 @@ def test_pied_document_honnete():
     racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
     assert '_document_vraiment_utilise' in hub
-    assert 'Pied omis' in hub, 'une omission doit être tracée'
+    assert 'Mention de source omise' in hub, 'une omission doit être tracée'
+    assert hub.count('add_diagnostic') >= 3, 'les décisions doivent alimenter le journal'
 
     # Le nettoyage d'historique doit couvrir l'ANCIEN et le NOUVEAU libellé
     i = hub.find('_DOCS_FOOTER_RE = re.compile')
@@ -831,6 +867,7 @@ if __name__ == '__main__':
                test_anthropic_diffuse_en_continu, test_tous_fournisseurs_diffusent,
                test_verification_des_faits, test_appel_outil_ecrit_en_texte,
                test_rag_ancrage_lexical, test_pied_document_honnete,
+               test_journal_de_fonctionnement,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

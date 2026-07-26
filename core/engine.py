@@ -59,8 +59,14 @@ def _anthropic_desactiver_cache(raison: str) -> None:
         set_setting('anthropic_cache_active', '0')
     except Exception:
         pass
-    print("[ENGINE] ⚠️ Mise en cache des prompts refusée par l'API "
-          f"({raison}) — désactivée automatiquement. Réactivable dans les réglages.")
+    _m = ("Mise en cache des prompts refusée par l'API (" + raison
+          + ") — désactivée automatiquement. Réactivable dans les réglages.")
+    print(f"[ENGINE] ⚠️ {_m}")
+    try:
+        from core.database import add_diagnostic
+        add_diagnostic('coûts', _m)
+    except Exception:
+        pass
 
 
 def _anthropic_cache_fallback(exc) -> bool:
@@ -834,8 +840,14 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
                             # texte, on cesse d'afficher : le repli le convertira.
                             if not appel_en_texte and _contient_appel_texte(''.join(texte_total)):
                                 appel_en_texte = True
-                                print("[ENGINE] ⚠️ Anthropic a écrit un appel d'outil en texte "
-                                      "— conversion automatique.")
+                                _m = ("Le modèle a écrit son appel d'outil en texte au lieu "
+                                      "d'utiliser le format prévu — converti automatiquement.")
+                                print(f"[ENGINE] ⚠️ {_m}")
+                                try:
+                                    from core.database import add_diagnostic
+                                    add_diagnostic('outils', _m)
+                                except Exception:
+                                    pass
                             if not appel_en_texte:
                                 yield {'type': 'token', 'text': morceau}
                     elif delta.get('type') == 'input_json_delta':
