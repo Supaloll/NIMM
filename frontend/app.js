@@ -195,12 +195,30 @@ document.querySelectorAll('.agent-mode-btn').forEach(function(btn) {
 });
 
 // Le bouton Vibe n'est visible que si une clé Mistral est enregistrée (Vibe = Mistral cloud européen).
+let _providerActif = '';
+
+// L'agent Vibe suppose que Mistral RÉPOND : le serveur refuse et retombe sur le
+// chat normal si un autre modèle est actif. Le bouton ne dépendait que de la
+// PRÉSENCE d'une clé Mistral — on pouvait donc choisir un mode qui n'allait pas
+// s'appliquer, sans autre indice qu'un repli après coup. Il suit maintenant le
+// modèle réellement actif.
 async function _refreshVibeButtonVisibility(keys) {
     var btn = document.getElementById('agent-btn-vibe');
     if (!btn) return;
     try {
         if (!keys) keys = await fetch('/api/settings/api-keys').then(function(r) { return r.json(); });
-        btn.hidden = !(keys && keys.mistral);
+        var aLaCle = !!(keys && keys.mistral);
+        var sel = document.getElementById('provider-select');
+        var actif = (sel && sel.value) || _providerActif || '';
+        var mistralActif = String(actif).toLowerCase() === 'mistral';
+        btn.hidden = !(aLaCle && mistralActif);
+        btn.title = mistralActif ? 'Vibe — agent Mistral'
+                                 : 'Vibe — nécessite que Mistral soit le modèle actif';
+        // Si le mode était sélectionné et ne s'applique plus, on revient au standard.
+        if (btn.hidden && btn.getAttribute('aria-pressed') === 'true') {
+            _setAgentMode('');
+            _srAnnounce("Mode Vibe désactivé : il nécessite Mistral comme modèle actif.");
+        }
     } catch (e) { btn.hidden = true; }
 }
 
@@ -2855,7 +2873,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
         <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
         <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
-        <button class="copy-menu-item" role="menuitem" data-action="verify" aria-label="Vérifier les faits de cette réponse">🔎 Vérifier les faits</button>
+        <button class="copy-menu-item" role="menuitem" data-action="verify" data-needs-key="anthropic" aria-label="Vérifier les faits de cette réponse">🔎 Vérifier les faits</button>
     `;
     actBtn.setAttribute('aria-haspopup', 'menu');
     actBtn.setAttribute('aria-expanded', 'false');
@@ -2907,6 +2925,8 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
     });
 
+    { const _v = actMenu.querySelector('[data-action="verify"]');
+      if (_v) _v.hidden = !_cleDisponible('anthropic'); }
     actMenu.querySelector('[data-action="verify"]')?.addEventListener('click', () => {
         actMenu.style.display = 'none'; actBtn.focus();
         _verifierReponse(content, div.querySelector('.message-bubble'));
@@ -3487,7 +3507,7 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
             <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
             <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
             <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
-            <button class="copy-menu-item" role="menuitem" data-action="verify" aria-label="Vérifier les faits de cette réponse">🔎 Vérifier les faits</button>
+            <button class="copy-menu-item" role="menuitem" data-action="verify" data-needs-key="anthropic" aria-label="Vérifier les faits de cette réponse">🔎 Vérifier les faits</button>
         `;
         actBtn.setAttribute('aria-haspopup', 'menu');
         actBtn.setAttribute('aria-expanded', 'false');
@@ -3894,6 +3914,8 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
             btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
         });
 
+        { const _v = actMenu.querySelector('[data-action="verify"]');
+          if (_v) _v.hidden = !_cleDisponible('anthropic'); }
         actMenu.querySelector('[data-action="verify"]')?.addEventListener('click', () => {
             actMenu.style.display = 'none'; actBtn.focus();
             _verifierReponse(bubble?.dataset.rawText || bubble?.textContent || '', bubble);
@@ -4589,9 +4611,41 @@ function _updatePixtralModelVisibility(visionProvider) {
     if (row) row.style.display = visionProvider === 'mistral' ? '' : 'none';
 }
 
+// Clés réellement configurées, mémorisées pour les éléments construits à la volée.
+let _clesConfigurees = {};
+
+function _cleDisponible(nom) {
+    return !!(_clesConfigurees[nom] || _clesConfigurees[String(nom).replace('-', '_')]);
+}
+
+// Règle unique pour TOUTE l'interface : un élément portant data-needs-key n'a de
+// sens que si la clé correspondante existe. Une option de liste est GRISÉE (la
+// liste garde ses entrées, et l'on comprend pourquoi elle est indisponible) ;
+// tout le reste est MASQUÉ — exposer un panneau inutilisable allonge le parcours
+// au lecteur d'écran pour rien.
+function _majVisibiliteParCle(keys) {
+    _clesConfigurees = keys || {};
+    document.querySelectorAll('option[data-needs-key]').forEach(opt => {
+        const needed = opt.dataset.needsKey;
+        opt.disabled = !_cleDisponible(needed);
+        opt.title    = opt.disabled ? `Clé « ${needed} » non configurée` : '';
+    });
+    document.querySelectorAll('[data-needs-key]:not(option)').forEach(el => {
+        el.hidden = !_cleDisponible(el.dataset.needsKey);
+    });
+    document.querySelectorAll('select').forEach(sel => {
+        const cur = sel.options[sel.selectedIndex];
+        if (cur && cur.disabled) {
+            const premier = Array.from(sel.options).find(o => !o.disabled);
+            if (premier) sel.value = premier.value;
+        }
+    });
+}
+
 function _applyProviderConstraints(keys) {
     // Bouton Vibe visible uniquement si une clé Mistral est enregistrée.
     _refreshVibeButtonVisibility(keys);
+    _majVisibiliteParCle(keys);
     // 1. Désactiver les options sans clé
     document.querySelectorAll('.routing-select option[data-needs-key]').forEach(opt => {
         const needed  = opt.dataset.needsKey;
@@ -5155,6 +5209,8 @@ async function _populateModelSelect(provider, savedModel, selId = 'model-select'
 }
 
 document.getElementById('provider-select')?.addEventListener('change', async (e) => {
+    _providerActif = e.target.value;
+    _refreshVibeButtonVisibility();      // Vibe n'a de sens que si Mistral répond
     await _saveRouting('chat', e.target.value);
     _autoSaveFlash(e.target);
     _checkProviderBanner();

@@ -2088,6 +2088,42 @@ async def _check_moderation(text: str, api_keys: dict) -> dict:
         print(f'[HUB] Moderation check failed: {_e}')
         return {'blocked': False, 'categories': {}, 'violated': []}
 
+def _choisir_recherche_web(provider: str, api_keys: dict) -> tuple:
+    """Quel moteur de recherche web utiliser, et pourquoi ? → (mode, explication).
+
+    Le bouton « recherche web » se calait sur le MODÈLE ACTIF et ignorait le
+    réglage : choisir « Claude » puis discuter avec Gemini donnait l'ancrage
+    Google, sans le dire. Le réglage explicite prime désormais.
+
+    Nuance réelle : l'ancrage Google de Gemini et l'outil natif de Mistral en
+    mode conversation sont ATTACHÉS à l'appel de chat — ils n'existent que si ce
+    fournisseur est celui qui répond. Brave/Tavily, la recherche Mistral et celle
+    de Claude sont des appels séparés : elles marchent avec n'importe quel modèle.
+    """
+    provider = (provider or '').lower()
+    try:
+        routage = _load_provider_routing().get('web_search', {})
+        choisi = routage.get('provider', '') if isinstance(routage, dict) else ''
+    except Exception:
+        choisi = ''
+    cles = api_keys or {}
+
+    if choisi == 'anthropic':
+        if (cles.get('anthropic') or '').strip():
+            return 'anthropic', 'recherche Claude (sources citées)'
+        return 'brave', "clé Anthropic absente — repli sur Brave/Tavily"
+    if choisi == 'mistral':
+        if (cles.get('mistral') or '').strip():
+            # Si Mistral répond déjà, autant utiliser son outil natif (un seul appel).
+            return ('mistral_natif' if provider == 'mistral' else 'mistral'), 'recherche Mistral'
+        return 'brave', "clé Mistral absente — repli sur Brave/Tavily"
+    if choisi == 'gemini':
+        if provider == 'gemini' and (cles.get('gemini') or '').strip():
+            return 'gemini_natif', 'ancrage Google (Gemini)'
+        return 'brave', "l'ancrage Google exige que Gemini soit le modèle actif — repli sur Brave/Tavily"
+    return 'brave', 'Brave/Tavily'
+
+
 async def _search_via_anthropic(query: str, api_keys: dict) -> str:
     """Recherche web via l'outil serveur natif d'Anthropic.
 
@@ -3797,20 +3833,36 @@ async def process_message(
     # 8. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
     web_context = ''
-    # Web search : natif Mistral si provider=mistral, sinon Brave/Tavily
+    # Recherche web : le RÉGLAGE prime sur le modèle actif (voir _choisir_recherche_web).
     _mistral_ws_tools = None
     _gemini_gs_tools   = None
-    if web_search and provider == 'gemini':
+    _mode_ws, _pourquoi_ws = _choisir_recherche_web(provider, api_keys) if web_search else ('', '')
+    if web_search:
+        print(f"[HUB] 🌐 Recherche web : {_pourquoi_ws}")
+    if _mode_ws == 'gemini_natif':
         _gemini_gs_tools = [{'google_search': {}}]
-        print('[HUB] 🔍 Google Search Grounding Gemini natif')
-    elif web_search and provider == 'mistral':
+    elif _mode_ws == 'mistral_natif':
         _mistral_ws_tools = [{'type': 'web_search'}]
-        print('[HUB] 🌐 Web search Mistral natif')
-    elif web_search:
+    elif _mode_ws in ('mistral', 'anthropic'):
+        # Appel séparé : fonctionne quel que soit le modèle qui répond.
+        try:
+            _f = _search_via_anthropic if _mode_ws == 'anthropic' else _search_via_mistral
+            web_context = await _f(user_message, api_keys)
+            import re as _rc, json as _jc
+            _m = _rc.search(r'\[NIMM_CITATIONS\](.*)', web_context or '')
+            if _m:
+                try:
+                    _pending_citations.set(_jc.loads(_m.group(1)))
+                except Exception:
+                    pass
+                web_context = web_context[:_m.start()].rstrip()
+        except Exception as e:
+            print(f"[HUB] Recherche {_mode_ws} en échec : {e} — repli Brave/Tavily")
+            _mode_ws = 'brave'
+    if _mode_ws == 'brave':
         try:
             from modules.websearch import search
             web_context = await search(user_message)
-            print(f"[HUB] 🌐 Web search (forcé) : {user_message[:60]}")
         except Exception as e:
             print(f"[HUB] Erreur web search : {e}")
 
@@ -4134,20 +4186,41 @@ async def process_message_stream(
     web_context = ''
     _mistral_ws_tools = None
     _gemini_gs_tools   = None
-    if web_search and provider == 'gemini':
+    # Le RÉGLAGE prime sur le modèle actif (voir _choisir_recherche_web).
+    _mode_ws, _pourquoi_ws = _choisir_recherche_web(provider, api_keys) if web_search else ('', '')
+    if web_search:
+        yield "data: [WEB_SEARCH_LOADING]\n\n"
+        print(f"[HUB] 🌐 Recherche web (stream) : {_pourquoi_ws}")
+        if 'repli' in _pourquoi_ws:
+            try:
+                from core.database import add_diagnostic as _ad_ws
+                _ad_ws('recherche web', f"Recherche web : {_pourquoi_ws}.")
+            except Exception:
+                pass
+    if _mode_ws == 'gemini_natif':
         _gemini_gs_tools = [{'google_search': {}}]
-        yield "data: [WEB_SEARCH_LOADING]\n\n"
-        print('[HUB] 🔍 Google Search Grounding Gemini natif (stream)')
-    elif web_search and provider == 'mistral':
+    elif _mode_ws == 'mistral_natif':
         _mistral_ws_tools = [{'type': 'web_search'}]
-        print('[HUB] 🌐 Web search Mistral natif (stream)')
-    elif web_search:
-        # Autres providers : Brave/Tavily (même logique que process_message)
-        yield "data: [WEB_SEARCH_LOADING]\n\n"
+    elif _mode_ws in ('mistral', 'anthropic'):
+        # Appel séparé : fonctionne quel que soit le modèle qui répond.
+        try:
+            _f = _search_via_anthropic if _mode_ws == 'anthropic' else _search_via_mistral
+            web_context = await _f(user_message, api_keys)
+            import re as _rcs, json as _jcs
+            _mws = _rcs.search(r'\[NIMM_CITATIONS\](.*)', web_context or '')
+            if _mws:
+                try:
+                    _pending_citations.set(_jcs.loads(_mws.group(1)))
+                except Exception:
+                    pass
+                web_context = web_context[:_mws.start()].rstrip()
+        except Exception as e:
+            print(f'[HUB] Recherche {_mode_ws} en échec (stream) : {e} — repli Brave/Tavily')
+            _mode_ws = 'brave'
+    if _mode_ws == 'brave':
         try:
             from modules.websearch import search
             web_context = await search(user_message)
-            print(f'[HUB] 🌐 Web search Brave/Tavily (stream) : {user_message[:60]}')
         except Exception as e:
             print(f'[HUB] Erreur web search (stream) : {e}')
 

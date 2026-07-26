@@ -514,6 +514,64 @@ async def verify_claims_anthropic(texte: str, model: str = None, api_keys: dict 
     return {'verdict': verdict, 'sources': sources}
 
 
+async def describe_video_gemini(source: str, question: str = '', model: str = None,
+                                api_keys: dict = None, max_tokens: int = 3000) -> str:
+    """Décrit une vidéo — fichier local ou lien YouTube — avec repères de temps.
+
+    Une vidéo est le contenu le plus opaque qui soit quand on ne voit pas : la
+    bande-son ne dit presque jamais ce qui est montré. Gemini accepte une vidéo
+    en ligne (moins de 20 Mo) ou une URL YouTube telle quelle.
+    """
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return "[Vidéo : clé Gemini non configurée.]"
+    src_txt = (source or '').strip()
+    if not src_txt:
+        return "[Vidéo : aucun fichier ni lien fourni.]"
+
+    consigne = (question or '').strip() or (
+        "Décris cette vidéo pour quelqu'un qui ne la voit pas : ce qui est montré, "
+        "le texte affiché à l'écran, les personnes et leurs actions. Donne des repères "
+        "de temps (minute:seconde) pour pouvoir s'y retrouver. Sépare clairement ce qui "
+        "est VU de ce qui est DIT. Sois factuel, n'invente rien.")
+
+    if src_txt.lower().startswith(('http://', 'https://')):
+        partie = {'file_data': {'file_uri': src_txt}}
+    else:
+        import base64 as _b64, os as _os, mimetypes as _mt
+        if not _os.path.isfile(src_txt):
+            return f"[Vidéo introuvable : {src_txt}]"
+        if _os.path.getsize(src_txt) > 18 * 1024 * 1024:
+            return ("[Vidéo trop volumineuse pour un envoi direct (plus de 18 Mo). "
+                    "Fournis un lien, ou découpe-la.]")
+        mime = _mt.guess_type(src_txt)[0] or 'video/mp4'
+        with open(src_txt, 'rb') as fh:
+            partie = {'inline_data': {'mime_type': mime,
+                                      'data': _b64.standard_b64encode(fh.read()).decode()}}
+
+    m = _resolve_model('gemini', model)
+    payload = {'contents': [{'parts': [partie, {'text': consigne}]}],
+               'generationConfig': {'maxOutputTokens': max_tokens}}
+    try:
+        async with httpx.AsyncClient(timeout=600) as client:
+            r = await client.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}',
+                json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return f"[Vidéo : description impossible ({e})]"
+
+    meta = data.get('usageMetadata', {}) or {}
+    _log('gemini', m, _gemini_tokens_entree(meta), _gemini_tokens_sortie(meta), 'video')
+    cand = (data.get('candidates') or [{}])[0]
+    texte = ''.join(p.get('text', '') for p in (cand.get('content', {}).get('parts') or [])
+                    if 'text' in p)
+    if cand.get('finishReason') == 'MAX_TOKENS':
+        texte += ("\n\n⚠️ Description interrompue : la limite de longueur a été atteinte.")
+    return texte.strip() or "[Aucune description produite.]"
+
+
 async def analyze_pdf_anthropic(pdf_bytes: bytes, question: str = '', model: str = None,
                                 api_keys: dict = None, max_tokens: int = 4000) -> str:
     """Envoie un PDF NATIVEMENT à Claude (compréhension VISUELLE de la page).

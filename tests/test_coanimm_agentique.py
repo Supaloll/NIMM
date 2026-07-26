@@ -469,6 +469,111 @@ def test_rag_ancrage_lexical():
     ok("base de connaissances : ancrage lexical contre les documents hors sujet")
 
 
+def test_correlation_modele_agent_recherche():
+    """Le bouton « recherche web » se calait sur le MODÈLE ACTIF et ignorait le
+    réglage : choisir Claude puis discuter avec Gemini donnait l'ancrage Google,
+    sans le dire. Et le bouton Vibe n'apparaissait que selon la PRÉSENCE d'une clé
+    Mistral, alors que ce mode exige que Mistral RÉPONDE."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    assert '_choisir_recherche_web' in hub
+    assert "web_search and provider ==" not in hub, \
+        'plus aucun branchement direct sur le modèle actif'
+    assert hub.count('_choisir_recherche_web') >= 3, 'utilisé sur les deux chemins'
+
+    def choisir(provider, choisi, cles):
+        if choisi == 'anthropic':
+            return 'anthropic' if cles.get('anthropic') else 'brave'
+        if choisi == 'mistral':
+            if cles.get('mistral'):
+                return 'mistral_natif' if provider == 'mistral' else 'mistral'
+            return 'brave'
+        if choisi == 'gemini':
+            return 'gemini_natif' if (provider == 'gemini' and cles.get('gemini')) else 'brave'
+        return 'brave'
+
+    cles = {'anthropic': 'a', 'mistral': 'm', 'gemini': 'g'}
+    assert choisir('gemini', 'anthropic', cles) == 'anthropic', 'le réglage prime'
+    assert choisir('anthropic', 'mistral', cles) == 'mistral', 'le réglage prime'
+    assert choisir('mistral', 'mistral', cles) == 'mistral_natif', 'un seul appel si possible'
+    assert choisir('anthropic', 'gemini', cles) == 'brave', "l'ancrage exige Gemini actif"
+    assert choisir('gemini', 'gemini', cles) == 'gemini_natif'
+    assert choisir('gemini', 'anthropic', {'gemini': 'g'}) == 'brave', 'clé absente → repli'
+    assert choisir('anthropic', '', cles) == 'brave', 'par défaut : Brave/Tavily'
+
+    # Vibe suit le modèle actif, pas seulement la clé
+    assert 'mistralActif' in app and '_providerActif' in app
+    assert "_setAgentMode('')" in app, 'un mode devenu inapplicable doit être quitté'
+    assert 'nécessite Mistral comme modèle actif' in app, "et l'utilisateur doit l'apprendre"
+    ok("agent et recherche web : corrélés au modèle actif, réglage prioritaire")
+
+
+def test_description_video():
+    """Une vidéo est le contenu le plus opaque quand on ne voit pas : la bande-son
+    ne dit presque jamais ce qui est montré. Gemini sait la décrire, y compris
+    depuis un lien YouTube — capacité qu'aucun autre fournisseur branché n'offre."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    coa = open(os.path.join(racine, 'modules', 'coanimm.py'), encoding='utf-8').read()
+    saf = open(os.path.join(racine, 'modules', 'coanimm_safety.py'), encoding='utf-8').read()
+
+    seg = ''
+    for n in ast.walk(ast.parse(eng)):
+        if getattr(n, 'name', '') == 'describe_video_gemini':
+            seg = ast.get_source_segment(eng, n) or ''
+    assert seg, 'describe_video_gemini introuvable'
+    assert "startswith(('http://', 'https://'))" in seg, 'un lien doit être accepté tel quel'
+    assert "'file_data'" in seg and "'inline_data'" in seg, 'lien ET fichier local'
+    assert '18 * 1024 * 1024' in seg, 'garde de taille pour l’envoi direct'
+    assert 'MAX_TOKENS' in seg, 'une description tronquée doit être signalée'
+    assert 'VU' in seg and 'DIT' in seg, 'séparer ce qui est vu de ce qui est dit'
+    assert 'minute:seconde' in seg, 'des repères de temps pour se situer'
+    assert "n'invente rien" in seg, 'consigne factuelle'
+
+    assert '/api/coanimm/describe_video' in mn
+    assert 'describe_video' in mn and 'list_coanimm_disabled_tools' in mn, 'désactivable'
+    assert coa.count('nimm_describe_video') >= 3, 'helper + prologue + doc'
+    assert "'nimm_describe_video': 'recherche'" in saf, 'la vidéo part au cloud'
+    ok("description de vidéo : lien ou fichier, repères de temps, vu/dit séparés")
+
+
+def test_visibilite_selon_les_cles():
+    """Plusieurs fonctions ne valent que pour un fournisseur (MCP et vérification
+    des faits = Claude). Les exposer sans la clé correspondante donne des boutons
+    qui échouent, et allonge le parcours au lecteur d'écran pour rien.
+    Règle unique et déclarative : data-needs-key."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    assert '_majVisibiliteParCle' in app and '_cleDisponible' in app
+    assert "querySelectorAll('option[data-needs-key]')" in app, 'options grisées'
+    assert "querySelectorAll('[data-needs-key]:not(option)')" in app, 'le reste masqué'
+    assert '_majVisibiliteParCle(keys)' in app, 'appliqué au chargement des clés'
+
+    # Les fonctions propres à un fournisseur sont bien étiquetées
+    assert 'id="mcp-section" data-needs-key="anthropic"' in html
+    assert 'div data-needs-key="anthropic"' in html, 'réglage de cache Anthropic'
+    assert '<option value="anthropic" data-needs-key="anthropic">' in html, 'lot Claude'
+    assert '<option value="mistral" data-needs-key="mistral">' in html, 'lot Mistral'
+
+    # Règle telle qu'implémentée
+    def etat(tag, need, cles):
+        dispo = bool(cles.get(need) or cles.get(need.replace('-', '_')))
+        return ('active' if dispo else 'grisée') if tag == 'option' \
+            else ('visible' if dispo else 'masqué')
+
+    assert etat('div', 'anthropic', {'mistral': 'm'}) == 'masqué'
+    assert etat('option', 'anthropic', {'mistral': 'm'}) == 'grisée'
+    assert etat('option', 'mistral', {'mistral': 'm'}) == 'active'
+    assert etat('div', 'anthropic', {'anthropic': 'a'}) == 'visible'
+    assert etat('div', 'anthropic', {}) == 'masqué'
+    ok("visibilité : une fonction n'apparaît que si sa clé est configurée")
+
+
 def test_caches_de_contexte():
     """Gemini (2.5+) et DeepSeek mettent le contexte en cache AUTOMATIQUEMENT et
     facturent les tokens relus 90 % moins cher, chacun dans ses propres champs.
@@ -852,8 +957,10 @@ def test_verification_des_faits():
     # DEUX menus construisent les actions d'un message : celui des messages
     # rechargés et celui de la réponse en cours de génération. L'entrée doit être
     # dans les deux, sinon elle disparaît sur les réponses fraîches (cas vécu).
-    assert app.count('data-action="verify"') == 4, \
-        'entrée + branchement, dans les DEUX menus (rechargé et streaming)'
+    assert app.count('data-action="verify"') == 6, \
+        'entrée + masquage + branchement, dans les DEUX menus (rechargé et streaming)'
+    assert app.count('data-action="verify" data-needs-key="anthropic"') == 2, \
+        "l'entrée ne doit apparaître que si une clé Anthropic existe"
     assert app.count('_verifierReponse(') >= 2, 'la fonction doit être appelée des deux menus'
     assert 'Sources de la vérification' in app, 'les sources doivent être étiquetées'
     # Rendu LÉGER : le résultat s'insère replié (une ligne), et se retire
@@ -1097,7 +1204,8 @@ if __name__ == '__main__':
                test_journal_de_fonctionnement, test_historique_purge_des_appels_en_texte,
                test_panne_fournisseur_reprise, test_plan_de_la_reponse,
                test_modele_de_raisonnement, test_specificites_gemini_et_openai,
-               test_caches_de_contexte,
+               test_caches_de_contexte, test_visibilite_selon_les_cles,
+               test_description_video, test_correlation_modele_agent_recherche,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
