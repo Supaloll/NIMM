@@ -469,6 +469,38 @@ def test_rag_ancrage_lexical():
     ok("base de connaissances : ancrage lexical contre les documents hors sujet")
 
 
+def test_pied_document_honnete():
+    """Le pied « Documents consultés » s'ajoutait dès qu'un document était PROPOSÉ
+    au modèle, même inutilisé : une ligne annonçant une consultation qui n'avait pas
+    eu lieu, sous forme de nom de fichier brut, sans lien ni citation (cas vécu)."""
+    import re as _re
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    assert '_document_vraiment_utilise' in hub
+    assert 'Pied omis' in hub, 'une omission doit être tracée'
+
+    # Le nettoyage d'historique doit couvrir l'ANCIEN et le NOUVEAU libellé
+    i = hub.find('_DOCS_FOOTER_RE = re.compile')
+    ns = {'re': _re}
+    exec(hub[i:hub.find('\n\n', i)], ns)
+    R = ns['_DOCS_FOOTER_RE']
+    for pied in ("Réponse.\n\n— 📄 Documents consultés : Étude.pdf",
+                 "Réponse.\n\n— 📄 Source : ta base de connaissances — Guide.pdf"):
+        assert R.sub('', pied).strip() == 'Réponse.', pied
+    assert R.sub('', 'Texte avec 📄 une émoji.') == 'Texte avec 📄 une émoji.'
+
+    # Le pied ne s'affiche que si la réponse reprend le vocabulaire du document
+    j = hub.find('def _document_vraiment_utilise')
+    ns2 = {}
+    exec(hub[j:hub.find('\ndef _strip_docs_footer')], ns2)
+    f = ns2['_document_vraiment_utilise']
+    doc = "Les frais de conversion en devise étrangère sont facturés deux pour cent."
+    assert f("Les frais de conversion en devise étrangère restent facturés.", doc)
+    assert not f("Voici les concerts à Londres en août.", doc), 'cas vécu : pied à omettre'
+    assert not f('', doc) and not f('texte', '')
+    ok("pied de document : affiché seulement si le document a servi")
+
+
 def test_appel_outil_ecrit_en_texte():
     """Certains modèles écrivent leurs appels d'outils EN TEXTE
     (« <function=search_web>{…} ») au lieu du champ structuré. Sans traitement,
@@ -798,7 +830,7 @@ if __name__ == '__main__':
                test_facturation_cache_partout, test_signal_troncature_bout_en_bout,
                test_anthropic_diffuse_en_continu, test_tous_fournisseurs_diffusent,
                test_verification_des_faits, test_appel_outil_ecrit_en_texte,
-               test_rag_ancrage_lexical,
+               test_rag_ancrage_lexical, test_pied_document_honnete,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
