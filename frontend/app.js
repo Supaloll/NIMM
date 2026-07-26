@@ -2855,6 +2855,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
         <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
         <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
+        <button class="copy-menu-item" role="menuitem" data-action="verify" aria-label="Vérifier les faits de cette réponse">🔎 Vérifier les faits</button>
     `;
     actBtn.setAttribute('aria-haspopup', 'menu');
     actBtn.setAttribute('aria-expanded', 'false');
@@ -2904,6 +2905,11 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         _toggleExportMark(div, content, 'assistant');
         const btn = actMenu.querySelector('[data-action="mark"]');
         btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
+    });
+
+    actMenu.querySelector('[data-action="verify"]')?.addEventListener('click', () => {
+        actMenu.style.display = 'none'; actBtn.focus();
+        _verifierReponse(content, div.querySelector('.message-bubble'));
     });
 
     document.addEventListener('click', () => actMenu.style.display = 'none');
@@ -9780,6 +9786,93 @@ async function _coanimmPollScheduleNotifications() {
 }
 setInterval(_coanimmPollScheduleNotifications, _COANIMM_NOTIF_INTERVAL_MS);
 setTimeout(_coanimmPollScheduleNotifications, 5000);
+
+// ── Vérifier les faits d'une réponse (recherche web + sources) ──
+// Le résultat s'insère REPLIÉ : une seule ligne de bilan, dépliable à la demande,
+// et refermable. Objectif : ne pas alourdir le fil ni la lecture séquentielle.
+function _verifBilanCourt(verdict, nbSources) {
+    const t = (verdict || '').toLowerCase();
+    let etat = 'résultat disponible';
+    if (/aucune affirmation|rien à vérifier|trop court/.test(t)) etat = 'rien à vérifier';
+    else if (/erron|incorrect|faux|inexact|douteu|contredit/.test(t)) etat = 'points à revoir';
+    else if (/tout est correct|tout concorde|exact|confirmé/.test(t)) etat = 'rien à signaler';
+    return `Vérification des faits : ${etat}` + (nbSources ? ` (${nbSources} source${nbSources > 1 ? 's' : ''})` : '');
+}
+
+async function _verifierReponse(texte, bulle) {
+    if (!texte || texte.trim().length < 40) {
+        _srAnnounce("Ce message est trop court pour être vérifié.");
+        return;
+    }
+    _srAnnounce("Vérification en cours, recherche des sources…");
+    bulle?.querySelector('.verif-bloc')?.remove();      // une seule vérification à la fois
+    let bloc = null;
+    if (bulle) {
+        bloc = document.createElement('details');
+        bloc.className = 'verif-bloc';
+        bloc.style.cssText = 'margin-top:6px;font-size:0.84rem;';
+        const som = document.createElement('summary');
+        som.textContent = 'Vérification en cours…';
+        som.style.cursor = 'pointer';
+        bloc.appendChild(som);
+        bulle.appendChild(bloc);
+    }
+    try {
+        const r = await fetch('/api/verify', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: texte, thread_id: currentThreadId || null }),
+        });
+        const d = await r.json();
+        const verdict = d.verdict || 'Aucun verdict.';
+        const sources = d.sources || [];
+        if (!bloc) { _srAnnounce(verdict); return; }
+
+        bloc.innerHTML = '';
+        const som = document.createElement('summary');
+        som.textContent = _verifBilanCourt(verdict, sources.length);
+        som.style.cursor = 'pointer';
+        bloc.appendChild(som);
+
+        const corps = document.createElement('div');
+        corps.style.cssText = 'padding:6px 0 0 4px;border-left:2px solid var(--border);padding-left:8px;margin-top:4px;';
+        const p = document.createElement('div');
+        p.style.whiteSpace = 'pre-wrap';
+        p.textContent = verdict;
+        corps.appendChild(p);
+        if (sources.length) {
+            const ul = document.createElement('ul');
+            ul.setAttribute('aria-label', 'Sources de la vérification');
+            ul.style.cssText = 'margin:6px 0 0;padding-left:1.2em;';
+            sources.forEach(s => {
+                const li = document.createElement('li');
+                const a = document.createElement('a');
+                a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                a.textContent = s.title || s.url;
+                li.appendChild(a);
+                ul.appendChild(li);
+            });
+            corps.appendChild(ul);
+        }
+        const fermer = document.createElement('button');
+        fermer.type = 'button';
+        fermer.textContent = 'Retirer la vérification';
+        fermer.style.cssText = 'margin-top:6px;font-size:0.78rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+        fermer.addEventListener('click', () => { bloc.remove(); _srAnnounce('Vérification retirée.'); });
+        corps.appendChild(fermer);
+        bloc.appendChild(corps);
+
+        // Annonce : le bilan court d'abord, le détail reste consultable au besoin.
+        _srAnnounce(som.textContent + '. Dépliez la vérification pour le détail.');
+    } catch (e) {
+        if (bloc) {
+            bloc.innerHTML = '';
+            const som = document.createElement('summary');
+            som.textContent = 'Vérification impossible (erreur réseau).';
+            bloc.appendChild(som);
+        }
+        _srAnnounce('Vérification impossible.');
+    }
+}
 
 // ── Serveurs MCP distants ──
 async function loadMcpServers() {

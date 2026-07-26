@@ -438,6 +438,34 @@ def test_avis_raison_arret():
     ok("raison d'arrêt : troncature et refus annoncés, fin normale silencieuse")
 
 
+def test_verification_des_faits():
+    """« Vérifier les faits » : repérer une erreur factuelle est coûteux quand on ne
+    peut pas survoler un texte. Le verdict doit donc annoncer les ERREURS D'ABORD,
+    rester lisible à voix haute (pas de tableau) et exposer ses sources."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    i = eng.find('VERIFY_SYSTEM_PROMPT')
+    assert i > 0, 'prompt de vérification absent'
+    bloc = eng[i:i + 1200]
+    assert 'ERRONÉ' in bloc and 'confirmé' in bloc, "l'ordre erreurs → confirmé est requis"
+    assert 'sans tableau' in bloc, 'la sortie doit rester lisible à voix haute'
+    assert "'web_search_20250305'" in eng, 'la vérification doit chercher sur le web'
+
+    assert '/api/verify' in mn and 'verify_claims_anthropic' in mn
+    assert app.count('_verifierReponse') == 2, 'fonction + branchement au menu'
+    assert 'data-action="verify"' in app
+    assert 'Sources de la vérification' in app, 'les sources doivent être étiquetées'
+    # Rendu LÉGER : le résultat s'insère replié (une ligne), et se retire
+    assert '_verifBilanCourt' in app, 'un bilan court doit résumer le verdict'
+    assert "createElement('details')" in app, 'le résultat doit être replié par défaut'
+    assert 'Retirer la vérification' in app, 'le résultat doit pouvoir être retiré'
+    assert "querySelector('.verif-bloc')?.remove()" in app, 'une seule vérification à la fois'
+    ok("vérification des faits : erreurs d'abord, résultat replié et retirable")
+
+
 def test_tous_fournisseurs_diffusent():
     """TOUS les fournisseurs doivent diffuser au fil de l'eau et signaler la
     troncature. Sans streaming, rien ne s'affiche tant que la réponse n'est pas
@@ -665,6 +693,7 @@ if __name__ == '__main__':
                test_repli_cache_refuse, test_avis_raison_arret,
                test_facturation_cache_partout, test_signal_troncature_bout_en_bout,
                test_anthropic_diffuse_en_continu, test_tous_fournisseurs_diffusent,
+               test_verification_des_faits,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
         fn()
