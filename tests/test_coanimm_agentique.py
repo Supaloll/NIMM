@@ -1497,6 +1497,186 @@ def test_magasin_documents_de_fil():
     ok("magasin des documents de fil : troncature, plafond par récence réelle, effacement")
 
 
+def test_choix_dans_la_base():
+    """Choisir un document dans une liste plutôt que taper son chemin.
+
+    Saisir « C:\\Users\\...\\etude.pdf » au clavier braille est long et fautif ;
+    la base de connaissances contient déjà les documents versés, autant les
+    proposer. Piège à éviter : elle contient AUSSI des centaines de pages mises
+    en cache par la recherche web — les inclure noierait les vrais documents.
+    """
+    import sqlite3 as _sq
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    dbs = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    sys.path.insert(0, racine)
+    import core.database as d
+
+    # Base sur fichier temporaire (et non ':memory:') : les fonctions testées
+    # ouvrent et FERMENT leur connexion, ce qu'une base en mémoire ne survit pas.
+    import tempfile as _tf
+    _fd, _chemin = _tf.mkstemp(suffix='.db')
+    os.close(_fd)
+    conn = _sq.connect(_chemin)
+    conn.row_factory = _sq.Row
+    conn.execute("""CREATE TABLE web_reference (id INTEGER PRIMARY KEY, query TEXT,
+                    query_norm TEXT, content TEXT, embedding TEXT, captured_at TEXT,
+                    expiration TEXT, source TEXT)""")
+    lignes = [
+        ('Étude accessibilité', 'A' * 4000, '2026-07-01T10:00:00', None, 'fichier:etude.pdf'),
+        ('Page web captée',     'B' * 900,  '2026-07-02T10:00:00', None, 'recherche'),
+        ('Notes réunion',       'C' * 200,  '2026-07-03T10:00:00', None, 'texte'),
+        ('Document périmé',     'D' * 100,  '2026-07-04T10:00:00', '2020-01-01T00:00:00', 'texte'),
+        ('Étude accessibilité', 'A' * 4000, '2026-06-01T10:00:00', None, 'fichier:etude.pdf'),
+    ]
+    for q, c, cap, exp, src in lignes:
+        conn.execute("INSERT INTO web_reference (query, content, captured_at, expiration, source)"
+                     " VALUES (?,?,?,?,?)", (q, c, cap, exp, src))
+    conn.commit()
+
+    conn.close()
+
+    def _ouvrir():
+        c = _sq.connect(_chemin)
+        c.row_factory = _sq.Row
+        return c
+
+    vrai_conn, vrai_ens = d.get_conn, d._ensure_web_reference_table
+    d.get_conn = _ouvrir
+    d._ensure_web_reference_table = lambda c: None
+    try:
+        docs = d.list_documents_base()
+        titres = [x['titre'] for x in docs]
+        assert 'Page web captée' not in titres, "le cache de recherche web n'est pas un document versé"
+        assert 'Document périmé' not in titres, 'une entrée expirée ne doit pas être proposée'
+        assert titres.count('Étude accessibilité') == 1, 'un document réingéré ne doit pas doubler'
+        assert titres == ['Notes réunion', 'Étude accessibilité'], 'plus récent en tête : ' + str(titres)
+        assert docs[1]['nb_car'] == 4000, 'la taille sert à annoncer le coût'
+
+        # Récupération par identifiant, et refus des identifiants morts
+        ident = docs[1]['id']
+        assert d.get_document_base(ident)['texte'].startswith('AAAA')
+        assert d.get_document_base(9999) == {}
+        assert d.get_document_base(None) == {} and d.get_document_base('abc') == {}
+    finally:
+        d.get_conn, d._ensure_web_reference_table = vrai_conn, vrai_ens
+        try:
+            os.unlink(_chemin)
+        except OSError:
+            pass
+
+    assert '/api/documents/base' in mn
+    assert 'ref_id: Optional[int]' in mn and 'get_document_base(req.ref_id)' in mn
+    assert "n'est plus dans la base" in mn, 'un document disparu doit être expliqué'
+    assert 'id="thread-doc-base-select"' in html and '<label for="thread-doc-base-select"' in html
+    assert '_tdRemplirBase' in app and 'ref_id: parseInt' in app
+    assert "Choisis un document dans la liste, ou indique un chemin" in app, \
+        'les deux voies restent possibles'
+    ok("base de connaissances : documents versés proposés au choix, cache web écarté")
+
+
+def test_reordonnancement():
+    """Réordonnanceur : le vrai correctif du document hors sujet.
+
+    L'ancrage lexical exigeait un mot commun — c'est un garde-fou, pas une
+    mesure de pertinence. Un réordonnanceur lit la question ET le passage
+    ensemble. Trois exigences non négociables, parce que ce code tourne sur le
+    chemin chaud de la conversation : inerte sans configuration, silencieux en
+    cas de panne, et jamais de moteur lent choisi tout seul.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    import modules.reranker as R
+
+    cfg = {}
+    vrai = R._reglage
+    R._reglage = lambda n, d='': cfg.get(n, d)
+    try:
+        pas = [{'passage': 'texte %d' % i, 'titre': 'T%d' % i} for i in range(4)]
+
+        # (1) INERTE sans configuration : mêmes passages, dans le même ordre
+        out, m, note = R.reordonner('question posée', pas)
+        assert out == pas and m == '' and 'Aucun réordonnanceur configuré' in note
+
+        # Le réglage explicite prime, et un refus est EXPLIQUÉ
+        cfg['rag_rerank_mode'] = 'off'
+        assert R.moteur_disponible()[0] == '' and 'désactivé' in R.moteur_disponible()[1]
+        cfg['rag_rerank_mode'] = 'voyage'
+        mo, no = R.moteur_disponible({'cohere': 'k'})
+        assert mo == '' and 'aucune clé' in no, 'pas de repli silencieux sur un autre moteur'
+
+        # Le local prime sur le cloud en mode auto : rien ne sort de la machine
+        cfg.clear()
+        assert R.moteur_disponible({'cohere': 'k'})[0] == 'cohere'
+        cfg['rag_rerank_url'] = 'http://localhost:8081'
+        assert R.moteur_disponible({'cohere': 'k'})[0] == 'local'
+
+        # (2) PANNE du moteur → ordre d'origine conservé, aucune exception
+        R._rerank_local = lambda q, t: None
+        out, m, note = R.reordonner('question', pas)
+        assert out == pas and m == '' and "n'a pas répondu" in note
+
+        # (3) Tri réel + seuil : ce qui est sous le seuil n'est pas servi
+        cfg['rag_rerank_seuil'] = '0.5'
+        R._rerank_local = lambda q, t: [(0, 0.1), (1, 0.95), (2, 0.60), (3, 0.2)]
+        out, m, note = R.reordonner('question', pas, top_n=3)
+        assert m == 'local'
+        assert [p['titre'] for p in out] == ['T1', 'T2'], [p['titre'] for p in out]
+        assert out[0]['score_rerank'] == 0.95
+        assert '2 écarté(s)' in note, note
+
+        # Aucun passage pertinent → on ne sert RIEN, plutôt que le moins mauvais
+        R._rerank_local = lambda q, t: [(i, 0.05) for i in range(4)]
+        out, m, note = R.reordonner('question', pas)
+        assert out == [] and m == 'local' and 'aucun des' in note.lower()
+
+        # top_n respecté
+        cfg['rag_rerank_seuil'] = '0.0'
+        R._rerank_local = lambda q, t: [(i, 0.9 - i / 10) for i in range(4)]
+        assert len(R.reordonner('q', pas, top_n=2)[0]) == 2
+
+        # Un indice hors bornes ne fait pas planter
+        R._rerank_local = lambda q, t: [(99, 0.9), (0, 0.8)]
+        out, m, _ = R.reordonner('q', pas)
+        assert [p['titre'] for p in out] == ['T0']
+    finally:
+        R._reglage = vrai
+        import importlib
+        importlib.reload(R)
+
+    # (4) Le moteur « llm » n'est JAMAIS choisi tout seul : il ajoute une attente
+    seg = ''
+    for n in ast.walk(ast.parse(open(os.path.join(racine, 'modules', 'reranker.py'),
+                                     encoding='utf-8').read())):
+        if getattr(n, 'name', '') == 'moteur_disponible':
+            seg = ast.get_source_segment(open(os.path.join(racine, 'modules', 'reranker.py'),
+                                              encoding='utf-8').read(), n) or ''
+    assert seg and "mode == 'llm'" in seg
+    apres_auto = seg[seg.find('mode auto'):]
+    assert "'llm'" not in apres_auto, "le mode automatique ne doit jamais retenir « llm »"
+
+    # (5) Câblage hub : filet élargi SEULEMENT si un moteur peut trier derrière
+    assert 'k=10 if _moteur else 3' in hub, 'sinon on ajoute du hors-sujet sans trieur'
+    assert hub.count("_match_documents(user_message, settings.get('api_keys'))") == 2, \
+        'les deux chemins de conversation'
+    assert 'add_diagnostic' in hub and '_resume' in hub, 'traçable au journal'
+    assert 'passages = passages[:3]' in hub, 'moteur muet → on revient à l’ancien filet'
+
+    # (6) Réglages : l'effet RÉEL est renvoyé, pas un simple « enregistré »
+    assert '/api/settings/rerank' in mn and 'moteur_effectif' in mn
+    assert 'id="rag-rerank-mode"' in html and 'id="rag-rerank-seuil"' in html
+    assert 'data-needs-key="cohere"' in html, 'moteur grisé sans sa clé'
+    assert 'aria-live="polite"' in html
+    assert "'Enregistré. ' + (d.explication" in app, "annoncer l'effet réel"
+    ok("réordonnancement : inerte sans réglage, muet en panne, seuil respecté, jamais lent d’office")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -1520,6 +1700,8 @@ if __name__ == '__main__':
                test_description_audio, test_documents_epingles, test_lot_gemini,
                test_document_de_la_conversation,
                test_magasin_documents_de_fil,
+               test_choix_dans_la_base,
+               test_reordonnancement,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

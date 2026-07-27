@@ -1195,6 +1195,57 @@ def get_active_web_references() -> list:
     conn.close()
     return [dict(r) for r in rows]
 
+def list_documents_base() -> list:
+    """Documents VOLONTAIREMENT ingérés dans la base de connaissances.
+
+    On écarte les entrées de source « recherche » : ce sont des pages mises en
+    cache automatiquement par la recherche web, pas des documents que
+    l'utilisateur a choisi de verser. Les mélanger noierait sa vingtaine de
+    documents dans des centaines de captures.
+    """
+    from datetime import datetime
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    now = datetime.now().isoformat()
+    rows = conn.execute(
+        """SELECT id, query, source, captured_at, LENGTH(content) AS nb_car
+             FROM web_reference
+            WHERE (expiration IS NULL OR expiration > ?)
+              AND COALESCE(source, '') <> 'recherche'
+         ORDER BY captured_at DESC""", (now,)).fetchall()
+    conn.close()
+    vus, sortie = set(), []
+    for r in rows:
+        d = dict(r)
+        titre = (d.get('query') or '').strip()
+        if not titre or titre.casefold() in vus:
+            continue          # un même document réingéré ne doit apparaître qu'une fois
+        vus.add(titre.casefold())
+        sortie.append({'id': d['id'], 'titre': titre, 'source': d.get('source') or '',
+                       'nb_car': d.get('nb_car') or 0,
+                       'capture': (d.get('captured_at') or '')[:10]})
+    return sortie
+
+def get_document_base(ref_id) -> dict:
+    """Contenu d'un document de la base, par son identifiant. {} si absent ou expiré."""
+    from datetime import datetime
+    try:
+        ref_id = int(ref_id)
+    except (TypeError, ValueError):
+        return {}
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    row = conn.execute(
+        "SELECT id, query, content, source FROM web_reference "
+        "WHERE id = ? AND (expiration IS NULL OR expiration > ?)",
+        (ref_id, datetime.now().isoformat())).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    d = dict(row)
+    return {'id': d['id'], 'titre': d.get('query') or 'Document',
+            'texte': d.get('content') or '', 'source': d.get('source') or ''}
+
 def purge_web_references() -> int:
     """Supprime les références expirées. Retourne le nombre supprimé."""
     from datetime import datetime

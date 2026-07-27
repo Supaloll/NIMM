@@ -706,6 +706,58 @@
             </details>
         </div>
 
+        <!-- ── RÉORDONNANCEMENT DE LA BASE DE CONNAISSANCES ── -->
+        <div class="setting-group" id="rerank-section">
+            <details id="rerank-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">🎯 Pertinence de la base de connaissances</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    La recherche par sens compare deux textes « en gros » : deux textes
+                    français sans rapport se ressemblent souvent assez pour passer.
+                    Un réordonnanceur lit la question ET le passage ensemble et répond
+                    à la vraie question : ce passage aide-t-il à répondre ? Sans
+                    réordonnanceur, NIMM garde son comportement actuel.
+                </p>
+                <div class="setting-group">
+                    <label for="rag-rerank-mode">Moteur</label>
+                    <select id="rag-rerank-mode" aria-label="Moteur de réordonnancement de la base de connaissances">
+                        <option value="auto">Automatique (local s'il existe, sinon une clé disponible)</option>
+                        <option value="off">Aucun — comportement actuel</option>
+                        <option value="local">Serveur local llama.cpp (rien ne sort de la machine)</option>
+                        <option value="cohere" data-needs-key="cohere">Cohere</option>
+                        <option value="voyage" data-needs-key="voyage">Voyage AI</option>
+                        <option value="jina" data-needs-key="jina">Jina</option>
+                        <option value="llm">Un modèle de conversation (le plus fin, mais lent)</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label for="rag-rerank-url">Adresse du serveur local (llama.cpp lancé avec --reranking)</label>
+                    <input type="text" id="rag-rerank-url" placeholder="http://localhost:8081"
+                        aria-label="Adresse du serveur de réordonnancement local"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="rag-rerank-modele">Modèle (facultatif)</label>
+                    <input type="text" id="rag-rerank-modele" placeholder="bge-reranker-v2-m3"
+                        aria-label="Nom du modèle de réordonnancement"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="rag-rerank-seuil">Seuil de pertinence (0 à 1)</label>
+                    <input type="number" id="rag-rerank-seuil" value="0.30" min="0" max="1" step="0.05"
+                        aria-label="Seuil de pertinence en dessous duquel un passage est écarté"
+                        style="width:100px;">
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                        Plus haut = plus sévère. En dessous du seuil, le passage n'est pas servi du tout.
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="rerank-save-btn" class="btn-primary" aria-label="Enregistrer les réglages de réordonnancement">Enregistrer</button>
+                    <button id="rerank-test-btn" class="btn-secondary" aria-label="Vérifier quel réordonnanceur s'appliquera">Vérifier</button>
+                </div>
+                <div id="rerank-status" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:8px;min-height:1.2em;"></div>
+            </details>
+        </div>
+
         <!-- ── DOCUMENT DE LA CONVERSATION (tous fournisseurs) ── -->
         <div class="setting-group" id="thread-doc-section">
             <details id="thread-doc-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
@@ -717,7 +769,15 @@
                     as choisi celui-ci. Le détacher efface le texte conservé.
                 </p>
                 <div class="setting-group">
-                    <label for="thread-doc-path">Chemin du document (PDF, Word, ODT, texte…)</label>
+                    <label for="thread-doc-base-select">Document de ta base de connaissances</label>
+                    <select id="thread-doc-base-select" aria-label="Document de la base de connaissances à attacher"
+                        style="width:100%;box-sizing:border-box;"></select>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                        Le plus simple : choisis ici un document déjà versé, sans rien taper.
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <label for="thread-doc-path">…ou chemin d'un fichier (PDF, Word, ODT, texte…)</label>
                     <input type="text" id="thread-doc-path" placeholder="C:\Users\...\rapport.pdf"
                         aria-label="Chemin du document à attacher à la conversation"
                         style="width:100%;box-sizing:border-box;font-size:0.85rem;">
