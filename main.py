@@ -1703,6 +1703,15 @@ class ThreadDocReq(BaseModel):
     chemin: Optional[str] = None
     texte: Optional[str] = None
     titre: Optional[str] = None
+    ref_id: Optional[int] = None      # document déjà présent dans la base de connaissances
+
+@app.get("/api/documents/base")
+async def documents_base_lister():
+    """Documents versés dans la base de connaissances, pour les proposer au choix
+    plutôt que d'obliger à saisir un chemin de fichier à la main — une adresse
+    Windows tapée au clavier braille est une source d'erreurs pour rien."""
+    import core.database as _db
+    return {"documents": _db.list_documents_base()}
 
 def _provider_actif(thread_id: str = None) -> str:
     from core.hub import load_settings
@@ -1720,7 +1729,14 @@ async def thread_document_attacher(thread_id: str, req: ThreadDocReq):
     texte = req.texte or ""
     titre = (req.titre or "").strip()
     source = ""
-    if (req.chemin or "").strip():
+    if req.ref_id:
+        fiche_base = _db.get_document_base(req.ref_id)
+        if not fiche_base:
+            return {"ok": False, "erreur": "Ce document n'est plus dans la base de connaissances."}
+        texte = fiche_base["texte"]
+        titre = titre or fiche_base["titre"]
+        source = fiche_base.get("source") or "base de connaissances"
+    elif (req.chemin or "").strip():
         chemin = _os.path.abspath(_os.path.expanduser(req.chemin.strip()))
         if not _os.path.isfile(chemin):
             return {"ok": False, "erreur": f"Fichier introuvable : {req.chemin}"}
@@ -3866,6 +3882,42 @@ async def set_stt_settings(req: dict):
     if req.get('model') in ('tiny', 'base', 'small', 'medium', 'large'):
         set_setting('stt_model', req['model'])
     return {"status": "ok"}
+
+@app.get("/api/settings/rerank")
+async def get_rerank_settings():
+    """Réglages du réordonnancement + ce qui s'appliquera VRAIMENT, expliqué."""
+    from modules.reranker import moteur_disponible, seuil_pertinence
+    from core.database import get_api_keys
+    moteur, note = moteur_disponible(get_api_keys())
+    return {
+        "mode":   get_setting('rag_rerank_mode', 'auto'),
+        "url":    get_setting('rag_rerank_url', ''),
+        "modele": get_setting('rag_rerank_modele', ''),
+        "seuil":  seuil_pertinence(),
+        "moteur_effectif": moteur,
+        "explication": note,
+    }
+
+@app.post("/api/settings/rerank")
+async def set_rerank_settings(req: dict):
+    """Enregistre les réglages puis renvoie l'effet réel : un réglage accepté
+    mais sans effet (moteur choisi sans clé) doit être dit, pas deviné."""
+    from modules.reranker import moteur_disponible, seuil_pertinence
+    from core.database import get_api_keys
+    if req.get('mode') in ('auto', 'off', 'local', 'cohere', 'voyage', 'jina', 'llm'):
+        set_setting('rag_rerank_mode', req['mode'])
+    if 'url' in req:
+        set_setting('rag_rerank_url', (req.get('url') or '').strip())
+    if 'modele' in req:
+        set_setting('rag_rerank_modele', (req.get('modele') or '').strip())
+    if 'seuil' in req:
+        try:
+            set_setting('rag_rerank_seuil', str(min(1.0, max(0.0, float(req['seuil'])))))
+        except (TypeError, ValueError):
+            pass
+    moteur, note = moteur_disponible(get_api_keys())
+    return {"status": "ok", "moteur_effectif": moteur, "explication": note,
+            "seuil": seuil_pertinence()}
 
 @app.get("/api/settings/presence")
 async def get_presence():

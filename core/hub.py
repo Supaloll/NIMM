@@ -1401,7 +1401,7 @@ def _match_bibliotheque(user_message: str) -> str:
         return ''
 
 
-def _match_documents(user_message: str):
+def _match_documents(user_message: str, api_keys: dict = None):
     """Récupère proactivement les passages les plus pertinents des documents ingérés
     (base de connaissances locale). Renvoie un tuple (doc_context, titres) :
     - doc_context = texte à injecter dans le system prompt ('' si rien) ;
@@ -1412,9 +1412,40 @@ def _match_documents(user_message: str):
         if len(msg) < 12:
             return '', []
         from modules.enrichissement import search_documents
-        passages = search_documents(msg, k=3)
+        from modules.reranker import moteur_disponible, reordonner
+        _moteur, _note_moteur = moteur_disponible(api_keys or {})
+        # Le filet n'est élargi QUE si un réordonnanceur peut trier derrière :
+        # ramener dix passages sans savoir les départager ne ferait qu'ajouter
+        # du hors-sujet. Sans moteur, on reste exactement sur l'ancien k=3.
+        passages = search_documents(msg, k=10 if _moteur else 3)
         if not passages:
             return '', []
+
+        if _moteur:
+            # Le réordonnanceur MESURE la pertinence, là où le seuil sémantique et
+            # l'ancrage lexical ne faisaient que l'approcher : il les remplace.
+            _retenus, _m, _resume = reordonner(msg, passages, api_keys or {}, top_n=3)
+            if _m:
+                print(f"[HUB] 📄 {_resume}")
+                try:
+                    from core.database import add_diagnostic
+                    add_diagnostic('base de connaissances', _resume)
+                except Exception:
+                    pass
+                if not _retenus:
+                    return '', []
+                _blocs, _titres = [], []
+                for pp in _retenus:
+                    _t = pp.get('titre') or 'Document'
+                    _src = pp.get('source') or ''
+                    _blocs.append('[' + _t + (' — ' + _src + ']' if _src else ']')
+                                  + '\n' + (pp.get('passage') or '').strip()[:1200])
+                    if _t not in _titres:
+                        _titres.append(_t)
+                return '\n\n'.join(_blocs), _titres
+            # Le moteur n'a pas répondu : on retombe sur l'ancien filtrage, mais
+            # sur les 3 meilleurs seulement — le filet élargi n'a plus de trieur.
+            passages = passages[:3]
         # Seuils resserrés (évitent les faux positifs sur des messages faiblement liés).
         # Le seuil sémantique est réglable via le paramètre 'rag_seuil_documents' (défaut 0.5).
         try:
@@ -3891,7 +3922,7 @@ async def process_message(
     if _doc_fil:
         doc_context, _doc_titles = '', []
     else:
-        doc_context, _doc_titles = _match_documents(user_message)
+        doc_context, _doc_titles = _match_documents(user_message, settings.get('api_keys'))
     system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
                                     doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
 
@@ -4249,7 +4280,7 @@ async def process_message_stream(
     if _doc_fil:
         doc_context, _doc_titles = '', []
     else:
-        doc_context, _doc_titles = _match_documents(user_message)
+        doc_context, _doc_titles = _match_documents(user_message, settings.get('api_keys'))
     system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
                                     doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
 

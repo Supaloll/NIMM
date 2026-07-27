@@ -11892,6 +11892,63 @@ setupSettingsTabs();
 init();
 
 // ══════════════════════════════════════════
+// PERTINENCE DE LA BASE DE CONNAISSANCES (réordonnancement)
+// ══════════════════════════════════════════
+(function () {
+    function _rkStatus(msg) {
+        var el = document.getElementById('rerank-status');
+        if (el) el.textContent = msg;
+    }
+    function _rkVal(id) { return document.getElementById(id)?.value || ''; }
+
+    async function _rerankCharger(annoncer) {
+        try {
+            var r = await fetch('/api/settings/rerank');
+            var d = await r.json();
+            var m = document.getElementById('rag-rerank-mode');
+            if (m) m.value = d.mode || 'auto';
+            var u = document.getElementById('rag-rerank-url');
+            if (u) u.value = d.url || '';
+            var mo = document.getElementById('rag-rerank-modele');
+            if (mo) mo.value = d.modele || '';
+            var se = document.getElementById('rag-rerank-seuil');
+            if (se) se.value = d.seuil;
+            if (annoncer) _rkStatus(d.explication || '');
+        } catch (e) {
+            if (annoncer) _rkStatus('Réglages indisponibles : ' + e.message);
+        }
+    }
+
+    document.getElementById('rerank-save-btn')?.addEventListener('click', async function () {
+        _rkStatus('Enregistrement…');
+        try {
+            var r = await fetch('/api/settings/rerank', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: _rkVal('rag-rerank-mode'),
+                    url: _rkVal('rag-rerank-url'),
+                    modele: _rkVal('rag-rerank-modele'),
+                    seuil: parseFloat(_rkVal('rag-rerank-seuil') || '0.3')
+                })
+            });
+            var d = await r.json();
+            // On annonce l'effet RÉEL, pas « enregistré » : un moteur choisi sans
+            // clé est accepté par le formulaire mais reste sans effet.
+            _rkStatus('Enregistré. ' + (d.explication || ''));
+        } catch (e) { _rkStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('rerank-test-btn')?.addEventListener('click', function () {
+        _rerankCharger(true);
+    });
+
+    document.getElementById('rerank-details')?.addEventListener('toggle', function () {
+        if (this.open) _rerankCharger(true);
+    });
+})();
+
+// ══════════════════════════════════════════
 // DOCUMENT DE LA CONVERSATION (tous fournisseurs)
 // ══════════════════════════════════════════
 (function () {
@@ -11901,6 +11958,28 @@ init();
     }
     function _tdThread() {
         return (typeof currentThreadId !== 'undefined' && currentThreadId) ? currentThreadId : '';
+    }
+
+    // La base de connaissances alimente le sélecteur : choisir dans une liste
+    // vaut mieux que saisir une adresse Windows au clavier braille.
+    async function _tdRemplirBase() {
+        var sel = document.getElementById('thread-doc-base-select');
+        if (!sel) return;
+        try {
+            var r = await fetch('/api/documents/base');
+            var d = await r.json();
+            var docs = d.documents || [];
+            sel.innerHTML = '<option value="">— choisir un document —</option>'
+                + docs.map(function (x) {
+                      var ko = Math.max(1, Math.round((x.nb_car || 0) / 1000));
+                      return '<option value="' + x.id + '">' + x.titre
+                           + ' (' + ko + ' k caractères'
+                           + (x.capture ? ', versé le ' + x.capture : '') + ')</option>';
+                  }).join('');
+            if (!docs.length) sel.innerHTML = '<option value="">Base de connaissances vide</option>';
+        } catch (e) {
+            sel.innerHTML = '<option value="">Base indisponible</option>';
+        }
     }
 
     async function _threadDocRefresh() {
@@ -11918,14 +11997,18 @@ init();
     document.getElementById('thread-doc-attach-btn')?.addEventListener('click', async function () {
         var tid = _tdThread();
         if (!tid) { _tdStatus('Aucune conversation en cours.'); return; }
+        var refId  = document.getElementById('thread-doc-base-select')?.value || '';
         var chemin = (document.getElementById('thread-doc-path')?.value || '').trim();
-        if (!chemin) { _tdStatus('Indique le chemin du document.'); return; }
+        if (!refId && !chemin) {
+            _tdStatus('Choisis un document dans la liste, ou indique un chemin.'); return;
+        }
         _tdStatus('Lecture du document…');
         try {
+            var corps = refId ? { ref_id: parseInt(refId, 10) } : { chemin: chemin };
             var r = await fetch('/api/threads/' + encodeURIComponent(tid) + '/document', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chemin: chemin })
+                body: JSON.stringify(corps)
             });
             var d = await r.json();
             if (!d.ok) { _tdStatus('Échec : ' + (d.erreur || 'raison inconnue')); return; }
@@ -11947,7 +12030,7 @@ init();
     });
 
     document.getElementById('thread-doc-details')?.addEventListener('toggle', function () {
-        if (this.open) _threadDocRefresh();
+        if (this.open) { _tdRemplirBase(); _threadDocRefresh(); }
     });
 })();
 
