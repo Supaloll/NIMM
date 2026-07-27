@@ -11892,6 +11892,66 @@ setupSettingsTabs();
 init();
 
 // ══════════════════════════════════════════
+// DOCUMENT DE LA CONVERSATION (tous fournisseurs)
+// ══════════════════════════════════════════
+(function () {
+    function _tdStatus(msg) {
+        var el = document.getElementById('thread-doc-status');
+        if (el) el.textContent = msg;
+    }
+    function _tdThread() {
+        return (typeof currentThreadId !== 'undefined' && currentThreadId) ? currentThreadId : '';
+    }
+
+    async function _threadDocRefresh() {
+        var tid = _tdThread();
+        if (!tid) { _tdStatus('Ouvre ou démarre une conversation pour y attacher un document.'); return; }
+        try {
+            var r = await fetch('/api/threads/' + encodeURIComponent(tid) + '/document');
+            var d = await r.json();
+            if (!d.attache) { _tdStatus('Aucun document attaché à cette conversation.'); return; }
+            _tdStatus('Attaché : « ' + d.titre + ' », ' + d.nb_car + ' caractères'
+                    + (d.tronque ? ' (tronqué)' : '') + '. ' + (d.regime || ''));
+        } catch (e) { _tdStatus('Statut indisponible : ' + e.message); }
+    }
+
+    document.getElementById('thread-doc-attach-btn')?.addEventListener('click', async function () {
+        var tid = _tdThread();
+        if (!tid) { _tdStatus('Aucune conversation en cours.'); return; }
+        var chemin = (document.getElementById('thread-doc-path')?.value || '').trim();
+        if (!chemin) { _tdStatus('Indique le chemin du document.'); return; }
+        _tdStatus('Lecture du document…');
+        try {
+            var r = await fetch('/api/threads/' + encodeURIComponent(tid) + '/document', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chemin: chemin })
+            });
+            var d = await r.json();
+            if (!d.ok) { _tdStatus('Échec : ' + (d.erreur || 'raison inconnue')); return; }
+            _tdStatus('Attaché : « ' + d.titre + ' », ' + d.nb_car + ' caractères'
+                    + (d.tronque ? ' (tronqué au-delà de 300 000 caractères)' : '')
+                    + '. ' + (d.regime || ''));
+        } catch (e) { _tdStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('thread-doc-detach-btn')?.addEventListener('click', async function () {
+        var tid = _tdThread();
+        if (!tid) return;
+        try {
+            var r = await fetch('/api/threads/' + encodeURIComponent(tid) + '/document', { method: 'DELETE' });
+            var d = await r.json();
+            _tdStatus(d.ok ? 'Document détaché ; le texte conservé a été effacé.'
+                           : 'Aucun document n’était attaché.');
+        } catch (e) { _tdStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('thread-doc-details')?.addEventListener('toggle', function () {
+        if (this.open) _threadDocRefresh();
+    });
+})();
+
+// ══════════════════════════════════════════
 // DOCUMENTS ÉPINGLÉS (cache explicite Gemini)
 // ══════════════════════════════════════════
 (function () {

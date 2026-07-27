@@ -1367,6 +1367,136 @@ def test_lot_gemini():
     ok("lot Gemini : identifiant à barre oblique, résultats réordonnés, deux formes acceptées")
 
 
+def test_document_de_la_conversation():
+    """Attacher un document à un fil, plutôt que de laisser le RAG deviner.
+
+    Trois exigences : (1) le document attaché DOIT désactiver la base de
+    connaissances pour ce fil — sinon on empile ce que l'utilisateur a choisi
+    et ce que NIMM a deviné, exactement le bruit qu'on venait de corriger ;
+    (2) il doit se placer dans la partie STABLE du prompt, seule position où
+    les caches de contexte servent à quelque chose ; (3) le régime de
+    facturation doit être annoncé POUR DE VRAI selon le fournisseur — NIMM en
+    sert sept, et trois seulement mettent les préfixes en cache.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    dbs = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    coa = open(os.path.join(racine, 'modules', 'coanimm.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    arbre = ast.parse(hub)
+
+    # (1) le document attaché supplante la base de connaissances, DANS LES DEUX CHEMINS
+    assert hub.count('_document_du_fil(thread_id)') == 2, \
+        'le chemin avec outils ET le chemin en streaming'
+    assert hub.count("doc_context, _doc_titles = '', []") == 2, \
+        'le RAG doit se taire quand l’utilisateur a désigné son document'
+    assert hub.count('doc_fil=_doc_fil') == 2
+
+    # (2) position stable : avant la mémoire et les messages récents
+    corps = ''
+    for n in ast.walk(arbre):
+        if getattr(n, 'name', '') == 'build_system_prompt':
+            corps = ast.get_source_segment(hub, n) or ''
+    assert corps, 'build_system_prompt introuvable'
+    i_doc = corps.find('Document de cette conversation')
+    i_biblio = corps.find('Conversations passées sur ce sujet')
+    i_kb = corps.find('base de connaissances')
+    assert 0 < i_doc < i_biblio and i_doc < i_kb, \
+        'le document du fil doit précéder bibliothèque et base de connaissances'
+    assert 'dis-le clairement' in corps, "ne pas combler les trous avec du général"
+
+    # (3) régime de facturation réellement différencié
+    reg = {}
+    exec(compile(ast.Module(body=[n for n in arbre.body
+                                  if getattr(n, 'name', '') == 'regime_de_cache'
+                                  or (isinstance(n, ast.Assign)
+                                      and getattr(n.targets[0], 'id', '').startswith('_REGIME'))],
+                            type_ignores=[]), '<extrait>', 'exec'), reg)
+    f = reg['regime_de_cache']
+    caches = {p: f(p) for p in ('anthropic', 'gemini', 'deepseek')}
+    assert len(set(caches.values())) == 3, 'trois fournisseurs, trois messages distincts'
+    for p, m in caches.items():
+        assert '10 %' in m, 'la remise réelle doit être chiffrée pour ' + p
+    for p in ('openai', 'mistral', 'ollama', 'openrouter', '', None):
+        assert 'ne propose pas de cache' in f(p), \
+            'ne pas promettre une économie inexistante (' + str(p) + ')'
+    assert f('ANTHROPIC') == f('anthropic'), 'insensible à la casse'
+
+    # Magasin local : effacement réel au détachement
+    for fn in ('get_thread_document', 'set_thread_document', 'clear_thread_document'):
+        assert 'def %s(' % fn in dbs, fn
+    assert '_THREAD_DOC_MAX_CAR' in dbs and '_THREAD_DOC_MAX_FILS' in dbs, 'bornes'
+    assert 'confidentiel' in dbs, "un document confidentiel doit pouvoir disparaître"
+
+    # Routes et outils
+    assert mn.count('/api/threads/{thread_id}/document') == 3, 'lire, attacher, détacher'
+    assert 'regime_de_cache' in mn, "le régime est annoncé à l’utilisateur"
+    assert 'nimm_attach_document' in coa and 'nimm_detach_document' in coa
+    assert '"tool": "thread_document"' in mn, 'présent au catalogue'
+
+    # Interface : disponible quel que soit le fournisseur, donc SANS data-needs-key
+    i_sec = html.find('id="thread-doc-section"')
+    assert i_sec > 0
+    assert 'data-needs-key' not in html[i_sec:i_sec + 120], \
+        'attacher un document doit marcher avec tous les fournisseurs'
+    assert 'aria-live="polite"' in html[i_sec:i_sec + 2500]
+    assert '_threadDocRefresh' in app
+    ok("document de la conversation : le RAG se tait, position stable, coût annoncé sans mentir")
+
+
+def test_magasin_documents_de_fil():
+    """Test FONCTIONNEL du magasin — c'est lui qui a trouvé le vrai défaut.
+
+    Le plafond de fils s'appuyait sur l'horodatage, écrit à la seconde près.
+    Treize attaches dans la même seconde portent la même date ; un tri stable
+    conservait donc les PLUS ANCIENNES et jetait celle qu'on venait de faire.
+    L'analyse statique n'aurait jamais vu ça : seul l'exécuter le montre.
+    L'ordre d'insertion fait désormais foi.
+    """
+    import json as _json
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    import core.database as d
+
+    store, vrai_get, vrai_set = {}, d.get_setting, d.set_setting
+    d.get_setting = lambda k, dflt=None: store.get(k, dflt)
+    d.set_setting = lambda k, v: store.__setitem__(k, v)
+    try:
+        assert d.get_thread_document('t1') == {}
+        assert d.get_thread_document('') == {}, 'fil vide toléré'
+
+        # Troncature signalée, longueur réelle conservée
+        gros = 'B' * (d._THREAD_DOC_MAX_CAR + 500)
+        f = d.set_thread_document('t2', 'Gros', gros)
+        assert f['tronque'] and f['nb_car'] == len(gros)
+        assert len(d.get_thread_document('t2')['texte']) == d._THREAD_DOC_MAX_CAR
+
+        # Plafond : les plus RÉCENTS survivent, même écrits dans la même seconde
+        for i in range(d._THREAD_DOC_MAX_FILS + 3):
+            d.set_thread_document('f%02d' % i, 't%d' % i, 'x' * 5)
+        reste = _json.loads(store['thread_documents'])
+        assert len(reste) == d._THREAD_DOC_MAX_FILS
+        assert 'f12' in reste and 'f11' in reste, 'le plus récent ne doit jamais sauter'
+        assert 'f00' not in reste, 'les plus anciens sautent'
+
+        # Réattacher un fil ancien le rafraîchit
+        d.set_thread_document('f03', 'maj', 'y' * 5)
+        assert list(_json.loads(store['thread_documents']).keys())[-1] == 'f03'
+
+        # Détacher efface RÉELLEMENT le texte (contrainte de confidentialité)
+        d.set_thread_document('secret', 'Confidentiel', 'MOTDEPASSEUNIQUE')
+        assert 'MOTDEPASSEUNIQUE' in store['thread_documents']
+        assert d.clear_thread_document('secret') is True
+        assert 'MOTDEPASSEUNIQUE' not in store['thread_documents'], \
+            'un document confidentiel doit disparaître pour de bon'
+        assert d.clear_thread_document('secret') is False
+    finally:
+        d.get_setting, d.set_setting = vrai_get, vrai_set
+    ok("magasin des documents de fil : troncature, plafond par récence réelle, effacement")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -1388,6 +1518,8 @@ if __name__ == '__main__':
                test_description_video, test_correlation_modele_agent_recherche,
                test_reprise_sans_couture,
                test_description_audio, test_documents_epingles, test_lot_gemini,
+               test_document_de_la_conversation,
+               test_magasin_documents_de_fil,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

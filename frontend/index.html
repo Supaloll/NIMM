@@ -706,6 +706,30 @@
             </details>
         </div>
 
+        <!-- ── DOCUMENT DE LA CONVERSATION (tous fournisseurs) ── -->
+        <div class="setting-group" id="thread-doc-section">
+            <details id="thread-doc-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">📎 Document de la conversation</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Attache un document au fil en cours : il est fourni au modèle à chaque
+                    question, quel que soit le fournisseur. Tant qu'il est attaché, la base
+                    de connaissances cesse de proposer d'autres documents — c'est toi qui
+                    as choisi celui-ci. Le détacher efface le texte conservé.
+                </p>
+                <div class="setting-group">
+                    <label for="thread-doc-path">Chemin du document (PDF, Word, ODT, texte…)</label>
+                    <input type="text" id="thread-doc-path" placeholder="C:\Users\...\rapport.pdf"
+                        aria-label="Chemin du document à attacher à la conversation"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="thread-doc-attach-btn" class="btn-primary" aria-label="Attacher ce document à la conversation">Attacher</button>
+                    <button id="thread-doc-detach-btn" class="btn-secondary" aria-label="Détacher le document de la conversation">Détacher</button>
+                </div>
+                <div id="thread-doc-status" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:8px;min-height:1.2em;"></div>
+            </details>
+        </div>
+
         <!-- ── DOCUMENTS ÉPINGLÉS (cache explicite Gemini) ── -->
         <div class="setting-group" id="gemini-pins-section" data-needs-key="gemini">
             <details id="gemini-pins-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
