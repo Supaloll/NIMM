@@ -2283,6 +2283,60 @@ def clear_diagnostics() -> None:
 
 _COANIMM_SCHEDULES_MAX = 50
 
+_THREAD_DOC_MAX_CAR = 300000   # au-delà, on tronque : aucun modèle ne suit plus
+_THREAD_DOC_MAX_FILS = 10      # on ne garde le texte que des 10 derniers fils
+
+def get_thread_document(thread_id: str) -> dict:
+    """Document attaché à un fil de conversation : {titre, texte, source, nb_car,
+    tronque, attache_le}. Rend {} si le fil n'en a pas."""
+    if not thread_id:
+        return {}
+    try:
+        data = json.loads(get_setting('thread_documents', '{}'))
+    except Exception:
+        return {}
+    return data.get(thread_id) or {} if isinstance(data, dict) else {}
+
+def set_thread_document(thread_id: str, titre: str, texte: str, source: str = '') -> dict:
+    """Attache un document à un fil. Le texte est conservé EN LOCAL uniquement,
+    et détaché sur demande efface réellement le contenu — Fernando doit pouvoir
+    confier un document confidentiel puis le retirer sans laisser de trace."""
+    if not thread_id:
+        return {}
+    try:
+        data = json.loads(get_setting('thread_documents', '{}'))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    texte = texte or ''
+    tronque = len(texte) > _THREAD_DOC_MAX_CAR
+    fiche = {'titre': (titre or 'Document')[:200], 'texte': texte[:_THREAD_DOC_MAX_CAR],
+             'source': (source or '')[:400], 'nb_car': len(texte), 'tronque': tronque,
+             'attache_le': datetime.now().isoformat(timespec='seconds')}
+    # L'ordre d'INSERTION fait foi, pas l'horodatage : celui-ci est à la seconde,
+    # donc plusieurs attaches rapprochées portent la même date et un tri stable
+    # conserverait alors les PLUS ANCIENNES. On réinsère en dernier, puis on
+    # coupe par la tête.
+    data.pop(thread_id, None)
+    data[thread_id] = fiche
+    for vieux in list(data.keys())[:-_THREAD_DOC_MAX_FILS]:
+        data.pop(vieux, None)
+    set_setting('thread_documents', json.dumps(data, ensure_ascii=False))
+    return fiche
+
+def clear_thread_document(thread_id: str) -> bool:
+    """Détache et EFFACE le texte. Rend True si un document était bien attaché."""
+    try:
+        data = json.loads(get_setting('thread_documents', '{}'))
+    except Exception:
+        return False
+    if not isinstance(data, dict) or thread_id not in data:
+        return False
+    data.pop(thread_id, None)
+    set_setting('thread_documents', json.dumps(data, ensure_ascii=False))
+    return True
+
 def list_gemini_pins() -> list:
     """Documents épinglés dans le cache explicite Gemini.
 

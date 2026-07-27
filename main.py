@@ -1699,6 +1699,72 @@ async def verify_text(req: VerifyReq):
     return await verify_claims_anthropic(req.text or "",
                                          api_keys=settings.get("api_keys", {}))
 
+class ThreadDocReq(BaseModel):
+    chemin: Optional[str] = None
+    texte: Optional[str] = None
+    titre: Optional[str] = None
+
+def _provider_actif(thread_id: str = None) -> str:
+    from core.hub import load_settings
+    st = load_settings(thread_id)
+    return (st.get("provider") or (st.get("routing") or {}).get("chat") or "").lower()
+
+@app.post("/api/threads/{thread_id}/document")
+async def thread_document_attacher(thread_id: str, req: ThreadDocReq):
+    """Attache un document à UNE conversation : il est fourni au modèle à chaque
+    question du fil, en tête du prompt. À la différence de la base de
+    connaissances, rien n'est deviné — l'utilisateur a désigné son document."""
+    import core.database as _db, os as _os, asyncio as _aio, functools as _ft
+    from core.hub import load_settings, regime_de_cache
+    settings = load_settings(thread_id)
+    texte = req.texte or ""
+    titre = (req.titre or "").strip()
+    source = ""
+    if (req.chemin or "").strip():
+        chemin = _os.path.abspath(_os.path.expanduser(req.chemin.strip()))
+        if not _os.path.isfile(chemin):
+            return {"ok": False, "erreur": f"Fichier introuvable : {req.chemin}"}
+        try:
+            from modules.enrichissement import extract_any, mistral_key_from_settings
+            texte = await _aio.get_event_loop().run_in_executor(
+                None, _ft.partial(extract_any, chemin, _os.path.basename(chemin),
+                                  mistral_key=mistral_key_from_settings(settings)))
+        except Exception as e:
+            return {"ok": False, "erreur": f"Lecture impossible : {e}"}
+        titre = titre or _os.path.basename(chemin)
+        source = chemin
+    if not (texte or "").strip():
+        return {"ok": False, "erreur": "Document vide : rien à attacher."}
+    fiche = _db.set_thread_document(thread_id, titre, texte, source)
+    prov = _provider_actif(thread_id)
+    _db.add_diagnostic("documents", "Document attaché à un fil",
+                       f"« {fiche['titre']} » — {fiche['nb_car']} caractères")
+    return {"ok": True, "titre": fiche["titre"], "nb_car": fiche["nb_car"],
+            "tronque": fiche["tronque"], "provider": prov,
+            "regime": regime_de_cache(prov)}
+
+@app.get("/api/threads/{thread_id}/document")
+async def thread_document_lire(thread_id: str):
+    """Métadonnées du document attaché (jamais son texte : inutile à renvoyer,
+    et cela l'exposerait sans raison)."""
+    import core.database as _db
+    from core.hub import regime_de_cache
+    fiche = _db.get_thread_document(thread_id)
+    if not fiche:
+        return {"attache": False}
+    prov = _provider_actif(thread_id)
+    return {"attache": True, "titre": fiche.get("titre", ""),
+            "nb_car": fiche.get("nb_car", 0), "tronque": fiche.get("tronque", False),
+            "source": fiche.get("source", ""), "attache_le": fiche.get("attache_le", ""),
+            "provider": prov, "regime": regime_de_cache(prov)}
+
+@app.delete("/api/threads/{thread_id}/document")
+async def thread_document_detacher(thread_id: str):
+    """Détache et EFFACE le texte conservé. Un document confidentiel doit pouvoir
+    être retiré sans laisser de trace."""
+    import core.database as _db
+    return {"ok": _db.clear_thread_document(thread_id)}
+
 class GeminiPinReq(BaseModel):
     contenu: str = ""
     chemin: Optional[str] = None
@@ -2693,6 +2759,7 @@ _COANIMM_TOOLS = [
     {"tool": "describe_video", "label": "Décrire une vidéo (fichier ou lien)", "category": "Images"},
     {"tool": "describe_audio", "label": "Décrire un document sonore (ton, bruits, musique)", "category": "Audio & voix"},
     {"tool": "pin_document", "label": "Épingler un document et l'interroger (cache Gemini)", "category": "Documents"},
+    {"tool": "thread_document", "label": "Attacher un document à la conversation", "category": "Documents"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},

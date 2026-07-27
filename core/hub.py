@@ -55,6 +55,56 @@ def _strip_appels_texte(text):
     return _RE_APPEL_TEXTE_HIST.sub('', text)
 
 
+_REGIME_CACHE = {
+    'anthropic': ("Claude met en cache les préfixes identiques d'un tour à l'autre : "
+                  "les relectures du document seront facturées à 10 %."),
+    'gemini': ("Gemini met automatiquement en cache les longs préfixes (à partir "
+               "d'environ 2000 jetons) : les relectures coûtent 10 %. Pour une "
+               "garantie d'économie, épingle plutôt le document dans le panneau "
+               "« Documents épinglés »."),
+    'deepseek': ("DeepSeek met automatiquement en cache les préfixes déjà vus : "
+                 "les relectures coûtent 10 %."),
+}
+_REGIME_CACHE_DEFAUT = ("Ce fournisseur ne propose pas de cache de contexte : le "
+                        "document est renvoyé en entier à chaque question, et facturé "
+                        "comme tel.")
+
+def regime_de_cache(provider: str) -> str:
+    """Ce qu'un document attaché coûtera vraiment, selon le fournisseur actif.
+
+    NIMM parle à sept fournisseurs qui ne facturent pas de la même façon.
+    Annoncer « c'est mis en cache » sans distinction serait faux pour la
+    moitié d'entre eux ; on dit donc ce qui s'applique réellement.
+    """
+    return _REGIME_CACHE.get((provider or '').lower(), _REGIME_CACHE_DEFAUT)
+
+
+def _document_du_fil(thread_id: str) -> tuple:
+    """Document explicitement attaché à cette conversation : (texte, titre).
+
+    À ne pas confondre avec la base de connaissances, qui DEVINE quels
+    documents peuvent servir. Ici l'utilisateur a désigné le document : on ne
+    devine plus rien, et on n'y ajoute pas de suggestions (voir le PDF
+    d'accessibilité servi au milieu d'une conversation bancaire).
+    """
+    if not thread_id:
+        return '', ''
+    try:
+        from core.database import get_thread_document
+        fiche = get_thread_document(thread_id)
+    except Exception:
+        return '', ''
+    texte = (fiche.get('texte') or '').strip()
+    if not texte:
+        return '', ''
+    titre = fiche.get('titre') or 'Document'
+    if fiche.get('tronque'):
+        texte += ("\n\n[…] (Le document a été tronqué : seuls les "
+                  f"{len(texte)} premiers caractères sur {fiche.get('nb_car', 0)} "
+                  "sont fournis. Dis-le si la réponse dépend de la suite.)")
+    return texte, titre
+
+
 def _document_vraiment_utilise(reponse: str, doc_context: str) -> bool:
     """La réponse s'appuie-t-elle réellement sur le document injecté ?
 
@@ -707,7 +757,7 @@ _(Pour chaque reponse, je corrigerai automatiquement ma memoire.)_"""
 # CONSTRUCTION DU PROMPT SYSTÈME
 # ══════════════════════════════════════════
 
-def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = None, presence_note: str = '', last_dominant: str = '', user_name: str = '', biblio_context: str = '', force_mem: bool = False, recent_messages: list = None, location: str = '', session_bilans: list = None, doc_context: str = '') -> str:
+def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = None, presence_note: str = '', last_dominant: str = '', user_name: str = '', biblio_context: str = '', force_mem: bool = False, recent_messages: list = None, location: str = '', session_bilans: list = None, doc_context: str = '', doc_fil: str = '', doc_fil_titre: str = '') -> str:
     parts = []
 
     # Prompt du masque
@@ -1022,6 +1072,18 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
                 + chr(10).join(_theme_lines) + chr(10)
                 + ']'
             )
+
+    # Document attaché à CETTE conversation — placé avant la mémoire et les
+    # messages récents, c'est-à-dire dans la partie stable du prompt : c'est
+    # cette position qui rend les caches de contexte efficaces.
+    if doc_fil:
+        parts.append(
+            f"\n--- Document de cette conversation : {doc_fil_titre} ---\n{doc_fil}\n"
+            "--- fin du document ---\n"
+            "Ce document a été attaché EXPRÈS à cette conversation par l'utilisateur. "
+            "Réponds à partir de lui en priorité et cite les passages sur lesquels tu "
+            "t'appuies. Si la réponse ne s'y trouve pas, dis-le clairement au lieu de "
+            "combler avec des connaissances générales.")
 
     # Bibliothèque — conversations archivées pertinentes
     if biblio_context:
@@ -3823,8 +3885,15 @@ async def process_message(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
-    doc_context, _doc_titles = _match_documents(user_message)
-    system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context)
+    # Un document ATTACHÉ au fil l'emporte sur la base de connaissances : quand
+    # l'utilisateur a désigné son document, deviner en plus n'apporte que du bruit.
+    _doc_fil, _doc_fil_titre = _document_du_fil(thread_id)
+    if _doc_fil:
+        doc_context, _doc_titles = '', []
+    else:
+        doc_context, _doc_titles = _match_documents(user_message)
+    system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
+                                    doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
 
     # 7. Historique recent (60 derniers messages)
     history = get_messages(thread_id, limit=60)
@@ -4174,8 +4243,15 @@ async def process_message_stream(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
-    doc_context, _doc_titles = _match_documents(user_message)
-    system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context)
+    # Un document ATTACHÉ au fil l'emporte sur la base de connaissances : quand
+    # l'utilisateur a désigné son document, deviner en plus n'apporte que du bruit.
+    _doc_fil, _doc_fil_titre = _document_du_fil(thread_id)
+    if _doc_fil:
+        doc_context, _doc_titles = '', []
+    else:
+        doc_context, _doc_titles = _match_documents(user_message)
+    system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
+                                    doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
 
     # 4. Historique
     history  = get_messages(thread_id, limit=60)

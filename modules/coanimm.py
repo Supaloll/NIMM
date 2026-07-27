@@ -186,6 +186,11 @@ GENERATE_SYSTEM_PROMPT = (
     "voice : id de voix (appeler nimm_list_voices() pour les options y compris voix Voxtral personnalisées) ; "
     "vide = voix par défaut. "
     "Retourne le chemin du fichier .daisy.\n"
+    "nimm_attach_document(chemin='', texte='', titre='') : ATTACHE un document à LA "
+    "CONVERSATION EN COURS. Il est ensuite fourni au modèle à chaque question du fil, "
+    "et la base de connaissances cesse de proposer autre chose. C'est le bon outil "
+    "quand l'utilisateur dit « parlons de ce document ».\n"
+    "nimm_detach_document() : détache et efface le texte conservé.\n"
     "nimm_pin_document(chemin='', contenu='', titre='', duree_h=1) : ÉPINGLE un long "
     "document chez Gemini (cache explicite). On paie la lecture UNE fois, puis chaque "
     "question coûte une fraction. Rend {ok, titre, nb_tokens}. Minimum ~2000 jetons.\n"
@@ -443,6 +448,21 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    with _nimm_ur.urlopen(_req, timeout=600) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
+    ad = (
+        "def nimm_attach_document(chemin='', texte='', titre='', _tid='%(t)s'):\n"
+        "    _data = _nimm_json.dumps({\"chemin\": chemin, \"texte\": texte, \"titre\": titre}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/threads/\" + _tid + \"/document\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
+        "        return _nimm_json.loads(_r.read())\n"
+        "\n"
+        "def nimm_detach_document(_tid='%(t)s'):\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/threads/\" + _tid + \"/document\", method=\"DELETE\")\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"ok\", False)\n"
+    ) % {'t': tid}
     ep = (
         "def nimm_pin_document(chemin='', contenu='', titre='', consigne='', duree_h=1, _tid='%(t)s'):\n"
         "    _data = _nimm_json.dumps({\"chemin\": chemin, \"contenu\": contenu, \"titre\": titre,\n"
@@ -508,6 +528,11 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     parts.append(ad if "ask_documents" not in _disabled else _stub("nimm_ask_documents", "interroger la base avec citations"))
     parts.append(dv if "describe_video" not in _disabled else _stub("nimm_describe_video", "décrire une vidéo"))
     parts.append(da if "describe_audio" not in _disabled else _stub("nimm_describe_audio", "décrire un audio"))
+    if "thread_document" not in _disabled:
+        parts.append(ad)
+    else:
+        parts.append(_stub("nimm_attach_document", "attacher un document au fil"))
+        parts.append(_stub("nimm_detach_document", "détacher le document du fil"))
     if "pin_document" not in _disabled:
         parts.append(ep)
     else:
