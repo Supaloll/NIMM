@@ -274,7 +274,14 @@ async def root():
         html = _f.read()
     html = html.replace('/static/styles.css"', f'/static/styles.css?v={_STATIC_VERSION}"')
     html = html.replace('/static/app.js"',    f'/static/app.js?v={_STATIC_VERSION}"')
-    return HTMLResponse(content=html)
+    # La page index.html elle-meme ne doit jamais etre mise en cache par le
+    # navigateur (contrairement a styles.css/app.js qui ont leur propre
+    # cache-busting via ?v=). Sans ca, un telephone peut garder une version
+    # perimee de la page (balises meta, structure HTML) malgre nos mises a jour.
+    return HTMLResponse(content=html, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+    })
 
 @app.get("/api/embeddings/status")
 async def embeddings_status():
