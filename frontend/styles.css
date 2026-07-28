@@ -1428,6 +1428,14 @@ body {
     padding-left: 4px;
 }
 
+/* Correctif chevauchement : ce bloc n'est pas une paire étiquette+menu comme
+   les autres lignes de .routing-grid, il doit occuper toute la largeur pour
+   ne pas décaler les lignes suivantes (label/select alternés). Fix CSS pur,
+   aucun impact sur le DOM/ARIA/ordre de tabulation. */
+#pixtral-model-row {
+    grid-column: 1 / -1;
+}
+
 .routing-select.key-missing {
     border-color: #e07b3a;
     color: var(--text-muted);
