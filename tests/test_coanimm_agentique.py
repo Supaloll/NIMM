@@ -1771,6 +1771,121 @@ def test_veille():
     ok("veille : échéance pure, déjà-vu respecté, panne muette, relevé hors du chemin chaud")
 
 
+def test_catalogue_services():
+    """La liste des services était écrite EN DUR à trois endroits du frontend.
+
+    Conséquence concrète : en branchant Exa, Cohere, Voyage et Jina, leurs clés
+    n'avaient AUCUN champ où être saisies — le code existait, la fonction était
+    inatteignable. Un catalogue serveur unique règle le problème et interdit
+    qu'il revienne.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    import core.services as SV
+
+    ids = SV.ids()
+    assert len(ids) == len(set(ids)), 'identifiants uniques'
+    # Les services branchés récemment doivent être saisissables
+    for attendu in ('exa', 'cohere', 'voyage', 'jina'):
+        assert attendu in ids, attendu + " n'a nulle part où recevoir sa clé"
+    # Et les anciens ne doivent pas avoir disparu au passage
+    for ancien in ('anthropic', 'mistral', 'gemini', 'openai', 'openrouter',
+                   'deepseek', 'brave', 'tavily', 'stability_ai'):
+        assert ancien in ids, ancien + ' a disparu du catalogue'
+
+    groupes = SV.par_famille({'exa': 'kkk', 'anthropic': '   '})
+    assert sum(len(g['services']) for g in groupes) == len(ids), 'aucun service perdu'
+    plat = {x['id']: x for g in groupes for x in g['services']}
+    assert plat['exa']['configure'] is True
+    assert plat['anthropic']['configure'] is False, 'une clé de blancs ne compte pas'
+    assert all(s.get('role') for s in SV.SERVICES), 'chaque service dit à quoi il sert'
+    # Le catalogue ne doit JAMAIS laisser fuiter une clé vers le frontend
+    assert 'kkk' not in json.dumps(groupes, ensure_ascii=False), \
+        'le formulaire n’a pas besoin des secrets, seulement de l’état'
+    assert SV.html_id('stability_ai') == 'stability-ai', 'convention d’identifiant HTML'
+
+    # Une famille mal orthographiée ne doit pas faire disparaître un service
+    faux = dict(SV.SERVICES[0]); faux['id'] = 'zzz'; faux['famille'] = 'inconnue'
+    SV.SERVICES.append(faux); SV._PAR_ID['zzz'] = faux
+    try:
+        g2 = SV.par_famille({})
+        assert 'zzz' in {x['id'] for gr in g2 for x in gr['services']}
+    finally:
+        SV.SERVICES.pop(); SV._PAR_ID.pop('zzz', None)
+
+    assert '/api/settings/services' in mn
+    assert 'id="api-keys-auto"' in html, 'point d’accroche du formulaire engendré'
+    assert 'api-key-anthropic' not in html, 'plus aucune saisie en dur'
+    assert app.count("_svcIds()") >= 3, 'les trois listes en dur sont remplacées'
+    assert "'anthropic', 'deepseek'" in app, 'un repli subsiste si la route échoue'
+    assert 'aria-describedby' in app, 'le rôle du service est lu au focus'
+    assert '_svcEchappe' in app, 'le catalogue est injecté en HTML : il faut échapper'
+    ok("catalogue des services : source unique, clés saisissables, secrets non exposés")
+
+
+def test_exa_avance():
+    """Exa au-delà de la recherche simple : filtrer, résumer, lire proprement."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    coa = open(os.path.join(racine, 'modules', 'coanimm.py'), encoding='utf-8').read()
+    import modules.veille as V
+
+    # Résumé ciblé : on veut écouter une réponse, pas le début d'un site
+    bloc = V._bloc_contenus(question_resume='Quelles obligations pour les libraires ?')
+    assert bloc['summary']['query'].startswith('Quelles obligations')
+    assert 'summary' not in V._bloc_contenus(), 'pas de résumé si on n’en demande pas'
+
+    # Catégories : valeurs imposées par Exa, libellés français
+    assert 'research paper' in V.CATEGORIES and 'pdf' in V.CATEGORIES
+    assert V.CATEGORIES[''] == 'Tout'
+
+    envois = {}
+    vrai = V._appel_exa
+    V._appel_exa = lambda chemin, corps, k=None: (envois.update({'c': chemin, 'b': corps}),
+                                                  ({'results': []}, ''))[1]
+    try:
+        V.exa_search('accessibilité des livres', nb=5, depuis_jours=7,
+                     categorie='research paper', domaines_exclus=['spam.fr'])
+        b = envois['b']
+        assert envois['c'] == 'search'
+        assert b['category'] == 'research paper'
+        assert b['excludeDomains'] == ['spam.fr']
+        assert b['numResults'] == 5 and b['type'] == 'auto'
+        assert b['contents']['summary']['query'] == 'accessibilité des livres', \
+            'le résumé doit répondre À LA question posée'
+        assert b['startPublishedDate'].endswith('T00:00:00.000Z')
+
+        # Une catégorie inventée ne doit pas être transmise : Exa renverrait 400
+        V.exa_search('x', categorie='n’importe quoi')
+        assert 'category' not in envois['b'], 'catégorie inconnue → non transmise'
+
+        # Sans résumé, on garde le texte brut
+        V.exa_search('x', resume=False)
+        assert 'summary' not in envois['b']['contents']
+
+        # Lecture propre d'une page
+        V.exa_lire('http://a.fr')
+        assert envois['c'] == 'contents' and envois['b']['urls'] == ['http://a.fr']
+        assert V.exa_lire([])[1], 'adresse vide → message, pas de plantage'
+        assert V.exa_lire('http://a.fr')[1] == "Exa n'a rien pu extraire de cette adresse."
+    finally:
+        V._appel_exa = vrai
+
+    # La catégorie voyage jusqu'au sujet de veille
+    import inspect
+    assert 'categorie' in inspect.signature(V.add_sujet).parameters
+    assert 'categorie=cat' in inspect.getsource(V.relever_sujet), \
+        'un sujet filtré doit le rester à chaque relevé'
+
+    assert '/api/exa/lire' in mn and '"categories"' in mn
+    assert 'nimm_lire_page' in coa
+    ok("Exa avancé : catégories filtrées, résumé ciblé, lecture propre d’une page")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -1797,6 +1912,7 @@ if __name__ == '__main__':
                test_choix_dans_la_base,
                test_reordonnancement,
                test_veille,
+               test_catalogue_services, test_exa_avance,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

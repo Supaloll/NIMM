@@ -97,42 +97,96 @@ def _lire_resultats(data):
     return [r for r in sortie if r['url']]
 
 
-def _bloc_contenus(nb_caracteres=2000, resume=False):
+# Les catégories d'Exa filtrent à la SOURCE. « Article de recherche » sur une
+# veille scientifique évite des dizaines de billets de blog ; « PDF » ramène des
+# documents lisibles hors ligne. Libellés français, valeurs imposées par l'API.
+CATEGORIES = {
+    '': 'Tout',
+    'research paper': 'Articles de recherche',
+    'news': 'Actualités',
+    'pdf': 'Documents PDF',
+    'company': 'Sites d\u2019entreprises ou d\u2019organisations',
+    'github': 'Dépôts de code',
+    'personal site': 'Sites personnels et blogs',
+    'financial report': 'Rapports financiers',
+}
+
+
+def _bloc_contenus(nb_caracteres=2000, question_resume=''):
+    """Ce qu'on demande à Exa de rapporter pour chaque résultat.
+
+    Le résumé est le point important pour une écoute à la synthèse vocale :
+    plutôt que 2000 caractères de page brute, Exa rend trois phrases répondant
+    à LA question posée. On écoute une réponse, pas un site.
+    """
     c = {'text': {'maxCharacters': nb_caracteres}}
-    if resume:
-        c['summary'] = {'query': 'De quoi parle ce document, en trois phrases ?'}
+    if (question_resume or '').strip():
+        c['summary'] = {'query': question_resume.strip()[:400]}
     return c
 
 
 def exa_search(requete, nb=8, depuis_jours=None, domaines_exclus=None,
-               categorie='', api_keys=None):
-    """Recherche par le sens. Rend (résultats, erreur)."""
+               categorie='', api_keys=None, resume=True, domaines_inclus=None):
+    """Recherche par le sens. Rend (résultats, erreur).
+
+    `resume` fait rédiger par Exa, pour chaque résultat, trois phrases répondant
+    à la requête : c'est ce qu'on veut écouter, plutôt qu'un début de page.
+    """
     if not (requete or '').strip():
         return [], "Requête vide."
     corps = {'query': requete.strip(), 'numResults': max(1, min(25, int(nb))),
-             'type': 'auto', 'contents': _bloc_contenus()}
+             'type': 'auto',
+             'contents': _bloc_contenus(question_resume=requete if resume else '')}
     if depuis_jours:
         corps['startPublishedDate'] = (
             datetime.now() - timedelta(days=int(depuis_jours))).strftime('%Y-%m-%dT00:00:00.000Z')
     if domaines_exclus:
         corps['excludeDomains'] = list(domaines_exclus)
-    if categorie:
+    if domaines_inclus:
+        corps['includeDomains'] = list(domaines_inclus)
+    if categorie and categorie in CATEGORIES:
         corps['category'] = categorie
     data, err = _appel_exa('search', corps, api_keys)
     return (_lire_resultats(data), '') if not err else ([], err)
 
 
-def exa_similar(url, nb=8, depuis_jours=None, api_keys=None):
+def exa_similar(url, nb=8, depuis_jours=None, api_keys=None, categorie=''):
     """Documents proches d'une page donnée — « encore comme celui-ci »."""
     if not (url or '').strip():
         return [], "Aucune adresse fournie."
     corps = {'url': url.strip(), 'numResults': max(1, min(25, int(nb))),
              'contents': _bloc_contenus()}
+    if categorie and categorie in CATEGORIES:
+        corps['category'] = categorie
     if depuis_jours:
         corps['startPublishedDate'] = (
             datetime.now() - timedelta(days=int(depuis_jours))).strftime('%Y-%m-%dT00:00:00.000Z')
     data, err = _appel_exa('findSimilar', corps, api_keys)
     return (_lire_resultats(data), '') if not err else ([], err)
+
+
+def exa_lire(urls, nb_caracteres=8000, api_keys=None):
+    """Rend le TEXTE PROPRE d'une ou plusieurs pages web.
+
+    Un article lu par un lecteur d'écran depuis un navigateur, c'est aussi les
+    menus, les bandeaux de consentement et les encarts publicitaires. Exa rend
+    le contenu débarrassé de tout cela — donc directement écoutable, et
+    directement versable dans la base de connaissances.
+    """
+    if isinstance(urls, str):
+        urls = [urls]
+    urls = [u.strip() for u in (urls or []) if (u or '').strip()]
+    if not urls:
+        return [], "Aucune adresse fournie."
+    data, err = _appel_exa('contents', {'urls': urls[:10],
+                                        'text': {'maxCharacters': int(nb_caracteres)}},
+                           api_keys)
+    if err:
+        return [], err
+    resultats = _lire_resultats(data)
+    if not resultats:
+        return [], "Exa n'a rien pu extraire de cette adresse."
+    return resultats, ''
 
 
 # ────────────────────────── sujets de veille ──────────────────────────
@@ -160,7 +214,8 @@ def list_sujets():
     return v if isinstance(v, list) else []
 
 
-def add_sujet(libelle, requete, periode='hebdomadaire', url_reference='', nb=8):
+def add_sujet(libelle, requete, periode='hebdomadaire', url_reference='', nb=8,
+              categorie=''):
     """Ajoute un sujet suivi. `url_reference` remplace la requête si fournie :
     on cherche alors ce qui RESSEMBLE à cette page."""
     import uuid
@@ -172,6 +227,7 @@ def add_sujet(libelle, requete, periode='hebdomadaire', url_reference='', nb=8):
         'url_reference': (url_reference or '').strip()[:500],
         'periode': periode if periode in PERIODES else 'hebdomadaire',
         'nb': max(1, min(25, int(nb or 8))),
+        'categorie': categorie if categorie in CATEGORIES else '',
         'actif': True,
         'cree_le': datetime.now().isoformat(timespec='seconds'),
         'dernier_run': '',
@@ -242,12 +298,13 @@ def relever_sujet(sujet, api_keys=None, ingerer=True):
     # On ratisse un peu plus large que la période : un article publié la veille
     # du dernier relevé n'aurait sinon jamais été vu.
     fenetre = jours * 2
+    cat = sujet.get('categorie', '') or ''
     if (sujet.get('url_reference') or '').strip():
         resultats, err = exa_similar(sujet['url_reference'], sujet.get('nb', 8),
-                                     fenetre, api_keys)
+                                     fenetre, api_keys, categorie=cat)
     else:
         resultats, err = exa_search(sujet.get('requete', ''), sujet.get('nb', 8),
-                                    fenetre, api_keys=api_keys)
+                                    fenetre, api_keys=api_keys, categorie=cat)
     if err:
         return [], f"Veille « {sujet.get('libelle', '?')} » : {err}"
 
