@@ -195,12 +195,30 @@ document.querySelectorAll('.agent-mode-btn').forEach(function(btn) {
 });
 
 // Le bouton Vibe n'est visible que si une clé Mistral est enregistrée (Vibe = Mistral cloud européen).
+let _providerActif = '';
+
+// L'agent Vibe suppose que Mistral RÉPOND : le serveur refuse et retombe sur le
+// chat normal si un autre modèle est actif. Le bouton ne dépendait que de la
+// PRÉSENCE d'une clé Mistral — on pouvait donc choisir un mode qui n'allait pas
+// s'appliquer, sans autre indice qu'un repli après coup. Il suit maintenant le
+// modèle réellement actif.
 async function _refreshVibeButtonVisibility(keys) {
     var btn = document.getElementById('agent-btn-vibe');
     if (!btn) return;
     try {
         if (!keys) keys = await fetch('/api/settings/api-keys').then(function(r) { return r.json(); });
-        btn.hidden = !(keys && keys.mistral);
+        var aLaCle = !!(keys && keys.mistral);
+        var sel = document.getElementById('provider-select');
+        var actif = (sel && sel.value) || _providerActif || '';
+        var mistralActif = String(actif).toLowerCase() === 'mistral';
+        btn.hidden = !(aLaCle && mistralActif);
+        btn.title = mistralActif ? 'Vibe — agent Mistral'
+                                 : 'Vibe — nécessite que Mistral soit le modèle actif';
+        // Si le mode était sélectionné et ne s'applique plus, on revient au standard.
+        if (btn.hidden && btn.getAttribute('aria-pressed') === 'true') {
+            _setAgentMode('');
+            _srAnnounce("Mode Vibe désactivé : il nécessite Mistral comme modèle actif.");
+        }
     } catch (e) { btn.hidden = true; }
 }
 
@@ -2855,6 +2873,7 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
         <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
         <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
+        <button class="copy-menu-item" role="menuitem" data-action="verify" data-needs-key="anthropic" aria-label="Vérifier les faits de cette réponse">🔎 Vérifier les faits</button>
     `;
     actBtn.setAttribute('aria-haspopup', 'menu');
     actBtn.setAttribute('aria-expanded', 'false');
@@ -2904,6 +2923,13 @@ function appendAssistantMessage(content, dominant = 'neutre', animate = true) {
         _toggleExportMark(div, content, 'assistant');
         const btn = actMenu.querySelector('[data-action="mark"]');
         btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
+    });
+
+    { const _v = actMenu.querySelector('[data-action="verify"]');
+      if (_v) _v.hidden = !_cleDisponible('anthropic'); }
+    actMenu.querySelector('[data-action="verify"]')?.addEventListener('click', () => {
+        actMenu.style.display = 'none'; actBtn.focus();
+        _verifierReponse(content, div.querySelector('.message-bubble'));
     });
 
     document.addEventListener('click', () => actMenu.style.display = 'none');
@@ -3481,6 +3507,7 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
             <button class="copy-menu-item" role="menuitem" data-action="regen">🔄 Régénérer</button>
             <button class="copy-menu-item" role="menuitem" data-action="fork">⑂ Forker ici</button>
             <button class="copy-menu-item" role="menuitem" data-action="mark">⭐ Marquer pour export</button>
+            <button class="copy-menu-item" role="menuitem" data-action="verify" data-needs-key="anthropic" aria-label="Vérifier les faits de cette réponse">🔎 Vérifier les faits</button>
         `;
         actBtn.setAttribute('aria-haspopup', 'menu');
         actBtn.setAttribute('aria-expanded', 'false');
@@ -3604,6 +3631,13 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                 if (data === '[DONE]') break;
 
                 if (data === '[TRUNCATED]') { _streamTruncated = true; continue; }
+                if (data.startsWith('[RAISONNEMENT]')) {
+                    // Chaîne de pensée d'un modèle de raisonnement : déjà payée,
+                    // rendue consultable — mais repliée, pour ne pas doubler la
+                    // longueur de ce qu'il y a à lire.
+                    try { _streamRaisonnement = JSON.parse(data.slice(14)); } catch (e) {}
+                    continue;
+                }
 
                 if (data.startsWith('[META]')) {
                     try {
@@ -3833,12 +3867,19 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
         if (!_userScrolledUp) messagesDiv.scrollTop = messagesDiv.scrollHeight;
         const finalContent = bubble.textContent;
         _updateFloatTTS(finalContent, div);
-        _srAnnounce('NIMM t\'a répondu.');
+        const _plan = _planDeLaReponse(bubble);
+        _srAnnounce(_plan ? `NIMM t'a répondu — ${_plan}` : "NIMM t'a répondu.");
 
         // Bouton Continuer si réponse tronquée (max_tokens)
+        if (_streamRaisonnement) {
+            _ajouterRaisonnement(bubble, _streamRaisonnement);
+            _streamRaisonnement = '';
+        }
         if (_streamTruncated) {
             _streamTruncated = false;
             addContinueButton(div, conversationId);
+            _srAnnounce("Réponse interrompue : elle a atteint la limite de longueur. "
+                      + "Un bouton Continuer est disponible en fin de message.");
         }
 
         // Brancher le bouton TTS individuel de cette bulle
@@ -3871,6 +3912,13 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
             _toggleExportMark(div, finalContent, 'assistant');
             const btn = actMenu.querySelector('[data-action="mark"]');
             btn.textContent = div.dataset.exportMarked ? '★ Marqué' : '⭐ Marquer pour export';
+        });
+
+        { const _v = actMenu.querySelector('[data-action="verify"]');
+          if (_v) _v.hidden = !_cleDisponible('anthropic'); }
+        actMenu.querySelector('[data-action="verify"]')?.addEventListener('click', () => {
+            actMenu.style.display = 'none'; actBtn.focus();
+            _verifierReponse(bubble?.dataset.rawText || bubble?.textContent || '', bubble);
         });
 
         // Appliquer l'expression finale
@@ -4563,9 +4611,41 @@ function _updatePixtralModelVisibility(visionProvider) {
     if (row) row.style.display = visionProvider === 'mistral' ? '' : 'none';
 }
 
+// Clés réellement configurées, mémorisées pour les éléments construits à la volée.
+let _clesConfigurees = {};
+
+function _cleDisponible(nom) {
+    return !!(_clesConfigurees[nom] || _clesConfigurees[String(nom).replace('-', '_')]);
+}
+
+// Règle unique pour TOUTE l'interface : un élément portant data-needs-key n'a de
+// sens que si la clé correspondante existe. Une option de liste est GRISÉE (la
+// liste garde ses entrées, et l'on comprend pourquoi elle est indisponible) ;
+// tout le reste est MASQUÉ — exposer un panneau inutilisable allonge le parcours
+// au lecteur d'écran pour rien.
+function _majVisibiliteParCle(keys) {
+    _clesConfigurees = keys || {};
+    document.querySelectorAll('option[data-needs-key]').forEach(opt => {
+        const needed = opt.dataset.needsKey;
+        opt.disabled = !_cleDisponible(needed);
+        opt.title    = opt.disabled ? `Clé « ${needed} » non configurée` : '';
+    });
+    document.querySelectorAll('[data-needs-key]:not(option)').forEach(el => {
+        el.hidden = !_cleDisponible(el.dataset.needsKey);
+    });
+    document.querySelectorAll('select').forEach(sel => {
+        const cur = sel.options[sel.selectedIndex];
+        if (cur && cur.disabled) {
+            const premier = Array.from(sel.options).find(o => !o.disabled);
+            if (premier) sel.value = premier.value;
+        }
+    });
+}
+
 function _applyProviderConstraints(keys) {
     // Bouton Vibe visible uniquement si une clé Mistral est enregistrée.
     _refreshVibeButtonVisibility(keys);
+    _majVisibiliteParCle(keys);
     // 1. Désactiver les options sans clé
     document.querySelectorAll('.routing-select option[data-needs-key]').forEach(opt => {
         const needed  = opt.dataset.needsKey;
@@ -5129,6 +5209,8 @@ async function _populateModelSelect(provider, savedModel, selId = 'model-select'
 }
 
 document.getElementById('provider-select')?.addEventListener('change', async (e) => {
+    _providerActif = e.target.value;
+    _refreshVibeButtonVisibility();      // Vibe n'a de sens que si Mistral répond
     await _saveRouting('chat', e.target.value);
     _autoSaveFlash(e.target);
     _checkProviderBanner();
@@ -9787,6 +9869,212 @@ async function _coanimmPollScheduleNotifications() {
 setInterval(_coanimmPollScheduleNotifications, _COANIMM_NOTIF_INTERVAL_MS);
 setTimeout(_coanimmPollScheduleNotifications, 5000);
 
+// ── Vérifier les faits d'une réponse (recherche web + sources) ──
+// Le résultat s'insère REPLIÉ : une seule ligne de bilan, dépliable à la demande,
+// et refermable. Objectif : ne pas alourdir le fil ni la lecture séquentielle.
+function _verifBilanCourt(verdict, nbSources) {
+    const t = (verdict || '').toLowerCase();
+    let etat = 'résultat disponible';
+    if (/aucune affirmation|rien à vérifier|trop court/.test(t)) etat = 'rien à vérifier';
+    else if (/erron|incorrect|faux|inexact|douteu|contredit/.test(t)) etat = 'points à revoir';
+    else if (/tout est correct|tout concorde|exact|confirmé/.test(t)) etat = 'rien à signaler';
+    return `Vérification des faits : ${etat}` + (nbSources ? ` (${nbSources} source${nbSources > 1 ? 's' : ''})` : '');
+}
+
+async function _verifierReponse(texte, bulle) {
+    if (!texte || texte.trim().length < 40) {
+        _srAnnounce("Ce message est trop court pour être vérifié.");
+        return;
+    }
+    _srAnnounce("Vérification en cours, recherche des sources…");
+    bulle?.querySelector('.verif-bloc')?.remove();      // une seule vérification à la fois
+    let bloc = null;
+    if (bulle) {
+        bloc = document.createElement('details');
+        bloc.className = 'verif-bloc';
+        bloc.style.cssText = 'margin-top:6px;font-size:0.84rem;';
+        const som = document.createElement('summary');
+        som.textContent = 'Vérification en cours…';
+        som.style.cursor = 'pointer';
+        bloc.appendChild(som);
+        bulle.appendChild(bloc);
+    }
+    try {
+        const r = await fetch('/api/verify', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: texte, thread_id: currentThreadId || null }),
+        });
+        const d = await r.json();
+        const verdict = d.verdict || 'Aucun verdict.';
+        const sources = d.sources || [];
+        if (!bloc) { _srAnnounce(verdict); return; }
+
+        bloc.innerHTML = '';
+        const som = document.createElement('summary');
+        som.textContent = _verifBilanCourt(verdict, sources.length);
+        som.style.cursor = 'pointer';
+        bloc.appendChild(som);
+
+        const corps = document.createElement('div');
+        corps.style.cssText = 'padding:6px 0 0 4px;border-left:2px solid var(--border);padding-left:8px;margin-top:4px;';
+        const p = document.createElement('div');
+        p.style.whiteSpace = 'pre-wrap';
+        p.textContent = verdict;
+        corps.appendChild(p);
+        if (sources.length) {
+            const ul = document.createElement('ul');
+            ul.setAttribute('aria-label', 'Sources de la vérification');
+            ul.style.cssText = 'margin:6px 0 0;padding-left:1.2em;';
+            sources.forEach(s => {
+                const li = document.createElement('li');
+                const a = document.createElement('a');
+                a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                a.textContent = s.title || s.url;
+                li.appendChild(a);
+                ul.appendChild(li);
+            });
+            corps.appendChild(ul);
+        }
+        const fermer = document.createElement('button');
+        fermer.type = 'button';
+        fermer.textContent = 'Retirer la vérification';
+        fermer.style.cssText = 'margin-top:6px;font-size:0.78rem;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;';
+        fermer.addEventListener('click', () => { bloc.remove(); _srAnnounce('Vérification retirée.'); });
+        corps.appendChild(fermer);
+        bloc.appendChild(corps);
+
+        // Annonce : le bilan court d'abord, le détail reste consultable au besoin.
+        _srAnnounce(som.textContent + '. Dépliez la vérification pour le détail.');
+    } catch (e) {
+        if (bloc) {
+            bloc.innerHTML = '';
+            const som = document.createElement('summary');
+            som.textContent = 'Vérification impossible (erreur réseau).';
+            bloc.appendChild(som);
+        }
+        _srAnnounce('Vérification impossible.');
+    }
+}
+
+// ── Raisonnement des modèles de pensée (deepseek-reasoner…) ──
+// Il arrive dans un champ séparé et était jeté. On l'expose REPLIÉ : disponible
+// pour qui veut comprendre, invisible pour qui veut juste la réponse.
+let _streamRaisonnement = '';
+
+function _ajouterRaisonnement(bulle, texte) {
+    if (!bulle || !texte) return;
+    bulle.querySelector('.raisonnement-bloc')?.remove();
+    const bloc = document.createElement('details');
+    bloc.className = 'raisonnement-bloc';
+    bloc.style.cssText = 'margin-top:6px;font-size:0.84rem;';
+    const som = document.createElement('summary');
+    const mots = texte.split(/\s+/).length;
+    som.textContent = `Raisonnement du modèle (environ ${Math.round(mots / 10) * 10} mots)`;
+    som.style.cursor = 'pointer';
+    bloc.appendChild(som);
+    const corps = document.createElement('div');
+    corps.style.cssText = 'white-space:pre-wrap;padding-left:8px;border-left:2px solid var(--border);margin-top:4px;color:var(--text-muted);';
+    corps.textContent = texte;
+    bloc.appendChild(corps);
+    bulle.appendChild(bloc);
+}
+
+// ── Orientation dans une réponse longue ──
+// Une réponse se découvre linéairement à la voix ou en braille : on ne sait pas où
+// elle va ni combien il reste. On annonce donc sa structure AVANT de la lire, à
+// partir des titres réellement rendus (qui sont aussi les points de navigation du
+// lecteur d'écran). Purement local : aucun appel, aucun coût.
+const _PLAN_SEUIL_MOTS = 120;   // en dessous, l'annonce serait du bruit
+
+function _planDeLaReponse(bulle) {
+    if (!bulle) return '';
+    const texte = (bulle.textContent || '').trim();
+    const mots = texte ? texte.split(/\s+/).length : 0;
+    if (mots < _PLAN_SEUIL_MOTS) return '';
+
+    const titres = Array.from(bulle.querySelectorAll('h1, h2, h3, h4'))
+        .map(h => (h.textContent || '').trim())
+        .filter(Boolean);
+    if (titres.length >= 2) {
+        const liste = titres.slice(0, 6).join(', ');
+        const reste = titres.length > 6 ? `, et ${titres.length - 6} autres` : '';
+        return `${titres.length} sections : ${liste}${reste}.`;
+    }
+    // Pas de titres : on situe au moins l'ampleur et la forme
+    const puces = bulle.querySelectorAll('li').length;
+    const blocsCode = bulle.querySelectorAll('pre').length;
+    const parties = [`environ ${Math.round(mots / 10) * 10} mots`];
+    if (puces >= 3) parties.push(`${puces} points`);
+    if (blocsCode) parties.push(`${blocsCode} bloc${blocsCode > 1 ? 's' : ''} de code`);
+    return parties.join(', ') + '.';
+}
+
+// ── Journal de fonctionnement ──
+// Ces décisions n'existaient que dans la console : inaccessible en pratique.
+async function loadDiagnostics() {
+    const ul = document.getElementById('diagnostics-list');
+    if (!ul) return;
+    try {
+        const r = await fetch('/api/diagnostics');
+        const d = await r.json();
+        const lignes = d.diagnostics || [];
+        ul.innerHTML = '';
+        if (!lignes.length) {
+            const li = document.createElement('li');
+            li.textContent = 'Rien à signaler pour le moment.';
+            li.style.cssText = 'color:var(--text-muted);padding:4px 0;';
+            ul.appendChild(li);
+            return;
+        }
+        lignes.forEach(e => {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:4px 0;border-bottom:1px solid var(--border);';
+            const quand = (e.ts || '').replace('T', ' à ').slice(0, 16);
+            li.textContent = `${quand} — ${e.categorie} : ${e.message}`;
+            ul.appendChild(li);
+        });
+    } catch (e) { /* silencieux */ }
+}
+
+// Le panneau ne se lit que si on l'ouvre : sans indication, une décision
+// importante (panne de fournisseur, cache désactivé) passerait inaperçue.
+// Le titre du panneau porte donc le nombre d'entrées non lues.
+async function _majBadgeDiagnostics() {
+    const som = document.querySelector('#diagnostics-details > summary');
+    if (!som) return;
+    try {
+        const r = await fetch('/api/diagnostics');
+        const d = await r.json();
+        const lignes = d.diagnostics || [];
+        let vu = '';
+        try { vu = localStorage.getItem('diagnostics_vu') || ''; } catch (e) {}
+        const nouveaux = lignes.filter(e => (e.ts || '') > vu).length;
+        som.textContent = '🩺 Journal de fonctionnement'
+            + (nouveaux ? ` — ${nouveaux} nouvelle${nouveaux > 1 ? 's' : ''} entrée${nouveaux > 1 ? 's' : ''}` : '');
+    } catch (e) { /* silencieux */ }
+}
+
+document.getElementById('diagnostics-details')?.addEventListener('toggle', async function () {
+    if (!this.open) return;
+    await loadDiagnostics();
+    try {
+        const r = await fetch('/api/diagnostics');
+        const d = await r.json();
+        const plus_recent = (d.diagnostics || [])[0];
+        if (plus_recent) localStorage.setItem('diagnostics_vu', plus_recent.ts || '');
+    } catch (e) {}
+    _majBadgeDiagnostics();
+});
+_majBadgeDiagnostics();
+setInterval(_majBadgeDiagnostics, 120000);
+document.getElementById('diagnostics-clear-btn')?.addEventListener('click', async () => {
+    try {
+        await fetch('/api/diagnostics', { method: 'DELETE' });
+        await loadDiagnostics();
+        _coanimmAnnounce('Journal de fonctionnement vidé.');
+    } catch (e) { /* silencieux */ }
+});
+
 // ── Serveurs MCP distants ──
 async function loadMcpServers() {
     try {
@@ -11612,6 +11900,376 @@ setupSettingsTabs();
 init();
 
 // ══════════════════════════════════════════
+// VEILLE DOCUMENTAIRE (Exa)
+// ══════════════════════════════════════════
+(function () {
+    function _vStatus(msg) {
+        var el = document.getElementById('veille-status');
+        if (el) el.textContent = msg;
+    }
+
+    async function _veilleCharger(annoncer) {
+        var sel = document.getElementById('veille-select');
+        if (!sel) return;
+        try {
+            var r = await fetch('/api/veille/sujets');
+            var d = await r.json();
+            var sujets = d.sujets || [];
+            sel.innerHTML = sujets.length
+                ? sujets.map(function (s) {
+                      var etat = s.dernier_run
+                          ? ('relevé le ' + s.dernier_run.slice(0, 10)
+                             + (s.nb_trouves ? ', ' + s.nb_trouves + ' nouveauté(s)' : ''))
+                          : 'jamais relevé';
+                      return '<option value="' + s.id + '">' + s.libelle
+                           + ' — ' + s.periode + ', ' + etat
+                           + (s.du ? ' (à relever)' : '') + '</option>';
+                  }).join('')
+                : '<option value="">Aucun sujet suivi</option>';
+            if (annoncer) {
+                _vStatus(sujets.length ? sujets.length + ' sujet(s) suivi(s).'
+                                       : 'Aucun sujet suivi pour l\'instant.');
+            }
+        } catch (e) { if (annoncer) _vStatus('Liste indisponible : ' + e.message); }
+    }
+
+    document.getElementById('veille-add-btn')?.addEventListener('click', async function () {
+        var lib = (document.getElementById('veille-libelle')?.value || '').trim();
+        var req = (document.getElementById('veille-requete')?.value || '').trim();
+        var url = (document.getElementById('veille-url')?.value || '').trim();
+        var per = document.getElementById('veille-periode')?.value || 'hebdomadaire';
+        if (!req && !url) { _vStatus('Décris ce que tu cherches, ou donne une adresse de référence.'); return; }
+        try {
+            var r = await fetch('/api/veille/sujets', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ libelle: lib, requete: req, url_reference: url, periode: per })
+            });
+            if (!r.ok) throw new Error(await r.text());
+            var d = await r.json();
+            _vStatus('Sujet suivi : « ' + d.libelle + ' », relevé ' + d.periode + '.');
+            await _veilleCharger(false);
+        } catch (e) { _vStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('veille-refresh-btn')?.addEventListener('click', function () {
+        _veilleCharger(true);
+    });
+
+    document.getElementById('veille-run-btn')?.addEventListener('click', async function () {
+        var id = document.getElementById('veille-select')?.value || '';
+        if (!id) return;
+        _vStatus('Relevé en cours… (cela peut prendre une minute)');
+        var out = document.getElementById('veille-out');
+        try {
+            var r = await fetch('/api/veille/relever/' + encodeURIComponent(id), { method: 'POST' });
+            var d = await r.json();
+            _vStatus(d.message || 'Relevé terminé.');
+            if (out) {
+                out.innerHTML = '';
+                (d.nouveautes || []).forEach(function (n, i) {
+                    var det = document.createElement('details');
+                    det.style.cssText = 'margin-top:6px;border:1px solid var(--border);border-radius:4px;padding:4px 8px;';
+                    var sum = document.createElement('summary');
+                    sum.textContent = (i + 1) + '. ' + n.titre + (n.date ? ' (' + n.date + ')' : '');
+                    sum.style.cursor = 'pointer';
+                    var pre = document.createElement('pre');
+                    pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;font-size:0.82rem;margin:6px 0 0;';
+                    pre.textContent = n.url + '\n\n' + (n.extrait || '(pas d\'extrait)');
+                    det.appendChild(sum); det.appendChild(pre);
+                    out.appendChild(det);
+                });
+            }
+            await _veilleCharger(false);
+        } catch (e) { _vStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('veille-del-btn')?.addEventListener('click', async function () {
+        var id = document.getElementById('veille-select')?.value || '';
+        if (!id) return;
+        if (!confirm('Ne plus suivre ce sujet ?')) return;
+        try {
+            await fetch('/api/veille/sujets/' + encodeURIComponent(id), { method: 'DELETE' });
+            _vStatus('Sujet retiré.');
+            await _veilleCharger(false);
+        } catch (e) { _vStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('veille-details')?.addEventListener('toggle', function () {
+        if (this.open) _veilleCharger(true);
+    });
+})();
+
+// ══════════════════════════════════════════
+// PERTINENCE DE LA BASE DE CONNAISSANCES (réordonnancement)
+// ══════════════════════════════════════════
+(function () {
+    function _rkStatus(msg) {
+        var el = document.getElementById('rerank-status');
+        if (el) el.textContent = msg;
+    }
+    function _rkVal(id) { return document.getElementById(id)?.value || ''; }
+
+    async function _rerankCharger(annoncer) {
+        try {
+            var r = await fetch('/api/settings/rerank');
+            var d = await r.json();
+            var m = document.getElementById('rag-rerank-mode');
+            if (m) m.value = d.mode || 'auto';
+            var u = document.getElementById('rag-rerank-url');
+            if (u) u.value = d.url || '';
+            var mo = document.getElementById('rag-rerank-modele');
+            if (mo) mo.value = d.modele || '';
+            var se = document.getElementById('rag-rerank-seuil');
+            if (se) se.value = d.seuil;
+            if (annoncer) _rkStatus(d.explication || '');
+        } catch (e) {
+            if (annoncer) _rkStatus('Réglages indisponibles : ' + e.message);
+        }
+    }
+
+    document.getElementById('rerank-save-btn')?.addEventListener('click', async function () {
+        _rkStatus('Enregistrement…');
+        try {
+            var r = await fetch('/api/settings/rerank', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: _rkVal('rag-rerank-mode'),
+                    url: _rkVal('rag-rerank-url'),
+                    modele: _rkVal('rag-rerank-modele'),
+                    seuil: parseFloat(_rkVal('rag-rerank-seuil') || '0.3')
+                })
+            });
+            var d = await r.json();
+            // On annonce l'effet RÉEL, pas « enregistré » : un moteur choisi sans
+            // clé est accepté par le formulaire mais reste sans effet.
+            _rkStatus('Enregistré. ' + (d.explication || ''));
+        } catch (e) { _rkStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('rerank-test-btn')?.addEventListener('click', function () {
+        _rerankCharger(true);
+    });
+
+    document.getElementById('rerank-details')?.addEventListener('toggle', function () {
+        if (this.open) _rerankCharger(true);
+    });
+})();
+
+// ══════════════════════════════════════════
+// DOCUMENT DE LA CONVERSATION (tous fournisseurs)
+// ══════════════════════════════════════════
+(function () {
+    function _tdStatus(msg) {
+        var el = document.getElementById('thread-doc-status');
+        if (el) el.textContent = msg;
+    }
+    function _tdThread() {
+        return (typeof currentThreadId !== 'undefined' && currentThreadId) ? currentThreadId : '';
+    }
+
+    // La base de connaissances alimente le sélecteur : choisir dans une liste
+    // vaut mieux que saisir une adresse Windows au clavier braille.
+    async function _tdRemplirBase() {
+        var sel = document.getElementById('thread-doc-base-select');
+        if (!sel) return;
+        try {
+            var r = await fetch('/api/documents/base');
+            var d = await r.json();
+            var docs = d.documents || [];
+            sel.innerHTML = '<option value="">— choisir un document —</option>'
+                + docs.map(function (x) {
+                      var ko = Math.max(1, Math.round((x.nb_car || 0) / 1000));
+                      return '<option value="' + x.id + '">' + x.titre
+                           + ' (' + ko + ' k caractères'
+                           + (x.capture ? ', versé le ' + x.capture : '') + ')</option>';
+                  }).join('');
+            if (!docs.length) sel.innerHTML = '<option value="">Base de connaissances vide</option>';
+        } catch (e) {
+            sel.innerHTML = '<option value="">Base indisponible</option>';
+        }
+    }
+
+    async function _threadDocRefresh() {
+        var tid = _tdThread();
+        if (!tid) { _tdStatus('Ouvre ou démarre une conversation pour y attacher un document.'); return; }
+        try {
+            var r = await fetch('/api/threads/' + encodeURIComponent(tid) + '/document');
+            var d = await r.json();
+            if (!d.attache) { _tdStatus('Aucun document attaché à cette conversation.'); return; }
+            _tdStatus('Attaché : « ' + d.titre + ' », ' + d.nb_car + ' caractères'
+                    + (d.tronque ? ' (tronqué)' : '') + '. ' + (d.regime || ''));
+        } catch (e) { _tdStatus('Statut indisponible : ' + e.message); }
+    }
+
+    document.getElementById('thread-doc-attach-btn')?.addEventListener('click', async function () {
+        var tid = _tdThread();
+        if (!tid) { _tdStatus('Aucune conversation en cours.'); return; }
+        var refId  = document.getElementById('thread-doc-base-select')?.value || '';
+        var chemin = (document.getElementById('thread-doc-path')?.value || '').trim();
+        if (!refId && !chemin) {
+            _tdStatus('Choisis un document dans la liste, ou indique un chemin.'); return;
+        }
+        _tdStatus('Lecture du document…');
+        try {
+            var corps = refId ? { ref_id: parseInt(refId, 10) } : { chemin: chemin };
+            var r = await fetch('/api/threads/' + encodeURIComponent(tid) + '/document', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(corps)
+            });
+            var d = await r.json();
+            if (!d.ok) { _tdStatus('Échec : ' + (d.erreur || 'raison inconnue')); return; }
+            _tdStatus('Attaché : « ' + d.titre + ' », ' + d.nb_car + ' caractères'
+                    + (d.tronque ? ' (tronqué au-delà de 300 000 caractères)' : '')
+                    + '. ' + (d.regime || ''));
+        } catch (e) { _tdStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('thread-doc-detach-btn')?.addEventListener('click', async function () {
+        var tid = _tdThread();
+        if (!tid) return;
+        try {
+            var r = await fetch('/api/threads/' + encodeURIComponent(tid) + '/document', { method: 'DELETE' });
+            var d = await r.json();
+            _tdStatus(d.ok ? 'Document détaché ; le texte conservé a été effacé.'
+                           : 'Aucun document n’était attaché.');
+        } catch (e) { _tdStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('thread-doc-details')?.addEventListener('toggle', function () {
+        if (this.open) { _tdRemplirBase(); _threadDocRefresh(); }
+    });
+})();
+
+// ══════════════════════════════════════════
+// DOCUMENTS ÉPINGLÉS (cache explicite Gemini)
+// ══════════════════════════════════════════
+(function () {
+    var _pins = [];
+
+    function _pinStatus(msg) {
+        var el = document.getElementById('pin-status-out');
+        if (el) el.textContent = msg;
+    }
+
+    // Combien de temps reste-t-il ? Une durée relative se lit mieux à la
+    // synthèse vocale qu'un horodatage ISO.
+    function _pinRestant(expire) {
+        if (!expire) return '';
+        var ms = new Date(expire).getTime() - Date.now();
+        if (isNaN(ms)) return '';
+        if (ms <= 0) return ' — expiré';
+        var min = Math.round(ms / 60000);
+        if (min < 60) return ' — encore ' + min + ' min';
+        return ' — encore ' + Math.floor(min / 60) + ' h ' + (min % 60) + ' min';
+    }
+
+    async function _pinRefresh(silencieux) {
+        var sel = document.getElementById('pin-select');
+        if (!sel) return;
+        try {
+            var r = await fetch('/api/gemini/pins');
+            var d = await r.json();
+            _pins = d.pins || [];
+        } catch (e) {
+            if (!silencieux) _pinStatus('Liste indisponible : ' + e.message);
+            return;
+        }
+        sel.innerHTML = _pins.length
+            ? _pins.map(function (p) {
+                  var t = (p.titre || p.name);
+                  return '<option value="' + p.name + '">' + t
+                       + ' (' + (p.nb_tokens || 0) + ' jetons)' + _pinRestant(p.expire) + '</option>';
+              }).join('')
+            : '<option value="">Aucun document épinglé</option>';
+        if (!silencieux) {
+            _pinStatus(_pins.length
+                ? _pins.length + ' document(s) épinglé(s).'
+                : 'Aucun document épinglé pour l\'instant.');
+        }
+    }
+
+    document.getElementById('pin-create-btn')?.addEventListener('click', async function () {
+        var chemin = (document.getElementById('pin-file-path')?.value || '').trim();
+        var titre  = (document.getElementById('pin-title')?.value || '').trim();
+        var duree  = parseFloat(document.getElementById('pin-duree')?.value || '2');
+        if (!chemin) { _pinStatus('Indique le chemin du document à épingler.'); return; }
+        _pinStatus('Lecture puis mise en cache… (cela peut prendre une minute)');
+        try {
+            var r = await fetch('/api/gemini/pins', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chemin: chemin, titre: titre, duree_h: duree })
+            });
+            var d = await r.json();
+            if (!d.ok) { _pinStatus('Échec : ' + (d.erreur || 'raison inconnue')); return; }
+            _pinStatus('Épinglé : « ' + (d.titre || titre) + ' », ' + (d.nb_tokens || 0)
+                     + ' jetons. Les questions suivantes coûteront une fraction du prix.');
+            await _pinRefresh(true);
+        } catch (e) { _pinStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('pin-refresh-btn')?.addEventListener('click', function () { _pinRefresh(false); });
+
+    document.getElementById('pin-ask-btn')?.addEventListener('click', async function () {
+        var ref = document.getElementById('pin-select')?.value || '';
+        var q   = (document.getElementById('pin-question')?.value || '').trim();
+        var out = document.getElementById('pin-answer-out');
+        if (!ref) { _pinStatus('Aucun document épinglé à interroger.'); return; }
+        if (!q)   { _pinStatus('Écris ta question.'); return; }
+        _pinStatus('Interrogation du document…');
+        try {
+            var r = await fetch('/api/gemini/pins/ask', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reference: ref, question: q })
+            });
+            var d = await r.json();
+            _pinStatus('Réponse reçue.');
+            if (out) {
+                out.innerHTML = '';
+                var pre = document.createElement('pre');
+                pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;font-size:0.85rem;margin:0;';
+                pre.textContent = d.result || '(vide)';
+                var copie = document.createElement('button');
+                copie.textContent = 'Copier la réponse';
+                copie.className = 'btn-secondary';
+                copie.style.cssText = 'font-size:0.75rem;margin-top:6px;';
+                copie.setAttribute('aria-label', 'Copier la réponse du document épinglé');
+                copie.addEventListener('click', function () {
+                    navigator.clipboard.writeText(pre.textContent).then(function () {
+                        copie.textContent = 'Copié !';
+                        setTimeout(function () { copie.textContent = 'Copier la réponse'; }, 1500);
+                    });
+                });
+                out.appendChild(pre);
+                out.appendChild(copie);
+                pre.setAttribute('tabindex', '-1');
+                pre.focus();
+            }
+        } catch (e) { _pinStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('pin-delete-btn')?.addEventListener('click', async function () {
+        var ref = document.getElementById('pin-select')?.value || '';
+        if (!ref) return;
+        if (!confirm('Libérer ce document épinglé ? Il faudra le réépingler pour l\'interroger à nouveau.')) return;
+        try {
+            await fetch('/api/gemini/pins?name=' + encodeURIComponent(ref), { method: 'DELETE' });
+            _pinStatus('Document libéré.');
+            await _pinRefresh(true);
+        } catch (e) { _pinStatus('Erreur : ' + e.message); }
+    });
+
+    // On ne charge la liste qu'à l'ouverture du panneau : inutile d'appeler
+    // Gemini à chaque démarrage de NIMM.
+    document.getElementById('gemini-pins-details')?.addEventListener('toggle', function () {
+        if (this.open) _pinRefresh(false);
+    });
+})();
+
+// ══════════════════════════════════════════
 // MISTRAL BATCH
 // ══════════════════════════════════════════
 (function () {
@@ -11633,24 +12291,31 @@ init();
             ['magistral-medium-latest', 'Magistral Medium (raisonnement)'],
         ],
         anthropic: [],
+        gemini: [],
     };
     var _BATCH_ANTHROPIC_REPLI = [
         ['claude-haiku-4-5-20251001', 'Claude Haiku (rapide, économique)'],
         ['claude-sonnet-4-6', 'Claude Sonnet (équilibre)'],
+    ];
+    var _BATCH_GEMINI_REPLI = [
+        ['gemini-2.5-flash', 'Gemini Flash (rapide, économique)'],
+        ['gemini-2.5-pro', 'Gemini Pro (plus fin)'],
     ];
     async function _batchPopulateModels() {
         var sel = document.getElementById('batch-model-select');
         if (!sel) return;
         var p = _batchProvider();
         var liste = _BATCH_MODELS[p] || [];
-        if (p === 'anthropic' && !liste.length) {
+        // Mistral garde une liste écrite en dur ; pour les deux autres on
+        // interroge le fournisseur, avec une liste de repli s'il ne répond pas.
+        if ((p === 'anthropic' || p === 'gemini') && !liste.length) {
             try {
-                var r = await fetch('/api/models/anthropic');
+                var r = await fetch('/api/models/' + p);
                 var d = await r.json();
                 liste = (d.models || []).map(function (m) { return [m.id, m.label || m.id]; });
             } catch (e) { /* repli */ }
-            if (!liste.length) liste = _BATCH_ANTHROPIC_REPLI;
-            _BATCH_MODELS.anthropic = liste;
+            if (!liste.length) liste = (p === 'gemini' ? _BATCH_GEMINI_REPLI : _BATCH_ANTHROPIC_REPLI);
+            _BATCH_MODELS[p] = liste;
         }
         sel.innerHTML = liste.map(function (m) {
             return '<option value="' + m[0] + '">' + m[1] + '</option>';
@@ -11713,7 +12378,8 @@ init();
                 detail = ' | ' + (d.succeeded || 0) + ' réussies, ' + (d.errored || 0)
                        + ' en erreur, ' + (d.processing || 0) + ' en cours';
             }
-            _batchSetStatus('Statut : ' + d.status + detail);
+            _batchSetStatus('Statut : ' + (d.libelle || d.status) + detail
+                          + (d.erreur ? ' — ' + d.erreur : ''));
         } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
     });
 

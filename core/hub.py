@@ -35,7 +35,92 @@ _pending_citations: _ContextVar = _ContextVar('nimm_pending_citations', default=
 # ASSAINISSEUR D'HISTORIQUE (correctif 400 Mistral)
 # ══════════════════════════════════════════
 
-_DOCS_FOOTER_RE = re.compile(r'\n{0,2}—?[ \t]*\U0001f4c4[ \t]*Documents consult[^\n]*')
+_DOCS_FOOTER_RE = re.compile(
+    r'\n{0,2}—?[ \t]*\U0001f4c4[ \t]*(?:Documents consult|Source[ \t]*:[ \t]*ta base)[^\n]*')
+
+
+# Un appel d'outil écrit en texte par le modèle (« <function=nom>{…} ») est
+# ENREGISTRÉ dans le fil comme une réponse ordinaire. Il est donc renvoyé au modèle
+# à chaque tour suivant, qui voit le motif et le reproduit : le défaut s'auto-entretient
+# dans ce fil. On le retire de l'historique pour briser la boucle.
+_RE_APPEL_TEXTE_HIST = re.compile(
+    r'<function\s*=\s*[A-Za-z0-9_\-]+\s*>\s*\{.*?\}\s*(?:</function>)?',
+    re.DOTALL)
+
+
+def _strip_appels_texte(text):
+    """Retire d'un contenu les appels d'outils écrits en texte."""
+    if not text or not isinstance(text, str):
+        return text
+    return _RE_APPEL_TEXTE_HIST.sub('', text)
+
+
+_REGIME_CACHE = {
+    'anthropic': ("Claude met en cache les préfixes identiques d'un tour à l'autre : "
+                  "les relectures du document seront facturées à 10 %."),
+    'gemini': ("Gemini met automatiquement en cache les longs préfixes (à partir "
+               "d'environ 2000 jetons) : les relectures coûtent 10 %. Pour une "
+               "garantie d'économie, épingle plutôt le document dans le panneau "
+               "« Documents épinglés »."),
+    'deepseek': ("DeepSeek met automatiquement en cache les préfixes déjà vus : "
+                 "les relectures coûtent 10 %."),
+}
+_REGIME_CACHE_DEFAUT = ("Ce fournisseur ne propose pas de cache de contexte : le "
+                        "document est renvoyé en entier à chaque question, et facturé "
+                        "comme tel.")
+
+def regime_de_cache(provider: str) -> str:
+    """Ce qu'un document attaché coûtera vraiment, selon le fournisseur actif.
+
+    NIMM parle à sept fournisseurs qui ne facturent pas de la même façon.
+    Annoncer « c'est mis en cache » sans distinction serait faux pour la
+    moitié d'entre eux ; on dit donc ce qui s'applique réellement.
+    """
+    return _REGIME_CACHE.get((provider or '').lower(), _REGIME_CACHE_DEFAUT)
+
+
+def _document_du_fil(thread_id: str) -> tuple:
+    """Document explicitement attaché à cette conversation : (texte, titre).
+
+    À ne pas confondre avec la base de connaissances, qui DEVINE quels
+    documents peuvent servir. Ici l'utilisateur a désigné le document : on ne
+    devine plus rien, et on n'y ajoute pas de suggestions (voir le PDF
+    d'accessibilité servi au milieu d'une conversation bancaire).
+    """
+    if not thread_id:
+        return '', ''
+    try:
+        from core.database import get_thread_document
+        fiche = get_thread_document(thread_id)
+    except Exception:
+        return '', ''
+    texte = (fiche.get('texte') or '').strip()
+    if not texte:
+        return '', ''
+    titre = fiche.get('titre') or 'Document'
+    if fiche.get('tronque'):
+        texte += ("\n\n[…] (Le document a été tronqué : seuls les "
+                  f"{len(texte)} premiers caractères sur {fiche.get('nb_car', 0)} "
+                  "sont fournis. Dis-le si la réponse dépend de la suite.)")
+    return texte, titre
+
+
+def _document_vraiment_utilise(reponse: str, doc_context: str) -> bool:
+    """La réponse s'appuie-t-elle réellement sur le document injecté ?
+
+    Le pied « Documents consultés » était ajouté dès qu'un document était PROPOSÉ
+    au modèle, même s'il ne s'en servait pas : on annonçait une consultation qui
+    n'avait pas eu lieu, sous la forme d'un nom de fichier brut, sans lien ni
+    citation. On exige donc un recouvrement de vocabulaire de fond.
+    """
+    import re as _re
+    if not reponse or not doc_context:
+        return False
+    mots_doc = set(_re.findall(r'\w{5,}', doc_context.lower()))
+    if not mots_doc:
+        return False
+    mots_rep = set(_re.findall(r'\w{5,}', reponse.lower()))
+    return len(mots_doc & mots_rep) >= 3
 
 
 def _strip_docs_footer(text):
@@ -62,6 +147,7 @@ def _sanitize_history(messages: list) -> list:
         content = m.get('content')
         if isinstance(content, str):
             content = _strip_docs_footer(content)
+            content = _strip_appels_texte(content).strip()
         if not content and not m.get('tool_calls'):
             continue
         if cleaned and cleaned[-1]['role'] == m['role'] and not m.get('tool_calls') and not cleaned[-1].get('tool_calls'):
@@ -126,7 +212,7 @@ async def generate_tab_title(content: str) -> str:
 
 CARNET_WINDOW    = 50     # seuil d'injection du Carnet dans le system prompt
 CARNET_INTERVAL  = 5      # une note tous les 5 echanges (10 messages)
-MAX_TOKENS_CHAT  = 3500
+MAX_TOKENS_CHAT  = 8000
 MAX_TOKENS_MEM   = 2000
 MEMORY_SIM_THRESHOLD = 0.80
 
@@ -671,7 +757,7 @@ _(Pour chaque reponse, je corrigerai automatiquement ma memoire.)_"""
 # CONSTRUCTION DU PROMPT SYSTÈME
 # ══════════════════════════════════════════
 
-def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = None, presence_note: str = '', last_dominant: str = '', user_name: str = '', biblio_context: str = '', force_mem: bool = False, recent_messages: list = None, location: str = '', session_bilans: list = None, doc_context: str = '') -> str:
+def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = None, presence_note: str = '', last_dominant: str = '', user_name: str = '', biblio_context: str = '', force_mem: bool = False, recent_messages: list = None, location: str = '', session_bilans: list = None, doc_context: str = '', doc_fil: str = '', doc_fil_titre: str = '') -> str:
     parts = []
 
     # Prompt du masque
@@ -986,6 +1072,18 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
                 + chr(10).join(_theme_lines) + chr(10)
                 + ']'
             )
+
+    # Document attaché à CETTE conversation — placé avant la mémoire et les
+    # messages récents, c'est-à-dire dans la partie stable du prompt : c'est
+    # cette position qui rend les caches de contexte efficaces.
+    if doc_fil:
+        parts.append(
+            f"\n--- Document de cette conversation : {doc_fil_titre} ---\n{doc_fil}\n"
+            "--- fin du document ---\n"
+            "Ce document a été attaché EXPRÈS à cette conversation par l'utilisateur. "
+            "Réponds à partir de lui en priorité et cite les passages sur lesquels tu "
+            "t'appuies. Si la réponse ne s'y trouve pas, dis-le clairement au lieu de "
+            "combler avec des connaissances générales.")
 
     # Bibliothèque — conversations archivées pertinentes
     if biblio_context:
@@ -1303,7 +1401,7 @@ def _match_bibliotheque(user_message: str) -> str:
         return ''
 
 
-def _match_documents(user_message: str):
+def _match_documents(user_message: str, api_keys: dict = None):
     """Récupère proactivement les passages les plus pertinents des documents ingérés
     (base de connaissances locale). Renvoie un tuple (doc_context, titres) :
     - doc_context = texte à injecter dans le system prompt ('' si rien) ;
@@ -1314,9 +1412,40 @@ def _match_documents(user_message: str):
         if len(msg) < 12:
             return '', []
         from modules.enrichissement import search_documents
-        passages = search_documents(msg, k=3)
+        from modules.reranker import moteur_disponible, reordonner
+        _moteur, _note_moteur = moteur_disponible(api_keys or {})
+        # Le filet n'est élargi QUE si un réordonnanceur peut trier derrière :
+        # ramener dix passages sans savoir les départager ne ferait qu'ajouter
+        # du hors-sujet. Sans moteur, on reste exactement sur l'ancien k=3.
+        passages = search_documents(msg, k=10 if _moteur else 3)
         if not passages:
             return '', []
+
+        if _moteur:
+            # Le réordonnanceur MESURE la pertinence, là où le seuil sémantique et
+            # l'ancrage lexical ne faisaient que l'approcher : il les remplace.
+            _retenus, _m, _resume = reordonner(msg, passages, api_keys or {}, top_n=3)
+            if _m:
+                print(f"[HUB] 📄 {_resume}")
+                try:
+                    from core.database import add_diagnostic
+                    add_diagnostic('base de connaissances', _resume)
+                except Exception:
+                    pass
+                if not _retenus:
+                    return '', []
+                _blocs, _titres = [], []
+                for pp in _retenus:
+                    _t = pp.get('titre') or 'Document'
+                    _src = pp.get('source') or ''
+                    _blocs.append('[' + _t + (' — ' + _src + ']' if _src else ']')
+                                  + '\n' + (pp.get('passage') or '').strip()[:1200])
+                    if _t not in _titres:
+                        _titres.append(_t)
+                return '\n\n'.join(_blocs), _titres
+            # Le moteur n'a pas répondu : on retombe sur l'ancien filtrage, mais
+            # sur les 3 meilleurs seulement — le filet élargi n'a plus de trieur.
+            passages = passages[:3]
         # Seuils resserrés (évitent les faux positifs sur des messages faiblement liés).
         # Le seuil sémantique est réglable via le paramètre 'rag_seuil_documents' (défaut 0.5).
         try:
@@ -1327,17 +1456,40 @@ def _match_documents(user_message: str):
         _mots_utiles = set(m for m in _re_doc.findall(r'\w+', msg.lower())
                            if len(m) > 2 and m not in _MOTS_VIDES)
         _n_mots = max(1, len(_mots_utiles))
+        # ANCRAGE LEXICAL (réglage 'rag_ancrage_lexical', actif par défaut) :
+        # un score sémantique élevé ne suffit pas. Deux textes français sans aucun
+        # rapport atteignent couramment 0,5 de similarité — d'où des documents hors
+        # sujet servis en pleine conversation. On exige donc qu'au moins un mot de
+        # fond (4 lettres ou plus) soit RÉELLEMENT commun au message et au passage.
+        try:
+            _ancrage = str(get_setting('rag_ancrage_lexical', '1')) not in ('0', 'false', 'False')
+        except Exception:
+            _ancrage = True
+        _mots_fond = set(m for m in _mots_utiles if len(m) >= 4)
+
         retenus = []
         for pp in passages:
             sc = pp.get('score', 0) or 0
+            _hay = (pp.get('passage') or '').lower()
+            _titre_bas = (pp.get('titre') or '').lower()
             if pp.get('mode') == 'keyword':
                 # Mode mots-clés : recouvrement des mots UTILES (hors mots vides) dans le
                 # passage — exige au moins 2 mots ET une couverture >= 60 % des mots utiles.
-                _hay = (pp.get('passage') or '').lower()
                 _hits = sum(1 for m in _mots_utiles if m in _hay)
                 if _hits >= 2 and _hits >= 0.6 * _n_mots:
                     retenus.append(pp)
             elif sc >= _seuil_sem:
+                _communs = [m for m in _mots_fond if m in _hay or m in _titre_bas]
+                if _ancrage and not _communs:
+                    _msg_diag = (f"Document écarté de la réponse : « {pp.get('titre', '?')[:80]} » "
+                                 f"— proche par le sens (score {sc:.2f}) mais aucun mot en commun.")
+                    print(f"[HUB] 📄 {_msg_diag}")
+                    try:
+                        from core.database import add_diagnostic
+                        add_diagnostic('base de connaissances', _msg_diag)
+                    except Exception:
+                        pass
+                    continue
                 retenus.append(pp)
         if not retenus:
             return '', []
@@ -1349,7 +1501,9 @@ def _match_documents(user_message: str):
             blocs.append(entete + '\n' + (pp.get('passage') or '').strip()[:1200])
             if titre not in titres:
                 titres.append(titre)
-        print(f"[HUB] 📄 Documents match -> {len(blocs)} passage(s)")
+        print(f"[HUB] 📄 Documents match -> {len(blocs)} passage(s) : "
+              + ', '.join(f"{p.get('titre', '?')[:40]} ({p.get('mode', 'sem')} {p.get('score', 0):.2f})"
+                          for p in retenus))
         return '\n\n'.join(blocs), titres
     except Exception as e:
         print(f"[HUB] Erreur match_documents : {e}")
@@ -2026,6 +2180,42 @@ async def _check_moderation(text: str, api_keys: dict) -> dict:
     except Exception as _e:
         print(f'[HUB] Moderation check failed: {_e}')
         return {'blocked': False, 'categories': {}, 'violated': []}
+
+def _choisir_recherche_web(provider: str, api_keys: dict) -> tuple:
+    """Quel moteur de recherche web utiliser, et pourquoi ? → (mode, explication).
+
+    Le bouton « recherche web » se calait sur le MODÈLE ACTIF et ignorait le
+    réglage : choisir « Claude » puis discuter avec Gemini donnait l'ancrage
+    Google, sans le dire. Le réglage explicite prime désormais.
+
+    Nuance réelle : l'ancrage Google de Gemini et l'outil natif de Mistral en
+    mode conversation sont ATTACHÉS à l'appel de chat — ils n'existent que si ce
+    fournisseur est celui qui répond. Brave/Tavily, la recherche Mistral et celle
+    de Claude sont des appels séparés : elles marchent avec n'importe quel modèle.
+    """
+    provider = (provider or '').lower()
+    try:
+        routage = _load_provider_routing().get('web_search', {})
+        choisi = routage.get('provider', '') if isinstance(routage, dict) else ''
+    except Exception:
+        choisi = ''
+    cles = api_keys or {}
+
+    if choisi == 'anthropic':
+        if (cles.get('anthropic') or '').strip():
+            return 'anthropic', 'recherche Claude (sources citées)'
+        return 'brave', "clé Anthropic absente — repli sur Brave/Tavily"
+    if choisi == 'mistral':
+        if (cles.get('mistral') or '').strip():
+            # Si Mistral répond déjà, autant utiliser son outil natif (un seul appel).
+            return ('mistral_natif' if provider == 'mistral' else 'mistral'), 'recherche Mistral'
+        return 'brave', "clé Mistral absente — repli sur Brave/Tavily"
+    if choisi == 'gemini':
+        if provider == 'gemini' and (cles.get('gemini') or '').strip():
+            return 'gemini_natif', 'ancrage Google (Gemini)'
+        return 'brave', "l'ancrage Google exige que Gemini soit le modèle actif — repli sur Brave/Tavily"
+    return 'brave', 'Brave/Tavily'
+
 
 async def _search_via_anthropic(query: str, api_keys: dict) -> str:
     """Recherche web via l'outil serveur natif d'Anthropic.
@@ -3726,8 +3916,15 @@ async def process_message(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
-    doc_context, _doc_titles = _match_documents(user_message)
-    system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context)
+    # Un document ATTACHÉ au fil l'emporte sur la base de connaissances : quand
+    # l'utilisateur a désigné son document, deviner en plus n'apporte que du bruit.
+    _doc_fil, _doc_fil_titre = _document_du_fil(thread_id)
+    if _doc_fil:
+        doc_context, _doc_titles = '', []
+    else:
+        doc_context, _doc_titles = _match_documents(user_message, settings.get('api_keys'))
+    system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
+                                    doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
 
     # 7. Historique recent (60 derniers messages)
     history = get_messages(thread_id, limit=60)
@@ -3736,20 +3933,36 @@ async def process_message(
     # 8. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
     web_context = ''
-    # Web search : natif Mistral si provider=mistral, sinon Brave/Tavily
+    # Recherche web : le RÉGLAGE prime sur le modèle actif (voir _choisir_recherche_web).
     _mistral_ws_tools = None
     _gemini_gs_tools   = None
-    if web_search and provider == 'gemini':
+    _mode_ws, _pourquoi_ws = _choisir_recherche_web(provider, api_keys) if web_search else ('', '')
+    if web_search:
+        print(f"[HUB] 🌐 Recherche web : {_pourquoi_ws}")
+    if _mode_ws == 'gemini_natif':
         _gemini_gs_tools = [{'google_search': {}}]
-        print('[HUB] 🔍 Google Search Grounding Gemini natif')
-    elif web_search and provider == 'mistral':
+    elif _mode_ws == 'mistral_natif':
         _mistral_ws_tools = [{'type': 'web_search'}]
-        print('[HUB] 🌐 Web search Mistral natif')
-    elif web_search:
+    elif _mode_ws in ('mistral', 'anthropic'):
+        # Appel séparé : fonctionne quel que soit le modèle qui répond.
+        try:
+            _f = _search_via_anthropic if _mode_ws == 'anthropic' else _search_via_mistral
+            web_context = await _f(user_message, api_keys)
+            import re as _rc, json as _jc
+            _m = _rc.search(r'\[NIMM_CITATIONS\](.*)', web_context or '')
+            if _m:
+                try:
+                    _pending_citations.set(_jc.loads(_m.group(1)))
+                except Exception:
+                    pass
+                web_context = web_context[:_m.start()].rstrip()
+        except Exception as e:
+            print(f"[HUB] Recherche {_mode_ws} en échec : {e} — repli Brave/Tavily")
+            _mode_ws = 'brave'
+    if _mode_ws == 'brave':
         try:
             from modules.websearch import search
             web_context = await search(user_message)
-            print(f"[HUB] 🌐 Web search (forcé) : {user_message[:60]}")
         except Exception as e:
             print(f"[HUB] Erreur web search : {e}")
 
@@ -3885,8 +4098,16 @@ async def process_message(
                 print(f"[HUB] Erreur sauvegarde anecdote: {e}")
 
     # 14. Sauvegarder les messages
-    if _doc_titles:
-        reply = _strip_docs_footer(reply or "").rstrip() + "\n\n— 📄 Documents consultés : " + ", ".join(_doc_titles)
+    if _doc_titles and _document_vraiment_utilise(reply, doc_context):
+        reply = _strip_docs_footer(reply or "").rstrip() + "\n\n— 📄 Source : ta base de connaissances — " + ", ".join(_doc_titles)
+    elif _doc_titles:
+        _m = f"Mention de source omise : la réponse ne s'appuie pas sur {', '.join(_doc_titles)}."
+        print(f"[HUB] 📄 {_m}")
+        try:
+            from core.database import add_diagnostic
+            add_diagnostic('base de connaissances', _m)
+        except Exception:
+            pass
     _add_msg(thread_id, 'user',      user_message)
     _add_msg(thread_id, 'assistant', reply)
 
@@ -4053,8 +4274,15 @@ async def process_message_stream(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
-    doc_context, _doc_titles = _match_documents(user_message)
-    system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context)
+    # Un document ATTACHÉ au fil l'emporte sur la base de connaissances : quand
+    # l'utilisateur a désigné son document, deviner en plus n'apporte que du bruit.
+    _doc_fil, _doc_fil_titre = _document_du_fil(thread_id)
+    if _doc_fil:
+        doc_context, _doc_titles = '', []
+    else:
+        doc_context, _doc_titles = _match_documents(user_message, settings.get('api_keys'))
+    system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
+                                    doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
 
     # 4. Historique
     history  = get_messages(thread_id, limit=60)
@@ -4065,20 +4293,41 @@ async def process_message_stream(
     web_context = ''
     _mistral_ws_tools = None
     _gemini_gs_tools   = None
-    if web_search and provider == 'gemini':
+    # Le RÉGLAGE prime sur le modèle actif (voir _choisir_recherche_web).
+    _mode_ws, _pourquoi_ws = _choisir_recherche_web(provider, api_keys) if web_search else ('', '')
+    if web_search:
+        yield "data: [WEB_SEARCH_LOADING]\n\n"
+        print(f"[HUB] 🌐 Recherche web (stream) : {_pourquoi_ws}")
+        if 'repli' in _pourquoi_ws:
+            try:
+                from core.database import add_diagnostic as _ad_ws
+                _ad_ws('recherche web', f"Recherche web : {_pourquoi_ws}.")
+            except Exception:
+                pass
+    if _mode_ws == 'gemini_natif':
         _gemini_gs_tools = [{'google_search': {}}]
-        yield "data: [WEB_SEARCH_LOADING]\n\n"
-        print('[HUB] 🔍 Google Search Grounding Gemini natif (stream)')
-    elif web_search and provider == 'mistral':
+    elif _mode_ws == 'mistral_natif':
         _mistral_ws_tools = [{'type': 'web_search'}]
-        print('[HUB] 🌐 Web search Mistral natif (stream)')
-    elif web_search:
-        # Autres providers : Brave/Tavily (même logique que process_message)
-        yield "data: [WEB_SEARCH_LOADING]\n\n"
+    elif _mode_ws in ('mistral', 'anthropic'):
+        # Appel séparé : fonctionne quel que soit le modèle qui répond.
+        try:
+            _f = _search_via_anthropic if _mode_ws == 'anthropic' else _search_via_mistral
+            web_context = await _f(user_message, api_keys)
+            import re as _rcs, json as _jcs
+            _mws = _rcs.search(r'\[NIMM_CITATIONS\](.*)', web_context or '')
+            if _mws:
+                try:
+                    _pending_citations.set(_jcs.loads(_mws.group(1)))
+                except Exception:
+                    pass
+                web_context = web_context[:_mws.start()].rstrip()
+        except Exception as e:
+            print(f'[HUB] Recherche {_mode_ws} en échec (stream) : {e} — repli Brave/Tavily')
+            _mode_ws = 'brave'
+    if _mode_ws == 'brave':
         try:
             from modules.websearch import search
             web_context = await search(user_message)
-            print(f'[HUB] 🌐 Web search Brave/Tavily (stream) : {user_message[:60]}')
         except Exception as e:
             print(f'[HUB] Erreur web search (stream) : {e}')
 
@@ -4134,6 +4383,13 @@ async def process_message_stream(
                 if isinstance(token, dict):
                     if token.get('type') == 'usage':
                         _last_usage = token
+                    elif token.get('__truncated__'):
+                        yield "data: [TRUNCATED]\n\n"
+                    elif token.get('__raisonnement__'):
+                        import json as _jr2
+                        yield ("data: [RAISONNEMENT]"
+                               + _jr2.dumps(token['__raisonnement__'], ensure_ascii=False)
+                               + "\n\n")
                     continue
                 full_reply += token
                 _yield_buf += token
@@ -4161,6 +4417,9 @@ async def process_message_stream(
 
                 elif event['type'] == 'usage':
                     _last_usage = event
+
+                elif event['type'] == 'truncated':
+                    yield "data: [TRUNCATED]\n\n"
 
                 elif event['type'] == 'citations':
                     import json as _json_cit
@@ -4207,6 +4466,14 @@ async def process_message_stream(
                         if isinstance(token, dict):
                             if token.get('type') == 'usage':
                                 _last_usage = token
+                            elif token.get('__truncated__'):
+                                # Le frontend affiche alors le bouton « Continuer ».
+                                yield "data: [TRUNCATED]\n\n"
+                            elif token.get('__raisonnement__'):
+                                import json as _jr
+                                yield ("data: [RAISONNEMENT]"
+                                       + _jr.dumps(token['__raisonnement__'], ensure_ascii=False)
+                                       + "\n\n")
                             continue
                         full_reply += token
                         _yield_buf += token
@@ -4214,13 +4481,49 @@ async def process_message_stream(
                             yield f"data: {chunk}\n\n"
 
     except Exception as e:
-        print(f"[HUB] Erreur stream : {e}")
+        from core.engine import (classer_erreur_fournisseur, fournisseur_de_secours,
+                                 call_llm as _call_secours)
+        _diag = classer_erreur_fournisseur(e, settings.get('provider', ''))
+        print(f"[HUB] Erreur stream ({_diag['categorie']}) : {e}")
+        try:
+            from core.database import add_diagnostic
+            add_diagnostic('fournisseur', _diag['message'])
+        except Exception:
+            pass
+
+        # Rien n'a encore été affiché : on peut tenter un autre fournisseur sans
+        # risque de doublon. Mieux vaut une réponse d'un autre modèle qu'une
+        # erreur technique lue à voix haute.
+        _secours = (fournisseur_de_secours(settings.get('provider', ''), settings['api_keys'])
+                    if (_diag['recuperable'] and not full_reply) else '')
+        if _secours:
+            _avis = f"⚠️ {_diag['message']} Je reprends avec {_secours}.\n\n"
+            yield f"data: {_avis}"
+            try:
+                _txt = await _call_secours(
+                    messages=messages, provider=_secours, model=None,
+                    system_prompt=system_prompt, max_tokens=settings['max_tokens'],
+                    temperature=settings['temperature'], api_keys=settings['api_keys'])
+                if _txt and _txt.strip():
+                    for _c in [_txt[_i:_i + 400] for _i in range(0, len(_txt), 400)]:
+                        yield f"data: {_c}\n\n"
+                    _add_msg(thread_id, 'assistant', _avis + _txt)
+                    try:
+                        from core.database import add_diagnostic as _ad
+                        _ad('fournisseur', f"Réponse obtenue via {_secours} après l'échec.")
+                    except Exception:
+                        pass
+                    yield "data: [DONE]\n\n"
+                    return
+            except Exception as _e2:
+                print(f"[HUB] Secours {_secours} en échec : {_e2}")
+
         if full_reply:
             partial, _, _, _, _, _, _ = extract_all_tags(full_reply)
             _add_msg(thread_id, 'assistant', partial or "[Réponse interrompue]")
         else:
-            _add_msg(thread_id, 'assistant', "[Réponse interrompue — erreur de connexion]")
-        yield f"data: [ERREUR: {str(e)}]\n\n"
+            _add_msg(thread_id, 'assistant', f"[Réponse interrompue — {_diag['message']}]")
+        yield f"data: [ERREUR: {_diag['message']}]\n\n"
         return
 
     # 7. Extraire tous les tags (MEM, DOMINANT, ANECDOTE, SITUATION, RAPPEL)
@@ -4277,10 +4580,18 @@ async def process_message_stream(
             except Exception as e:
                 print(f"[HUB] Erreur sauvegarde anecdote (stream): {e}")
 
-    if _doc_titles:
-        _doc_line = "— 📄 Documents consultés : " + ", ".join(_doc_titles)
+    if _doc_titles and _document_vraiment_utilise(reply, doc_context):
+        _doc_line = "— 📄 Source : ta base de connaissances — " + ", ".join(_doc_titles)
         reply = _strip_docs_footer(reply or "").rstrip() + "\n\n" + _doc_line
         yield f"data: \\n\\n{_doc_line}\n\n"
+    elif _doc_titles:
+        _m = f"Mention de source omise : la réponse ne s'appuie pas sur {', '.join(_doc_titles)}."
+        print(f"[HUB] 📄 {_m}")
+        try:
+            from core.database import add_diagnostic
+            add_diagnostic('base de connaissances', _m)
+        except Exception:
+            pass
     _add_msg(thread_id, 'assistant', reply)
 
     # Stocker les tokens/coût et émettre [USAGE] vers le frontend

@@ -385,6 +385,7 @@
                     <option value="same">↩ Brave / Tavily (par défaut)</option>
                     <option value="mistral" data-needs-key="mistral">🔵 Mistral (web search natif)</option>
                     <option value="anthropic" data-needs-key="anthropic">🟣 Claude (recherche web native, sources citées)</option>
+                    <option value="gemini" data-needs-key="gemini">🟡 Gemini (ancrage Google — exige Gemini comme modèle actif)</option>
                 </select>
                 <span class="routing-warning hidden" id="warn-websearch" role="alert" aria-live="polite">⚠️ Clé API non configurée pour ce fournisseur</span>
 
@@ -669,8 +670,22 @@
 
         <div class="settings-divider"></div>
 
+        <!-- ── JOURNAL DE FONCTIONNEMENT ── -->
+        <div class="setting-group" id="diagnostics-section">
+            <details id="diagnostics-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">🩺 Journal de fonctionnement</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Les décisions techniques de NIMM, expliquées en clair : document écarté de la base
+                    de connaissances, appel d'outil rattrapé, mise en cache désactivée… Utile pour
+                    comprendre un comportement inattendu.
+                </p>
+                <ul id="diagnostics-list" style="list-style:none;padding:0;margin:0 0 8px;font-size:0.82rem;" aria-label="Journal de fonctionnement"></ul>
+                <button type="button" id="diagnostics-clear-btn" style="font-size:0.8rem;padding:4px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Vider le journal</button>
+            </details>
+        </div>
+
         <!-- ── SERVEURS MCP DISTANTS ── -->
-        <div class="setting-group" id="mcp-section">
+        <div class="setting-group" id="mcp-section" data-needs-key="anthropic">
             <details id="mcp-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
                 <summary style="font-weight:600;cursor:pointer;">🔌 Serveurs MCP distants (Claude)</summary>
                 <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
@@ -691,6 +706,192 @@
             </details>
         </div>
 
+        <!-- ── VEILLE (recherche par le sens, Exa) ── -->
+        <div class="setting-group" id="veille-section" data-needs-key="exa">
+            <details id="veille-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">🔭 Veille documentaire</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Brave et Tavily cherchent des mots ; Exa cherche des documents proches
+                    par le SENS. Mets un sujet sous surveillance : NIMM le relève tout seul,
+                    écarte ce qu'il t'a déjà montré, et verse les nouveautés dans ta base
+                    de connaissances.
+                </p>
+                <div class="setting-group">
+                    <label for="veille-libelle">Nom du sujet</label>
+                    <input type="text" id="veille-libelle" placeholder="Accessibilité du livre numérique"
+                        aria-label="Nom du sujet de veille"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="veille-requete">Ce que tu cherches (en toutes lettres)</label>
+                    <textarea id="veille-requete" rows="2"
+                        placeholder="Obligations d'accessibilité des plateformes de vente de livres numériques en Europe"
+                        aria-label="Description de ce que tu cherches"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;"></textarea>
+                </div>
+                <div class="setting-group">
+                    <label for="veille-url">…ou adresse d'une page de référence (« encore comme celle-ci »)</label>
+                    <input type="text" id="veille-url" placeholder="https://…"
+                        aria-label="Adresse d'une page de référence"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="veille-periode">Périodicité</label>
+                    <select id="veille-periode" aria-label="Périodicité du relevé">
+                        <option value="quotidienne">Chaque jour</option>
+                        <option value="hebdomadaire" selected>Chaque semaine</option>
+                        <option value="mensuelle">Chaque mois</option>
+                    </select>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="veille-add-btn" class="btn-primary" aria-label="Mettre ce sujet sous surveillance">Suivre ce sujet</button>
+                    <button id="veille-refresh-btn" class="btn-secondary" aria-label="Rafraîchir la liste des sujets suivis">Rafraîchir</button>
+                </div>
+                <div id="veille-status" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:8px;min-height:1.2em;"></div>
+                <div class="setting-group" style="margin-top:10px;">
+                    <label for="veille-select">Sujets suivis</label>
+                    <select id="veille-select" aria-label="Sujet de veille suivi" style="width:100%;box-sizing:border-box;"></select>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+                        <button id="veille-run-btn" class="btn-primary" aria-label="Relever ce sujet maintenant">Relever maintenant</button>
+                        <button id="veille-del-btn" class="btn-secondary" aria-label="Ne plus suivre ce sujet">Ne plus suivre</button>
+                    </div>
+                </div>
+                <div id="veille-out" role="region" aria-label="Nouveautés de la veille" style="margin-top:8px;"></div>
+            </details>
+        </div>
+
+        <!-- ── RÉORDONNANCEMENT DE LA BASE DE CONNAISSANCES ── -->
+        <div class="setting-group" id="rerank-section">
+            <details id="rerank-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">🎯 Pertinence de la base de connaissances</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    La recherche par sens compare deux textes « en gros » : deux textes
+                    français sans rapport se ressemblent souvent assez pour passer.
+                    Un réordonnanceur lit la question ET le passage ensemble et répond
+                    à la vraie question : ce passage aide-t-il à répondre ? Sans
+                    réordonnanceur, NIMM garde son comportement actuel.
+                </p>
+                <div class="setting-group">
+                    <label for="rag-rerank-mode">Moteur</label>
+                    <select id="rag-rerank-mode" aria-label="Moteur de réordonnancement de la base de connaissances">
+                        <option value="auto">Automatique (local s'il existe, sinon une clé disponible)</option>
+                        <option value="off">Aucun — comportement actuel</option>
+                        <option value="local">Serveur local llama.cpp (rien ne sort de la machine)</option>
+                        <option value="cohere" data-needs-key="cohere">Cohere</option>
+                        <option value="voyage" data-needs-key="voyage">Voyage AI</option>
+                        <option value="jina" data-needs-key="jina">Jina</option>
+                        <option value="llm">Un modèle de conversation (le plus fin, mais lent)</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label for="rag-rerank-url">Adresse du serveur local (llama.cpp lancé avec --reranking)</label>
+                    <input type="text" id="rag-rerank-url" placeholder="http://localhost:8081"
+                        aria-label="Adresse du serveur de réordonnancement local"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="rag-rerank-modele">Modèle (facultatif)</label>
+                    <input type="text" id="rag-rerank-modele" placeholder="bge-reranker-v2-m3"
+                        aria-label="Nom du modèle de réordonnancement"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="rag-rerank-seuil">Seuil de pertinence (0 à 1)</label>
+                    <input type="number" id="rag-rerank-seuil" value="0.30" min="0" max="1" step="0.05"
+                        aria-label="Seuil de pertinence en dessous duquel un passage est écarté"
+                        style="width:100px;">
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                        Plus haut = plus sévère. En dessous du seuil, le passage n'est pas servi du tout.
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="rerank-save-btn" class="btn-primary" aria-label="Enregistrer les réglages de réordonnancement">Enregistrer</button>
+                    <button id="rerank-test-btn" class="btn-secondary" aria-label="Vérifier quel réordonnanceur s'appliquera">Vérifier</button>
+                </div>
+                <div id="rerank-status" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:8px;min-height:1.2em;"></div>
+            </details>
+        </div>
+
+        <!-- ── DOCUMENT DE LA CONVERSATION (tous fournisseurs) ── -->
+        <div class="setting-group" id="thread-doc-section">
+            <details id="thread-doc-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">📎 Document de la conversation</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Attache un document au fil en cours : il est fourni au modèle à chaque
+                    question, quel que soit le fournisseur. Tant qu'il est attaché, la base
+                    de connaissances cesse de proposer d'autres documents — c'est toi qui
+                    as choisi celui-ci. Le détacher efface le texte conservé.
+                </p>
+                <div class="setting-group">
+                    <label for="thread-doc-base-select">Document de ta base de connaissances</label>
+                    <select id="thread-doc-base-select" aria-label="Document de la base de connaissances à attacher"
+                        style="width:100%;box-sizing:border-box;"></select>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+                        Le plus simple : choisis ici un document déjà versé, sans rien taper.
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <label for="thread-doc-path">…ou chemin d'un fichier (PDF, Word, ODT, texte…)</label>
+                    <input type="text" id="thread-doc-path" placeholder="C:\Users\...\rapport.pdf"
+                        aria-label="Chemin du document à attacher à la conversation"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="thread-doc-attach-btn" class="btn-primary" aria-label="Attacher ce document à la conversation">Attacher</button>
+                    <button id="thread-doc-detach-btn" class="btn-secondary" aria-label="Détacher le document de la conversation">Détacher</button>
+                </div>
+                <div id="thread-doc-status" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:8px;min-height:1.2em;"></div>
+            </details>
+        </div>
+
+        <!-- ── DOCUMENTS ÉPINGLÉS (cache explicite Gemini) ── -->
+        <div class="setting-group" id="gemini-pins-section" data-needs-key="gemini">
+            <details id="gemini-pins-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">📌 Documents épinglés (Gemini)</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Épingle un long document chez Gemini : on paie sa lecture une seule fois,
+                    puis chaque question ne coûte plus qu'une fraction. Idéal pour interroger
+                    longuement une même étude. Minimum environ 2000 jetons ; le document
+                    s'efface tout seul à l'échéance choisie.
+                </p>
+                <div class="setting-group">
+                    <label for="pin-file-path">Chemin du document (PDF, Word, texte…)</label>
+                    <input type="text" id="pin-file-path" placeholder="C:\Users\...\etude.pdf"
+                        aria-label="Chemin du document à épingler"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="pin-title">Titre (pour le retrouver ensuite)</label>
+                    <input type="text" id="pin-title" placeholder="Étude accessibilité 2026"
+                        aria-label="Titre du document épinglé"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="pin-duree">Durée de conservation (heures)</label>
+                    <input type="number" id="pin-duree" value="2" min="0.1" max="48" step="0.5"
+                        aria-label="Durée de conservation en heures" style="width:100px;">
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="pin-create-btn" class="btn-primary" aria-label="Épingler ce document">Épingler</button>
+                    <button id="pin-refresh-btn" class="btn-secondary" aria-label="Rafraîchir la liste des documents épinglés">Rafraîchir la liste</button>
+                </div>
+                <div id="pin-status-out" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:6px;min-height:1.2em;"></div>
+                <div class="setting-group" style="margin-top:10px;">
+                    <label for="pin-question">Question au document épinglé</label>
+                    <select id="pin-select" aria-label="Document épinglé à interroger"
+                        style="width:100%;box-sizing:border-box;margin-bottom:6px;"></select>
+                    <textarea id="pin-question" rows="3" placeholder="Que dit ce document sur les délais de mise en conformité ?"
+                        aria-label="Question à poser au document épinglé"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;"></textarea>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+                        <button id="pin-ask-btn" class="btn-primary" aria-label="Poser la question au document épinglé">Interroger</button>
+                        <button id="pin-delete-btn" class="btn-secondary" aria-label="Libérer le document épinglé sélectionné">Libérer ce document</button>
+                    </div>
+                </div>
+                <div id="pin-answer-out" role="region" aria-label="Réponse du document épinglé" style="margin-top:8px;"></div>
+            </details>
+        </div>
+
         <!-- ── MISTRAL BATCH ── -->
         <div class="setting-group" id="mistral-batch-section">
             <details id="mistral-batch-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
@@ -702,13 +903,14 @@
                 <div class="setting-group">
                     <label for="batch-provider-select">Fournisseur</label>
                     <select id="batch-provider-select" aria-label="Fournisseur pour le traitement par lots">
-                        <option value="mistral">🔵 Mistral</option>
-                        <option value="anthropic">🟣 Claude (Anthropic) — moitié prix</option>
+                        <option value="mistral" data-needs-key="mistral">🔵 Mistral</option>
+                        <option value="anthropic" data-needs-key="anthropic">🟣 Claude (Anthropic) — moitié prix</option>
+                        <option value="gemini" data-needs-key="gemini">🔴 Gemini (Google) — moitié prix</option>
                     </select>
                 </div>
                 <div class="setting-group">
                     <label for="batch-model-select">Modèle</label>
-                    <select id="batch-model-select" aria-label="Modèle Mistral pour le batch">
+                    <select id="batch-model-select" aria-label="Modèle pour le traitement par lots">
                         <option value="mistral-small-latest">Mistral Small (rapide, économique)</option>
                         <option value="mistral-medium-latest">Mistral Medium</option>
                         <option value="mistral-large-latest">Mistral Large</option>
@@ -1220,7 +1422,7 @@ Analyse les sentiments de : ..."
                 <input type="checkbox" id="coanimm-thinking-toggle" checked style="width:auto;margin:2px 0 0;flex:none;">
                 <label for="coanimm-thinking-toggle" style="font-size:0.82rem;margin:0;cursor:pointer;">Laisser le modèle réfléchir avant d'écrire ou de réparer un script (meilleures corrections, un peu plus lent)</label>
             </div>
-            <div style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;">
+            <div data-needs-key="anthropic" style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;">
                 <input type="checkbox" id="anthropic-cache-toggle" checked style="width:auto;margin:2px 0 0;flex:none;">
                 <label for="anthropic-cache-toggle" style="font-size:0.82rem;margin:0;cursor:pointer;">Mettre en cache les prompts Anthropic (réduit fortement le coût des messages longs)</label>
             </div>
@@ -1845,7 +2047,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260725-5"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260726-correl"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

@@ -180,7 +180,31 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(memory_worker())
     from modules.coanimm import schedule_worker
     asyncio.create_task(schedule_worker())
+    asyncio.create_task(_veille_worker())
     yield
+
+async def _veille_worker():
+    """Relève les sujets de veille échus, une fois par heure.
+
+    Le relevé fait des appels réseau bloquants : il part dans un fil
+    d'exécution séparé, sinon toute la conversation attendrait. Toute panne
+    est avalée — une veille qui échoue ne doit jamais arrêter NIMM.
+    """
+    import asyncio as _aio
+    await _aio.sleep(120)          # laisser NIMM démarrer avant d'appeler l'extérieur
+    while True:
+        try:
+            from modules.veille import relever_les_dus, list_sujets
+            if list_sujets():
+                from core.database import get_api_keys
+                cles = get_api_keys()
+                messages = await _aio.get_event_loop().run_in_executor(
+                    None, lambda: relever_les_dus(cles))
+                for m in messages:
+                    print(f"[VEILLE] {m}")
+        except Exception as e:
+            print(f"[VEILLE] Relevé impossible : {e}")
+        await _aio.sleep(3600)
 
 app = FastAPI(title="NIMM", lifespan=lifespan)
 
@@ -505,14 +529,19 @@ async def continue_thread_route(thread_id: str):
         mask = {'system_prompt': 'Tu es un assistant utile.'}
 
     system_prompt = mask.get('system_prompt', '')
-    # Ajouter un user turn de continuation — non sauvegardé en DB
-    continuation_msgs = msgs + [{'role': 'user', 'content': 'Continue.'}]
+    # Reprise SANS COUTURE quand le fournisseur sait poursuivre son propre texte
+    # (Anthropic, Mistral, DeepSeek) : on lui redonne la fin de sa réponse plutôt
+    # qu'un « Continue. » qui le fait redémarrer avec préambule et redites.
+    _derniere = next((m for m in reversed(msgs) if m.get('role') == 'assistant'), None)
+    _prefixe = (_derniere or {}).get('content', '') if _derniere else ''
+    _msgs_avant = msgs[:-1] if (_derniere is msgs[-1] if msgs else False) else msgs
 
     async def _stream():
         accumulated = ''
         try:
-            async for token in engine.call_llm_stream(
-                messages=continuation_msgs,
+            async for token in engine.continuer_reponse_stream(
+                messages=_msgs_avant,
+                prefixe=_prefixe,
                 provider=provider,
                 model=model,
                 system_prompt=system_prompt,
@@ -521,6 +550,8 @@ async def continue_thread_route(thread_id: str):
                 api_keys=api_keys,
             ):
                 if isinstance(token, dict):
+                    if token.get('__truncated__'):
+                        yield "data: [TRUNCATED]\n\n"
                     continue
                 accumulated += token
                 yield f"data: {token}\n\n"
@@ -1671,6 +1702,248 @@ async def mcp_servers_delete(server_id: str):
         raise HTTPException(403, detail="Seul le propriétaire peut supprimer un serveur MCP.")
     return {"status": "ok", "servers": _db.remove_mcp_server(server_id)}
 
+@app.get("/api/diagnostics")
+async def diagnostics_list():
+    """Journal de fonctionnement : les décisions techniques de NIMM, en clair.
+    Elles n'existaient que dans la console — illisible au lecteur d'écran."""
+    import core.database as _db
+    return {"diagnostics": _db.list_diagnostics()}
+
+@app.delete("/api/diagnostics")
+async def diagnostics_clear():
+    import core.database as _db
+    _db.clear_diagnostics()
+    return {"status": "ok", "diagnostics": []}
+
+class VerifyReq(BaseModel):
+    text: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/verify")
+async def verify_text(req: VerifyReq):
+    """Vérifie les affirmations factuelles d'une réponse par recherche web.
+    Pensé pour qui ne peut pas survoler un texte du regard : erreurs d'abord,
+    sources ensuite."""
+    from core.engine import verify_claims_anthropic
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    return await verify_claims_anthropic(req.text or "",
+                                         api_keys=settings.get("api_keys", {}))
+
+class ThreadDocReq(BaseModel):
+    chemin: Optional[str] = None
+    texte: Optional[str] = None
+    titre: Optional[str] = None
+    ref_id: Optional[int] = None      # document déjà présent dans la base de connaissances
+
+@app.get("/api/documents/base")
+async def documents_base_lister():
+    """Documents versés dans la base de connaissances, pour les proposer au choix
+    plutôt que d'obliger à saisir un chemin de fichier à la main — une adresse
+    Windows tapée au clavier braille est une source d'erreurs pour rien."""
+    import core.database as _db
+    return {"documents": _db.list_documents_base()}
+
+def _provider_actif(thread_id: str = None) -> str:
+    from core.hub import load_settings
+    st = load_settings(thread_id)
+    return (st.get("provider") or (st.get("routing") or {}).get("chat") or "").lower()
+
+@app.post("/api/threads/{thread_id}/document")
+async def thread_document_attacher(thread_id: str, req: ThreadDocReq):
+    """Attache un document à UNE conversation : il est fourni au modèle à chaque
+    question du fil, en tête du prompt. À la différence de la base de
+    connaissances, rien n'est deviné — l'utilisateur a désigné son document."""
+    import core.database as _db, os as _os, asyncio as _aio, functools as _ft
+    from core.hub import load_settings, regime_de_cache
+    settings = load_settings(thread_id)
+    texte = req.texte or ""
+    titre = (req.titre or "").strip()
+    source = ""
+    if req.ref_id:
+        fiche_base = _db.get_document_base(req.ref_id)
+        if not fiche_base:
+            return {"ok": False, "erreur": "Ce document n'est plus dans la base de connaissances."}
+        texte = fiche_base["texte"]
+        titre = titre or fiche_base["titre"]
+        source = fiche_base.get("source") or "base de connaissances"
+    elif (req.chemin or "").strip():
+        chemin = _os.path.abspath(_os.path.expanduser(req.chemin.strip()))
+        if not _os.path.isfile(chemin):
+            return {"ok": False, "erreur": f"Fichier introuvable : {req.chemin}"}
+        try:
+            from modules.enrichissement import extract_any, mistral_key_from_settings
+            texte = await _aio.get_event_loop().run_in_executor(
+                None, _ft.partial(extract_any, chemin, _os.path.basename(chemin),
+                                  mistral_key=mistral_key_from_settings(settings)))
+        except Exception as e:
+            return {"ok": False, "erreur": f"Lecture impossible : {e}"}
+        titre = titre or _os.path.basename(chemin)
+        source = chemin
+    if not (texte or "").strip():
+        return {"ok": False, "erreur": "Document vide : rien à attacher."}
+    fiche = _db.set_thread_document(thread_id, titre, texte, source)
+    prov = _provider_actif(thread_id)
+    _db.add_diagnostic("documents",
+                       f"Document attaché au fil : « {fiche['titre']} » — "
+                       f"{fiche['nb_car']} caractères")
+    return {"ok": True, "titre": fiche["titre"], "nb_car": fiche["nb_car"],
+            "tronque": fiche["tronque"], "provider": prov,
+            "regime": regime_de_cache(prov)}
+
+@app.get("/api/threads/{thread_id}/document")
+async def thread_document_lire(thread_id: str):
+    """Métadonnées du document attaché (jamais son texte : inutile à renvoyer,
+    et cela l'exposerait sans raison)."""
+    import core.database as _db
+    from core.hub import regime_de_cache
+    fiche = _db.get_thread_document(thread_id)
+    if not fiche:
+        return {"attache": False}
+    prov = _provider_actif(thread_id)
+    return {"attache": True, "titre": fiche.get("titre", ""),
+            "nb_car": fiche.get("nb_car", 0), "tronque": fiche.get("tronque", False),
+            "source": fiche.get("source", ""), "attache_le": fiche.get("attache_le", ""),
+            "provider": prov, "regime": regime_de_cache(prov)}
+
+@app.delete("/api/threads/{thread_id}/document")
+async def thread_document_detacher(thread_id: str):
+    """Détache et EFFACE le texte conservé. Un document confidentiel doit pouvoir
+    être retiré sans laisser de trace."""
+    import core.database as _db
+    return {"ok": _db.clear_thread_document(thread_id)}
+
+class GeminiPinReq(BaseModel):
+    contenu: str = ""
+    chemin: Optional[str] = None
+    titre: Optional[str] = None
+    consigne: Optional[str] = None
+    duree_h: float = 1.0
+    thread_id: Optional[str] = None
+
+@app.post("/api/gemini/pins")
+async def gemini_pin_creer(req: GeminiPinReq):
+    """Épingle un long document chez Gemini (cache explicite) pour l'interroger
+    ensuite à tarif réduit. Le contenu part chez Gemini ; seules les
+    métadonnées sont conservées localement."""
+    import core.database as _db, os as _os, asyncio as _aio, functools as _ft
+    from core.engine import create_cache_gemini
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    contenu = req.contenu or ""
+    titre = (req.titre or "").strip()
+    if (req.chemin or "").strip():
+        chemin = _os.path.abspath(_os.path.expanduser(req.chemin.strip()))
+        if not _os.path.isfile(chemin):
+            return {"ok": False, "erreur": f"Fichier introuvable : {req.chemin}"}
+        try:
+            from modules.enrichissement import extract_any, mistral_key_from_settings
+            contenu = await _aio.get_event_loop().run_in_executor(
+                None, _ft.partial(extract_any, chemin, _os.path.basename(chemin),
+                                  mistral_key=mistral_key_from_settings(settings)))
+        except Exception as e:
+            return {"ok": False, "erreur": f"Lecture impossible : {e}"}
+        titre = titre or _os.path.basename(chemin)
+    res = await create_cache_gemini(contenu, titre, req.consigne or "",
+                                    req.duree_h or 1.0,
+                                    api_keys=settings.get("api_keys", {}))
+    if res.get("ok"):
+        _db.add_gemini_pin(res["name"], res.get("titre") or titre, res.get("model", ""),
+                           res.get("expire", ""), res.get("nb_tokens", 0))
+        _db.add_diagnostic("gemini",
+                           f"Document épinglé : « {res.get('titre') or titre} » — "
+                           f"{res.get('nb_tokens', 0)} jetons")
+    return res
+
+@app.get("/api/gemini/pins")
+async def gemini_pin_lister(thread_id: Optional[str] = None):
+    """Liste les documents épinglés. On croise le magasin local avec ce que
+    Gemini connaît vraiment, pour ne jamais annoncer un document expiré."""
+    import core.database as _db
+    from core.engine import list_caches_gemini
+    from core.hub import load_settings
+    settings = load_settings(thread_id)
+    distants = await list_caches_gemini(settings.get("api_keys", {}))
+    connus = {c["name"] for c in distants}
+    locaux = _db.list_gemini_pins()
+    vivants = [p for p in locaux if p.get("name") in connus]
+    if len(vivants) != len(locaux):
+        _db._save_gemini_pins(vivants)
+    par_nom = {c["name"]: c for c in distants}
+    for p in vivants:
+        p["expire"] = par_nom.get(p["name"], {}).get("expire", p.get("expire", ""))
+    return {"pins": vivants, "expires": len(locaux) - len(vivants)}
+
+@app.delete("/api/gemini/pins")
+async def gemini_pin_liberer(name: str, thread_id: Optional[str] = None):
+    """Libère un document épinglé : on cesse d'en payer le stockage."""
+    import core.database as _db
+    from core.engine import delete_cache_gemini
+    from core.hub import load_settings
+    settings = load_settings(thread_id)
+    ok = await delete_cache_gemini(name, settings.get("api_keys", {}))
+    _db.remove_gemini_pin(name)
+    return {"ok": ok}
+
+class GeminiPinAskReq(BaseModel):
+    reference: str = ""
+    question: str = ""
+    thread_id: Optional[str] = None
+
+@app.post("/api/gemini/pins/ask")
+async def gemini_pin_interroger(req: GeminiPinAskReq):
+    """Pose une question à un document épinglé, désigné par son titre ou son identifiant."""
+    import core.database as _db
+    from core.engine import ask_cache_gemini
+    from core.hub import load_settings
+    pin = _db.find_gemini_pin(req.reference or "")
+    if not pin:
+        dispo = ", ".join(p.get("titre", "?") for p in _db.list_gemini_pins()) or "aucun"
+        return {"result": f"[Aucun document épinglé ne correspond à « {req.reference} ». "
+                          f"Documents disponibles : {dispo}.]"}
+    settings = load_settings(req.thread_id)
+    texte = await ask_cache_gemini(pin["name"], req.question or "",
+                                   model=pin.get("model") or None,
+                                   api_keys=settings.get("api_keys", {}))
+    return {"result": texte, "titre": pin.get("titre", "")}
+
+class CoanimmAudioReq(BaseModel):
+    source: str = ""
+    question: Optional[str] = None
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/describe_audio")
+async def coanimm_describe_audio(req: CoanimmAudioReq):
+    """Décrit un document sonore : au-delà des paroles (que Whisper transcrit déjà
+    en local), qui parle, sur quel ton, les bruits, la musique, les silences."""
+    import core.database as _db
+    if "describe_audio" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil « décrire un audio » désactivé dans le catalogue.]"}
+    from core.engine import describe_audio_gemini
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    return {"result": await describe_audio_gemini(req.source or "", req.question or "",
+                                                  api_keys=settings.get("api_keys", {}))}
+
+class CoanimmVideoReq(BaseModel):
+    source: str = ""          # chemin local ou lien (YouTube accepté)
+    question: Optional[str] = None
+    thread_id: Optional[str] = None
+
+@app.post("/api/coanimm/describe_video")
+async def coanimm_describe_video(req: CoanimmVideoReq):
+    """Décrit une vidéo (fichier local ou lien) avec repères de temps. Une vidéo est
+    le contenu le plus opaque quand on ne voit pas : la bande-son ne dit presque
+    jamais ce qui est montré."""
+    import core.database as _db
+    if "describe_video" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil « décrire une vidéo » désactivé dans le catalogue.]"}
+    from core.engine import describe_video_gemini
+    from core.hub import load_settings
+    settings = load_settings(req.thread_id)
+    return {"result": await describe_video_gemini(req.source or "", req.question or "",
+                                                  api_keys=settings.get("api_keys", {}))}
+
 class CoanimmAskDocsReq(BaseModel):
     question: str = ""
     k: int = 5
@@ -2532,6 +2805,11 @@ _COANIMM_TOOLS = [
     {"tool": "extract_text", "label": "Extraire le texte d'un document", "category": "Documents"},
     {"tool": "read_pdf_visual", "label": "Lire un PDF visuellement (mise en page, tableaux, scans)", "category": "Documents"},
     {"tool": "ask_documents", "label": "Interroger la base de connaissances avec citations", "category": "Documents"},
+    {"tool": "describe_video", "label": "Décrire une vidéo (fichier ou lien)", "category": "Images"},
+    {"tool": "describe_audio", "label": "Décrire un document sonore (ton, bruits, musique)", "category": "Audio & voix"},
+    {"tool": "pin_document", "label": "Épingler un document et l'interroger (cache Gemini)", "category": "Documents"},
+    {"tool": "thread_document", "label": "Attacher un document à la conversation", "category": "Documents"},
+    {"tool": "veille", "label": "Recherche par le sens et sujets de veille (Exa)", "category": "Recherche & web"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},
@@ -3638,6 +3916,127 @@ async def set_stt_settings(req: dict):
     if req.get('model') in ('tiny', 'base', 'small', 'medium', 'large'):
         set_setting('stt_model', req['model'])
     return {"status": "ok"}
+
+class VeilleSujetReq(BaseModel):
+    libelle: Optional[str] = None
+    requete: Optional[str] = None
+    url_reference: Optional[str] = None
+    periode: str = "hebdomadaire"
+    nb: int = 8
+    actif: Optional[bool] = None
+
+@app.get("/api/veille/sujets")
+async def veille_lister():
+    """Sujets suivis, avec leur dernier relevé."""
+    from modules.veille import list_sujets, veille_due, PERIODES
+    sujets = list_sujets()
+    for s in sujets:
+        s["du"] = veille_due(s)
+    return {"sujets": sujets, "periodes": list(PERIODES.keys())}
+
+@app.post("/api/veille/sujets")
+async def veille_ajouter(req: VeilleSujetReq):
+    """Crée un sujet de veille. Une adresse de référence prime sur la requête :
+    on cherche alors ce qui RESSEMBLE à cette page, pas ce qui contient ces mots."""
+    from modules.veille import add_sujet
+    if not (req.requete or "").strip() and not (req.url_reference or "").strip():
+        raise HTTPException(400, "Indique une requête ou une adresse de référence.")
+    return add_sujet(req.libelle or "", req.requete or "", req.periode,
+                     req.url_reference or "", req.nb)
+
+@app.patch("/api/veille/sujets/{sujet_id}")
+async def veille_modifier(sujet_id: str, req: VeilleSujetReq):
+    from modules.veille import update_sujet
+    champs = {}
+    if req.actif is not None:
+        champs["actif"] = bool(req.actif)
+    if req.periode:
+        champs["periode"] = req.periode
+    if req.libelle is not None:
+        champs["libelle"] = req.libelle
+    sujet = update_sujet(sujet_id, **champs)
+    if not sujet:
+        raise HTTPException(404, "Sujet de veille introuvable.")
+    return sujet
+
+@app.delete("/api/veille/sujets/{sujet_id}")
+async def veille_supprimer(sujet_id: str):
+    from modules.veille import remove_sujet
+    return {"sujets": remove_sujet(sujet_id)}
+
+@app.post("/api/veille/relever/{sujet_id}")
+async def veille_relever(sujet_id: str):
+    """Relève un sujet tout de suite, sans attendre son échéance."""
+    import asyncio as _aio, functools as _ft
+    from modules.veille import list_sujets, relever_sujet, update_sujet
+    from core.database import get_api_keys
+    sujet = next((s for s in list_sujets() if s.get("id") == sujet_id), None)
+    if not sujet:
+        raise HTTPException(404, "Sujet de veille introuvable.")
+    cles = get_api_keys()
+    nouveaux, message = await _aio.get_event_loop().run_in_executor(
+        None, _ft.partial(relever_sujet, sujet, cles))
+    update_sujet(sujet_id, dernier_run=datetime.now().isoformat(timespec="seconds"),
+                 dernier_statut=message, nb_trouves=len(nouveaux))
+    return {"nouveautes": nouveaux, "message": message}
+
+class ExaReq(BaseModel):
+    requete: Optional[str] = None
+    url: Optional[str] = None
+    nb: int = 8
+    depuis_jours: Optional[int] = None
+
+@app.post("/api/exa/search")
+async def exa_chercher(req: ExaReq):
+    """Recherche par le SENS : Exa cherche des documents proches d'une idée, là
+    où Brave et Tavily cherchent des mots. Complémentaire, pas concurrent."""
+    import asyncio as _aio, functools as _ft
+    from modules.veille import exa_search, exa_similar
+    from core.database import get_api_keys
+    cles = get_api_keys()
+    if (req.url or "").strip():
+        fn = _ft.partial(exa_similar, req.url, req.nb, req.depuis_jours, cles)
+    else:
+        fn = _ft.partial(exa_search, req.requete or "", req.nb, req.depuis_jours,
+                         None, "", cles)
+    resultats, erreur = await _aio.get_event_loop().run_in_executor(None, fn)
+    return {"resultats": resultats, "erreur": erreur}
+
+@app.get("/api/settings/rerank")
+async def get_rerank_settings():
+    """Réglages du réordonnancement + ce qui s'appliquera VRAIMENT, expliqué."""
+    from modules.reranker import moteur_disponible, seuil_pertinence
+    from core.database import get_api_keys
+    moteur, note = moteur_disponible(get_api_keys())
+    return {
+        "mode":   get_setting('rag_rerank_mode', 'auto'),
+        "url":    get_setting('rag_rerank_url', ''),
+        "modele": get_setting('rag_rerank_modele', ''),
+        "seuil":  seuil_pertinence(),
+        "moteur_effectif": moteur,
+        "explication": note,
+    }
+
+@app.post("/api/settings/rerank")
+async def set_rerank_settings(req: dict):
+    """Enregistre les réglages puis renvoie l'effet réel : un réglage accepté
+    mais sans effet (moteur choisi sans clé) doit être dit, pas deviné."""
+    from modules.reranker import moteur_disponible, seuil_pertinence
+    from core.database import get_api_keys
+    if req.get('mode') in ('auto', 'off', 'local', 'cohere', 'voyage', 'jina', 'llm'):
+        set_setting('rag_rerank_mode', req['mode'])
+    if 'url' in req:
+        set_setting('rag_rerank_url', (req.get('url') or '').strip())
+    if 'modele' in req:
+        set_setting('rag_rerank_modele', (req.get('modele') or '').strip())
+    if 'seuil' in req:
+        try:
+            set_setting('rag_rerank_seuil', str(min(1.0, max(0.0, float(req['seuil'])))))
+        except (TypeError, ValueError):
+            pass
+    moteur, note = moteur_disponible(get_api_keys())
+    return {"status": "ok", "moteur_effectif": moteur, "explication": note,
+            "seuil": seuil_pertinence()}
 
 @app.get("/api/settings/presence")
 async def get_presence():
@@ -4773,6 +5172,178 @@ class AnthropicBatchSubmitReq(BaseModel):
     max_tokens: int = 1024
     temperature: float = 0.7
     system: Optional[str] = None
+
+def _gemini_batch_headers():
+    from core.database import get_api_keys
+    key = (get_api_keys().get('gemini') or '').strip()
+    if not key:
+        raise HTTPException(400, "Clé Gemini non configurée")
+    return {"x-goog-api-key": key, "content-type": "application/json"}
+
+_GEMINI_ETATS = {
+    "JOB_STATE_PENDING": "en attente",
+    "JOB_STATE_QUEUED": "en file d'attente",
+    "JOB_STATE_RUNNING": "en cours",
+    "JOB_STATE_SUCCEEDED": "terminé",
+    "JOB_STATE_FAILED": "échoué",
+    "JOB_STATE_CANCELLED": "annulé",
+    "JOB_STATE_EXPIRED": "expiré (48 h dépassées)",
+}
+
+class GeminiBatchSubmitReq(BaseModel):
+    prompts: List = []
+    model: Optional[str] = None
+    system: Optional[str] = None
+    max_tokens: int = 1024
+    temperature: float = 0.7
+
+@app.post("/api/gemini/batch/submit")
+async def gemini_batch_submit(req: GeminiBatchSubmitReq):
+    """Soumet un lot de requêtes à l'API Batch de Gemini (moitié prix, asynchrone,
+    48 h maximum). Chaque élément de `prompts` est une chaîne ou {system, user}."""
+    import httpx
+    from core.engine import _resolve_model
+    if not req.prompts:
+        raise HTTPException(400, "Aucune requête à envoyer.")
+    modele = _resolve_model('gemini', req.model)
+    requetes = []
+    for i, p in enumerate(req.prompts):
+        sys_p, user_p = req.system or "", p
+        if isinstance(p, dict):
+            sys_p = p.get("system") or sys_p
+            user_p = p.get("user", "")
+        r = {"contents": [{"role": "user", "parts": [{"text": str(user_p)}]}],
+             "generation_config": {"maxOutputTokens": req.max_tokens,
+                                   "temperature": req.temperature}}
+        if sys_p:
+            r["system_instruction"] = {"parts": [{"text": sys_p}]}
+        requetes.append({"request": r, "metadata": {"key": f"req_{i}"}})
+    corps = {"batch": {"display_name": f"NIMM {len(requetes)} requêtes",
+                       "input_config": {"requests": {"requests": requetes}}}}
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{modele}:batchGenerateContent",
+            headers=_gemini_batch_headers(), json=corps)
+        if r.status_code >= 400:
+            from core.engine import _gemini_message_erreur
+            raise HTTPException(r.status_code, _gemini_message_erreur(r))
+        data = r.json()
+    return {"batch_id": data.get("name", ""), "status": "JOB_STATE_PENDING",
+            "total": len(requetes)}
+
+def _gemini_batch_etat(data: dict) -> str:
+    """L'état vit dans metadata.state, mais certaines réponses le placent à la
+    racine : on regarde les deux plutôt que d'annoncer « inconnu » à tort."""
+    meta = data.get("metadata") or {}
+    return (meta.get("state") or data.get("state")
+            or ("JOB_STATE_SUCCEEDED" if data.get("done") else "JOB_STATE_RUNNING"))
+
+@app.get("/api/gemini/batch/status/{batch_id:path}")
+async def gemini_batch_status(batch_id: str):
+    """Avancement d'un lot Gemini. `batch_id` est de la forme « batches/123 »."""
+    import httpx
+    nom = batch_id if batch_id.startswith("batches/") else f"batches/{batch_id}"
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.get(f"https://generativelanguage.googleapis.com/v1beta/{nom}",
+                             headers=_gemini_batch_headers())
+        if r.status_code >= 400:
+            from core.engine import _gemini_message_erreur
+            raise HTTPException(r.status_code, _gemini_message_erreur(r))
+        data = r.json()
+    etat = _gemini_batch_etat(data)
+    fini = etat in ("JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED",
+                    "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED")
+    return {"batch_id": nom, "status": etat,
+            "libelle": _GEMINI_ETATS.get(etat, etat), "termine": fini,
+            "erreur": str((data.get("error") or {}).get("message") or "")}
+
+def _gemini_batch_extraire(data: dict) -> list:
+    """Remet les réponses d'un lot dans l'ordre de soumission.
+
+    Gemini range les résultats tantôt sous response.inlinedResponses, tantôt
+    sous dest.inlinedResponses, et la liste elle-même est parfois encapsulée
+    une fois de plus. On accepte les trois formes : mieux vaut un peu de
+    souplesse ici qu'une page blanche après une heure d'attente.
+    """
+    brut = ((data.get("response") or {}).get("inlinedResponses")
+            or (data.get("dest") or {}).get("inlinedResponses") or [])
+    if isinstance(brut, dict):
+        brut = brut.get("inlinedResponses") or []
+    sorties = []
+    for i, item in enumerate(brut):
+        cle = ((item.get("metadata") or {}).get("key")
+               or item.get("key") or f"req_{i}")
+        texte, erreur = "", ""
+        rep = item.get("response") or {}
+        if item.get("error"):
+            e = item["error"]
+            erreur = str(e.get("message") if isinstance(e, dict) else e)
+        else:
+            cand = (rep.get("candidates") or [{}])[0]
+            texte = "".join(pp.get("text", "")
+                            for pp in ((cand.get("content") or {}).get("parts") or [])
+                            if "text" in pp)
+            if not texte and cand.get("finishReason") in ("SAFETY", "RECITATION"):
+                erreur = f"réponse bloquée ({cand['finishReason']})"
+        sorties.append({"custom_id": cle, "text": texte, "error": erreur})
+    def _rang(e):
+        try:
+            return int(str(e["custom_id"]).rsplit("_", 1)[-1])
+        except (ValueError, KeyError):
+            return 1 << 30
+    sorties.sort(key=_rang)
+    return sorties
+
+@app.get("/api/gemini/batch/results/{batch_id:path}")
+async def gemini_batch_results(batch_id: str):
+    """Résultats d'un lot Gemini terminé. Si Gemini a déposé les résultats dans
+    un fichier plutôt qu'en ligne, on le télécharge."""
+    import httpx, json as _json
+    nom = batch_id if batch_id.startswith("batches/") else f"batches/{batch_id}"
+    async with httpx.AsyncClient(timeout=180) as client:
+        r = await client.get(f"https://generativelanguage.googleapis.com/v1beta/{nom}",
+                             headers=_gemini_batch_headers())
+        if r.status_code >= 400:
+            from core.engine import _gemini_message_erreur
+            raise HTTPException(r.status_code, _gemini_message_erreur(r))
+        data = r.json()
+        etat = _gemini_batch_etat(data)
+        if etat != "JOB_STATE_SUCCEEDED":
+            return {"status": etat, "results": [],
+                    "message": f"Le lot est {_GEMINI_ETATS.get(etat, etat)}."}
+        sorties = _gemini_batch_extraire(data)
+        if not sorties:
+            fichier = ((data.get("response") or {}).get("responsesFile")
+                       or (data.get("dest") or {}).get("fileName") or "")
+            if fichier:
+                d = await client.get(
+                    f"https://generativelanguage.googleapis.com/download/v1beta/{fichier}:download?alt=media",
+                    headers=_gemini_batch_headers())
+                if d.status_code < 400:
+                    lignes = []
+                    for ligne in d.text.splitlines():
+                        ligne = ligne.strip()
+                        if not ligne:
+                            continue
+                        try:
+                            lignes.append(_json.loads(ligne))
+                        except Exception:
+                            continue
+                    sorties = _gemini_batch_extraire({"response": {"inlinedResponses": lignes}})
+    return {"status": "ended", "results": sorties}
+
+@app.delete("/api/gemini/batch/{batch_id:path}")
+async def gemini_batch_cancel(batch_id: str):
+    """Annule un lot Gemini en cours."""
+    import httpx
+    nom = batch_id if batch_id.startswith("batches/") else f"batches/{batch_id}"
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(f"https://generativelanguage.googleapis.com/v1beta/{nom}:cancel",
+                              headers=_gemini_batch_headers())
+        if r.status_code >= 400:
+            from core.engine import _gemini_message_erreur
+            raise HTTPException(r.status_code, _gemini_message_erreur(r))
+    return {"status": "ok", "batch": "JOB_STATE_CANCELLED"}
 
 def _anthropic_batch_headers():
     from core.database import get_api_keys
