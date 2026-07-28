@@ -298,7 +298,14 @@ async def root():
         html = _f.read()
     html = html.replace('/static/styles.css"', f'/static/styles.css?v={_STATIC_VERSION}"')
     html = html.replace('/static/app.js"',    f'/static/app.js?v={_STATIC_VERSION}"')
-    return HTMLResponse(content=html)
+    # La page index.html elle-meme ne doit jamais etre mise en cache par le
+    # navigateur (contrairement a styles.css/app.js qui ont leur propre
+    # cache-busting via ?v=). Sans ca, un telephone peut garder une version
+    # perimee de la page (balises meta, structure HTML) malgre nos mises a jour.
+    return HTMLResponse(content=html, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+    })
 
 @app.get("/api/embeddings/status")
 async def embeddings_status():
@@ -3916,16 +3923,18 @@ class VeilleSujetReq(BaseModel):
     url_reference: Optional[str] = None
     periode: str = "hebdomadaire"
     nb: int = 8
+    categorie: str = ""
     actif: Optional[bool] = None
 
 @app.get("/api/veille/sujets")
 async def veille_lister():
     """Sujets suivis, avec leur dernier relevé."""
-    from modules.veille import list_sujets, veille_due, PERIODES
+    from modules.veille import list_sujets, veille_due, PERIODES, CATEGORIES
     sujets = list_sujets()
     for s in sujets:
         s["du"] = veille_due(s)
-    return {"sujets": sujets, "periodes": list(PERIODES.keys())}
+    return {"sujets": sujets, "periodes": list(PERIODES.keys()),
+            "categories": [{"valeur": k, "libelle": v} for k, v in CATEGORIES.items()]}
 
 @app.post("/api/veille/sujets")
 async def veille_ajouter(req: VeilleSujetReq):
@@ -3935,7 +3944,7 @@ async def veille_ajouter(req: VeilleSujetReq):
     if not (req.requete or "").strip() and not (req.url_reference or "").strip():
         raise HTTPException(400, "Indique une requête ou une adresse de référence.")
     return add_sujet(req.libelle or "", req.requete or "", req.periode,
-                     req.url_reference or "", req.nb)
+                     req.url_reference or "", req.nb, req.categorie or "")
 
 @app.patch("/api/veille/sujets/{sujet_id}")
 async def veille_modifier(sujet_id: str, req: VeilleSujetReq):
@@ -3978,6 +3987,7 @@ class ExaReq(BaseModel):
     url: Optional[str] = None
     nb: int = 8
     depuis_jours: Optional[int] = None
+    categorie: str = ""
 
 @app.post("/api/exa/search")
 async def exa_chercher(req: ExaReq):
@@ -3988,12 +3998,51 @@ async def exa_chercher(req: ExaReq):
     from core.database import get_api_keys
     cles = get_api_keys()
     if (req.url or "").strip():
-        fn = _ft.partial(exa_similar, req.url, req.nb, req.depuis_jours, cles)
+        fn = _ft.partial(exa_similar, req.url, req.nb, req.depuis_jours, cles,
+                         req.categorie or "")
     else:
         fn = _ft.partial(exa_search, req.requete or "", req.nb, req.depuis_jours,
-                         None, "", cles)
+                         None, req.categorie or "", cles)
     resultats, erreur = await _aio.get_event_loop().run_in_executor(None, fn)
     return {"resultats": resultats, "erreur": erreur}
+
+class ExaLireReq(BaseModel):
+    urls: List[str] = []
+    nb_caracteres: int = 8000
+    ingerer: bool = False
+
+@app.post("/api/exa/lire")
+async def exa_lire_pages(req: ExaLireReq):
+    """Texte PROPRE d'une page web : sans menus, bandeaux ni publicités.
+
+    Lu au lecteur d'écran, un article vu à travers un navigateur, c'est aussi
+    tout le décor du site. Ici on n'a que le contenu — écoutable tel quel, et
+    versable dans la base de connaissances si on le demande."""
+    import asyncio as _aio, functools as _ft
+    from modules.veille import exa_lire
+    from core.database import get_api_keys
+    resultats, erreur = await _aio.get_event_loop().run_in_executor(
+        None, _ft.partial(exa_lire, req.urls, req.nb_caracteres, get_api_keys()))
+    if req.ingerer and resultats:
+        from modules.enrichissement import ingest_text
+        for r in resultats:
+            if r.get("extrait"):
+                try:
+                    ingest_text(r["titre"], r["extrait"], source=r["url"])
+                except Exception:
+                    pass
+    return {"resultats": resultats, "erreur": erreur, "ingere": bool(req.ingerer)}
+
+@app.get("/api/settings/services")
+async def settings_services():
+    """Catalogue des services externes, groupé par famille, avec l'état de
+    configuration — jamais les clés elles-mêmes.
+
+    Source unique qui alimente le formulaire des clés : ajouter un service se
+    fait dans core/services.py, et l'interface suit."""
+    from core.services import par_famille
+    from core.database import get_api_keys
+    return {"familles": par_famille(get_api_keys())}
 
 @app.get("/api/settings/rerank")
 async def get_rerank_settings():

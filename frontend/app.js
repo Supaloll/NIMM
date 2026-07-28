@@ -1016,7 +1016,7 @@ const isAdmin = me.admin;
         <h4>🔑 Clés API globales (serveur)</h4>
         <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:10px">Utilisées par tous les profils sans clé personnelle.</p>
         <div class="api-keys-grid">`;
-        ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily'].forEach(p => {
+        _svcIds().forEach(p => {
             const label = p.replace('_',' ');
             const id    = `global-key-${p.replace('_','-')}`;
             const ph    = globalKeys[p] ? '✅ Configurée' : '❌ Non configurée';
@@ -4813,7 +4813,7 @@ async function loadSettingsIntoUI() {
         }
 
         // Indiquer si les clés sont configurées
-        ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily'].forEach(p => {
+        _svcIds().forEach(p => {
             const el = document.getElementById(`api-key-${p.replace('_','-')}`);
             if (el) el.placeholder = keys[p] ? '✅ Configurée' : '❌ Non configurée';
         });
@@ -5649,9 +5649,60 @@ document.getElementById('memoire-mode-select')?.addEventListener('change', async
     _autoSaveFlash(e.target);
 });
 
+// ── Services externes : le formulaire des clés est ENGENDRÉ depuis le
+// catalogue serveur (core/services.py). Ajouter un service là-bas suffit :
+// les clés d'Exa, Cohere, Voyage et Jina n'avaient nulle part où être saisies
+// tant que cette liste était écrite en dur ici, à trois endroits. ──
+let _SERVICES = [];
+
+function _svcIds() {
+    // Repli sur l'ancienne liste tant que le catalogue n'est pas revenu :
+    // le formulaire doit rester utilisable même si la route échoue.
+    return _SERVICES.length ? _SERVICES.map(s => s.id)
+        : ['anthropic', 'deepseek', 'gemini', 'openai', 'openrouter',
+           'mistral', 'stability_ai', 'brave', 'tavily'];
+}
+
+function _svcEchappe(t) {
+    return String(t == null ? '' : t)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+async function _chargerServices() {
+    const hote = document.getElementById('api-keys-auto');
+    try {
+        const d = await fetch('/api/settings/services').then(r => r.json());
+        _SERVICES = (d.familles || []).reduce((a, f) => a.concat(f.services || []), []);
+        if (!hote) return;
+        hote.innerHTML = (d.familles || []).map(function (f) {
+            const titre = '<h5 style="grid-column:1/-1;margin:10px 0 2px;font-size:0.85rem;">'
+                        + _svcEchappe(f.libelle) + '</h5>';
+            return titre + (f.services || []).map(function (sv) {
+                const id = 'api-key-' + sv.html_id;
+                const ph = sv.configure ? '✅ Configurée — laisser vide pour ne pas changer'
+                                        : (sv.exemple || '');
+                // Le rôle du service est porté par aria-describedby : lu au focus,
+                // sans alourdir l'étiquette du champ.
+                return '<label for="' + id + '">' + _svcEchappe(sv.nom) + '</label>'
+                     + '<input type="password" id="' + id + '" placeholder="' + _svcEchappe(ph)
+                     + '" aria-describedby="' + id + '-role">'
+                     + '<div id="' + id + '-role" style="grid-column:1/-1;font-size:0.75rem;'
+                     + 'color:var(--text-muted);margin:-4px 0 8px;">' + _svcEchappe(sv.role || '')
+                     + (sv.console ? ' <a href="' + _svcEchappe(sv.console)
+                                   + '" target="_blank" rel="noopener">Obtenir une clé</a>' : '')
+                     + '</div>';
+            }).join('');
+        }).join('');
+    } catch (e) {
+        if (hote) hote.textContent = 'Catalogue des services indisponible : ' + e.message;
+    }
+}
+_chargerServices();
+
 // ── Clés API — bouton dédié (saisie manuelle, on ne sauvegarde pas pendant la frappe) ──
 async function _saveApiKeys() {
-    const providers = ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily'];
+    const providers = _svcIds();
     const keys = {};
     providers.forEach(p => {
         const val = document.getElementById(`api-key-${p.replace('_','-')}`)?.value.trim();
@@ -5674,6 +5725,7 @@ async function _saveApiKeys() {
     // Re-appliquer les contraintes de routage avec les nouvelles clés
     const freshKeys = await fetch('/api/settings/api-keys').then(r => r.json());
     _applyProviderConstraints(freshKeys);
+    await _chargerServices();   // remet les pastilles « Configurée » à jour
 
     // Si le provider actuel est Ollama ou vide, basculer automatiquement sur le premier provider configuré
     const currentProvider = await fetch('/api/settings/provider').then(r => r.json()).then(d => d.provider).catch(() => '');
@@ -8324,25 +8376,33 @@ function setupUpload() {
 // MOBILE — ADAPTATION HAUTEUR CLAVIER
 // ══════════════════════════════════════════
 
-if (window.visualViewport) {
-    const appEl = document.getElementById('app');
-    window.visualViewport.addEventListener('resize', () => {
-        if (isMobile()) {
-            appEl.style.height = window.visualViewport.height + 'px';
-            // Maintenir le scroll bas pendant la frappe
-            const inputEl = document.getElementById('user-input');
-            if (document.activeElement === inputEl) {
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            }
-        }
-    });
-    // Reset hauteur si retour paysage / clavier fermé
-    window.visualViewport.addEventListener('scroll', () => {
-        if (isMobile()) {
-            appEl.style.height = window.visualViewport.height + 'px';
-        }
-    });
-}
+// Redimensionnement JS désactivé (2026-07-26) : le CSS (100dvh) combiné à
+// l'attribut viewport "interactive-widget=resizes-content" gère maintenant
+// nativement l'adaptation au clavier, sans les bugs de rendu (écran/texte
+// invisible sur iPhone, zone noire sur Android) causés par ce script.
+// Conservé en commentaire au cas où un ancien navigateur en aurait besoin :
+//
+// if (window.visualViewport) {
+//     const appEl = document.getElementById('app');
+//     let _vvTimer = null;
+//     function _applyViewportHeight() {
+//         if (!isMobile()) return;
+//         appEl.style.height = window.visualViewport.height + 'px';
+//         void appEl.offsetHeight;
+//         const inputEl = document.getElementById('user-input');
+//         if (document.activeElement === inputEl) {
+//             messagesDiv.scrollTop = messagesDiv.scrollHeight;
+//         }
+//     }
+//     window.visualViewport.addEventListener('resize', () => {
+//         if (_vvTimer) clearTimeout(_vvTimer);
+//         _vvTimer = setTimeout(_applyViewportHeight, 120);
+//     });
+//     window.visualViewport.addEventListener('scroll', () => {
+//         if (_vvTimer) clearTimeout(_vvTimer);
+//         _vvTimer = setTimeout(_applyViewportHeight, 120);
+//     });
+// }
 
 // ══════════════════════════════════════════
 // ONGLETS PARAMÈTRES
@@ -11907,6 +11967,14 @@ init();
             var r = await fetch('/api/veille/sujets');
             var d = await r.json();
             var sujets = d.sujets || [];
+            // Les catégories viennent du serveur : les libellés français y sont
+            // définis une seule fois, à côté des valeurs qu'Exa impose.
+            var cat = document.getElementById('veille-categorie');
+            if (cat && !cat.options.length) {
+                cat.innerHTML = (d.categories || []).map(function (c) {
+                    return '<option value="' + c.valeur + '">' + c.libelle + '</option>';
+                }).join('');
+            }
             sel.innerHTML = sujets.length
                 ? sujets.map(function (s) {
                       var etat = s.dernier_run
@@ -11934,7 +12002,9 @@ init();
         try {
             var r = await fetch('/api/veille/sujets', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ libelle: lib, requete: req, url_reference: url, periode: per })
+                body: JSON.stringify({ libelle: lib, requete: req, url_reference: url,
+                                       periode: per,
+                                       categorie: document.getElementById('veille-categorie')?.value || '' })
             });
             if (!r.ok) throw new Error(await r.text());
             var d = await r.json();
