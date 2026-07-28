@@ -1195,6 +1195,57 @@ def get_active_web_references() -> list:
     conn.close()
     return [dict(r) for r in rows]
 
+def list_documents_base() -> list:
+    """Documents VOLONTAIREMENT ingérés dans la base de connaissances.
+
+    On écarte les entrées de source « recherche » : ce sont des pages mises en
+    cache automatiquement par la recherche web, pas des documents que
+    l'utilisateur a choisi de verser. Les mélanger noierait sa vingtaine de
+    documents dans des centaines de captures.
+    """
+    from datetime import datetime
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    now = datetime.now().isoformat()
+    rows = conn.execute(
+        """SELECT id, query, source, captured_at, LENGTH(content) AS nb_car
+             FROM web_reference
+            WHERE (expiration IS NULL OR expiration > ?)
+              AND COALESCE(source, '') <> 'recherche'
+         ORDER BY captured_at DESC""", (now,)).fetchall()
+    conn.close()
+    vus, sortie = set(), []
+    for r in rows:
+        d = dict(r)
+        titre = (d.get('query') or '').strip()
+        if not titre or titre.casefold() in vus:
+            continue          # un même document réingéré ne doit apparaître qu'une fois
+        vus.add(titre.casefold())
+        sortie.append({'id': d['id'], 'titre': titre, 'source': d.get('source') or '',
+                       'nb_car': d.get('nb_car') or 0,
+                       'capture': (d.get('captured_at') or '')[:10]})
+    return sortie
+
+def get_document_base(ref_id) -> dict:
+    """Contenu d'un document de la base, par son identifiant. {} si absent ou expiré."""
+    from datetime import datetime
+    try:
+        ref_id = int(ref_id)
+    except (TypeError, ValueError):
+        return {}
+    conn = get_conn()
+    _ensure_web_reference_table(conn)
+    row = conn.execute(
+        "SELECT id, query, content, source FROM web_reference "
+        "WHERE id = ? AND (expiration IS NULL OR expiration > ?)",
+        (ref_id, datetime.now().isoformat())).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    d = dict(row)
+    return {'id': d['id'], 'titre': d.get('query') or 'Document',
+            'texte': d.get('content') or '', 'source': d.get('source') or ''}
+
 def purge_web_references() -> int:
     """Supprime les références expirées. Retourne le nombre supprimé."""
     from datetime import datetime
@@ -2251,7 +2302,139 @@ def remove_mcp_server(server_id: str) -> list:
     _save_mcp_servers([s for s in _raw_mcp_servers() if s.get('id') != server_id])
     return list_mcp_servers()
 
+# ── Journal de fonctionnement ──
+# Les décisions techniques de NIMM (document écarté, appel d'outil converti, cache
+# désactivé…) partaient uniquement dans la console. Inutilisable pour qui pilote
+# NIMM au lecteur d'écran : on les consigne ici pour les rendre consultables.
+_DIAG_MAX = 80
+
+def list_diagnostics() -> list:
+    raw = get_setting('nimm_diagnostics', '[]')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def add_diagnostic(categorie: str, message: str) -> None:
+    """Consigne une décision technique. Silencieux : ne doit jamais gêner le chat."""
+    try:
+        journal = list_diagnostics()
+        journal.insert(0, {
+            'ts': datetime.now().isoformat(timespec='seconds'),
+            'categorie': (categorie or 'info')[:40],
+            'message': (message or '')[:300],
+        })
+        set_setting('nimm_diagnostics', json.dumps(journal[:_DIAG_MAX], ensure_ascii=False))
+    except Exception:
+        pass
+
+def clear_diagnostics() -> None:
+    set_setting('nimm_diagnostics', '[]')
+
 _COANIMM_SCHEDULES_MAX = 50
+
+_THREAD_DOC_MAX_CAR = 300000   # au-delà, on tronque : aucun modèle ne suit plus
+_THREAD_DOC_MAX_FILS = 10      # on ne garde le texte que des 10 derniers fils
+
+def get_thread_document(thread_id: str) -> dict:
+    """Document attaché à un fil de conversation : {titre, texte, source, nb_car,
+    tronque, attache_le}. Rend {} si le fil n'en a pas."""
+    if not thread_id:
+        return {}
+    try:
+        data = json.loads(get_setting('thread_documents', '{}'))
+    except Exception:
+        return {}
+    return data.get(thread_id) or {} if isinstance(data, dict) else {}
+
+def set_thread_document(thread_id: str, titre: str, texte: str, source: str = '') -> dict:
+    """Attache un document à un fil. Le texte est conservé EN LOCAL uniquement,
+    et détaché sur demande efface réellement le contenu — Fernando doit pouvoir
+    confier un document confidentiel puis le retirer sans laisser de trace."""
+    if not thread_id:
+        return {}
+    try:
+        data = json.loads(get_setting('thread_documents', '{}'))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    texte = texte or ''
+    tronque = len(texte) > _THREAD_DOC_MAX_CAR
+    fiche = {'titre': (titre or 'Document')[:200], 'texte': texte[:_THREAD_DOC_MAX_CAR],
+             'source': (source or '')[:400], 'nb_car': len(texte), 'tronque': tronque,
+             'attache_le': datetime.now().isoformat(timespec='seconds')}
+    # L'ordre d'INSERTION fait foi, pas l'horodatage : celui-ci est à la seconde,
+    # donc plusieurs attaches rapprochées portent la même date et un tri stable
+    # conserverait alors les PLUS ANCIENNES. On réinsère en dernier, puis on
+    # coupe par la tête.
+    data.pop(thread_id, None)
+    data[thread_id] = fiche
+    for vieux in list(data.keys())[:-_THREAD_DOC_MAX_FILS]:
+        data.pop(vieux, None)
+    set_setting('thread_documents', json.dumps(data, ensure_ascii=False))
+    return fiche
+
+def clear_thread_document(thread_id: str) -> bool:
+    """Détache et EFFACE le texte. Rend True si un document était bien attaché."""
+    try:
+        data = json.loads(get_setting('thread_documents', '{}'))
+    except Exception:
+        return False
+    if not isinstance(data, dict) or thread_id not in data:
+        return False
+    data.pop(thread_id, None)
+    set_setting('thread_documents', json.dumps(data, ensure_ascii=False))
+    return True
+
+def list_gemini_pins() -> list:
+    """Documents épinglés dans le cache explicite Gemini.
+
+    On ne garde ici que des MÉTADONNÉES (titre, identifiant du cache, modèle,
+    date d'expiration, nombre de jetons) : le contenu du document reste chez
+    Gemini et n'est de toute façon pas relisible via l'API. Rien de
+    confidentiel n'est donc recopié dans la base locale.
+    """
+    raw = get_setting('gemini_pins', '[]')
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def _save_gemini_pins(pins: list) -> list:
+    set_setting('gemini_pins', json.dumps(pins[:50], ensure_ascii=False))
+    return pins[:50]
+
+def add_gemini_pin(name: str, titre: str, model: str, expire: str, nb_tokens: int = 0) -> list:
+    pins = [p for p in list_gemini_pins() if p.get('name') != name]
+    pins.insert(0, {'name': name, 'titre': (titre or 'Document')[:200], 'model': model,
+                    'expire': expire, 'nb_tokens': int(nb_tokens or 0),
+                    'cree_le': datetime.now().isoformat(timespec='seconds')})
+    return _save_gemini_pins(pins)
+
+def remove_gemini_pin(name: str) -> list:
+    return _save_gemini_pins([p for p in list_gemini_pins() if p.get('name') != name])
+
+def find_gemini_pin(reference: str) -> dict:
+    """Retrouve un document épinglé par son identifiant exact OU par son titre
+    (comparaison souple : casse et espaces ignorés). Rend {} si rien ne colle."""
+    ref = (reference or '').strip()
+    if not ref:
+        return {}
+    pins = list_gemini_pins()
+    for p in pins:
+        if p.get('name') == ref:
+            return p
+    cible = ref.casefold().strip()
+    for p in pins:
+        if (p.get('titre') or '').casefold().strip() == cible:
+            return p
+    for p in pins:
+        if cible and cible in (p.get('titre') or '').casefold():
+            return p
+    return {}
 
 def list_coanimm_schedules() -> list:
     """Ricochets planifiés : [{id, workflow_id, label, jour (None=tous, 0=lundi..6),

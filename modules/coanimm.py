@@ -186,6 +186,29 @@ GENERATE_SYSTEM_PROMPT = (
     "voice : id de voix (appeler nimm_list_voices() pour les options y compris voix Voxtral personnalisées) ; "
     "vide = voix par défaut. "
     "Retourne le chemin du fichier .daisy.\n"
+    "nimm_veille(requete='', url='', nb=8, depuis_jours=None) : recherche par le SENS "
+    "(Exa). Donne une requête OU une adresse : avec une adresse, on cherche ce qui "
+    "RESSEMBLE à cette page. Complète search_web, qui cherche des mots.\n"
+    "nimm_suivre_sujet(libelle, requete='', url_reference='', periode='hebdomadaire') : "
+    "met un sujet sous surveillance. NIMM le relève tout seul et verse les nouveautés "
+    "dans la base de connaissances.\n"
+    "nimm_attach_document(chemin='', texte='', titre='') : ATTACHE un document à LA "
+    "CONVERSATION EN COURS. Il est ensuite fourni au modèle à chaque question du fil, "
+    "et la base de connaissances cesse de proposer autre chose. C'est le bon outil "
+    "quand l'utilisateur dit « parlons de ce document ».\n"
+    "nimm_detach_document() : détache et efface le texte conservé.\n"
+    "nimm_pin_document(chemin='', contenu='', titre='', duree_h=1) : ÉPINGLE un long "
+    "document chez Gemini (cache explicite). On paie la lecture UNE fois, puis chaque "
+    "question coûte une fraction. Rend {ok, titre, nb_tokens}. Minimum ~2000 jetons.\n"
+    "nimm_ask_pinned(reference, question) : interroge un document épinglé, désigné par "
+    "son titre ou son identifiant. À utiliser en boucle pour poser plusieurs questions.\n"
+    "nimm_list_pinned() : liste les documents épinglés encore vivants.\n"
+    "nimm_unpin_document(reference) : libère un document épinglé (arrête d'en payer le stockage).\n"
+    "nimm_describe_audio(source, question='') : décrit un DOCUMENT SONORE — qui parle, "
+    "sur quel ton, bruits, musique, silences — au-delà de la simple transcription.\n"
+    "nimm_describe_video(source, question='') : décrit une VIDÉO (chemin local ou lien, "
+    "YouTube accepté) pour quelqu'un qui ne la voit pas : ce qui est montré, le texte à "
+    "l'écran, avec des repères de temps. Sépare ce qui est VU de ce qui est DIT.\n"
     "nimm_ask_documents(question, k=5) : répond à une question à partir de la base de "
     "connaissances en CITANT la phrase exacte de chaque source. À préférer à "
     "nimm_search_documents quand la réponse doit être vérifiable.\n"
@@ -193,7 +216,7 @@ GENERATE_SYSTEM_PROMPT = (
     "(mise en page, tableaux, figures, pages SCANNÉES). À préférer à nimm_extract_text quand "
     "le texte seul ne suffit pas : document scanné, tableau complexe, description accessible.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
-    "nimm_search_documents, nimm_ask_documents, nimm_extract_text, nimm_read_pdf_visual, nimm_ask_llm, nimm_read_url, nimm_translate, "
+    "nimm_search_documents, nimm_ask_documents, nimm_extract_text, nimm_read_pdf_visual, nimm_describe_video, nimm_describe_audio, nimm_pin_document, nimm_ask_pinned, nimm_ask_llm, nimm_read_url, nimm_translate, "
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
     "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
@@ -422,6 +445,91 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
+    dv = (
+        "def nimm_describe_video(source, question='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"source\": source, \"question\": question, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/describe_video\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=600) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
+    vg = (
+        "def nimm_veille(requete='', url='', nb=8, depuis_jours=None):\n"
+        "    _data = _nimm_json.dumps({\"requete\": requete, \"url\": url,\n"
+        "        \"nb\": nb, \"depuis_jours\": depuis_jours}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/exa/search\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        _d = _nimm_json.loads(_r.read())\n"
+        "    return _d.get(\"resultats\", []) if not _d.get(\"erreur\") else _d[\"erreur\"]\n"
+        "\n"
+        "def nimm_suivre_sujet(libelle, requete='', url_reference='', periode='hebdomadaire'):\n"
+        "    _data = _nimm_json.dumps({\"libelle\": libelle, \"requete\": requete,\n"
+        "        \"url_reference\": url_reference, \"periode\": periode}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/veille/sujets\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read())\n"
+    )
+    ad = (
+        "def nimm_attach_document(chemin='', texte='', titre='', _tid='%(t)s'):\n"
+        "    _data = _nimm_json.dumps({\"chemin\": chemin, \"texte\": texte, \"titre\": titre}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/threads/\" + _tid + \"/document\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
+        "        return _nimm_json.loads(_r.read())\n"
+        "\n"
+        "def nimm_detach_document(_tid='%(t)s'):\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/threads/\" + _tid + \"/document\", method=\"DELETE\")\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"ok\", False)\n"
+    ) % {'t': tid}
+    ep = (
+        "def nimm_pin_document(chemin='', contenu='', titre='', consigne='', duree_h=1, _tid='%(t)s'):\n"
+        "    _data = _nimm_json.dumps({\"chemin\": chemin, \"contenu\": contenu, \"titre\": titre,\n"
+        "        \"consigne\": consigne, \"duree_h\": duree_h, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/gemini/pins\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
+        "        return _nimm_json.loads(_r.read())\n"
+        "\n"
+        "def nimm_ask_pinned(reference, question, _tid='%(t)s'):\n"
+        "    _data = _nimm_json.dumps({\"reference\": reference, \"question\": question, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/gemini/pins/ask\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=300) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+        "\n"
+        "def nimm_list_pinned(_tid='%(t)s'):\n"
+        "    with _nimm_ur.urlopen(\"http://localhost:8080/api/gemini/pins?thread_id=\" + _tid, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"pins\", [])\n"
+        "\n"
+        "def nimm_unpin_document(reference, _tid='%(t)s'):\n"
+        "    for _p in nimm_list_pinned(_tid):\n"
+        "        if _p.get(\"name\") == reference or reference.strip().casefold() in (_p.get(\"titre\") or \"\").casefold():\n"
+        "            _req = _nimm_ur.Request(\n"
+        "                \"http://localhost:8080/api/gemini/pins?name=\" + _nimm_ur.quote(_p[\"name\"]),\n"
+        "                method=\"DELETE\")\n"
+        "            with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "                return _nimm_json.loads(_r.read()).get(\"ok\", False)\n"
+        "    return False\n"
+    ) % {'t': tid}
+    da = (
+        "def nimm_describe_audio(source, question='', _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"source\": source, \"question\": question, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/describe_audio\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=600) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
     al = (
         "def nimm_ask_llm(prompt, system='', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"prompt\": prompt, \"system\": system, \"thread_id\": _tid}).encode()\n"
@@ -444,6 +552,26 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     parts.append(ex if "extract_text" not in _disabled else _stub("nimm_extract_text", "extraire le texte d'un document"))
     parts.append(pv if "read_pdf_visual" not in _disabled else _stub("nimm_read_pdf_visual", "lire un PDF visuellement"))
     parts.append(ad if "ask_documents" not in _disabled else _stub("nimm_ask_documents", "interroger la base avec citations"))
+    parts.append(dv if "describe_video" not in _disabled else _stub("nimm_describe_video", "décrire une vidéo"))
+    parts.append(da if "describe_audio" not in _disabled else _stub("nimm_describe_audio", "décrire un audio"))
+    if "veille" not in _disabled:
+        parts.append(vg)
+    else:
+        parts.append(_stub("nimm_veille", "recherche par le sens"))
+        parts.append(_stub("nimm_suivre_sujet", "suivre un sujet de veille"))
+    if "thread_document" not in _disabled:
+        parts.append(ad)
+    else:
+        parts.append(_stub("nimm_attach_document", "attacher un document au fil"))
+        parts.append(_stub("nimm_detach_document", "détacher le document du fil"))
+    if "pin_document" not in _disabled:
+        parts.append(ep)
+    else:
+        for _n, _l in (("nimm_pin_document", "épingler un document"),
+                       ("nimm_ask_pinned", "interroger un document épinglé"),
+                       ("nimm_list_pinned", "lister les documents épinglés"),
+                       ("nimm_unpin_document", "libérer un document épinglé")):
+            parts.append(_stub(_n, _l))
     parts.append(al if "ask_llm" not in _disabled else _stub("nimm_ask_llm", "sous-tache IA"))
     parts.append(ru if "read_url" not in _disabled else _stub("nimm_read_url", "lire une page web"))
     tr = (

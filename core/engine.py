@@ -5,6 +5,7 @@
 # ============================================
 
 import os
+import re
 import json
 import httpx
 from typing import Optional
@@ -58,8 +59,14 @@ def _anthropic_desactiver_cache(raison: str) -> None:
         set_setting('anthropic_cache_active', '0')
     except Exception:
         pass
-    print("[ENGINE] ⚠️ Mise en cache des prompts refusée par l'API "
-          f"({raison}) — désactivée automatiquement. Réactivable dans les réglages.")
+    _m = ("Mise en cache des prompts refusée par l'API (" + raison
+          + ") — désactivée automatiquement. Réactivable dans les réglages.")
+    print(f"[ENGINE] ⚠️ {_m}")
+    try:
+        from core.database import add_diagnostic
+        add_diagnostic('coûts', _m)
+    except Exception:
+        pass
 
 
 def _anthropic_cache_fallback(exc) -> bool:
@@ -92,6 +99,144 @@ _AVIS_STOP = {
 def _avis_stop_reason(stop_reason: str) -> str:
     """Message à ajouter à la réponse selon la raison d'arrêt ('' si fin normale)."""
     return _AVIS_STOP.get((stop_reason or '').strip(), '')
+
+
+# Certains modèles (Llama et dérivés notamment) écrivent leurs appels d'outils
+# EN TEXTE au lieu du champ structuré : « <function=nom>{"arg": …}</function> ».
+# Sans traitement, l'utilisateur voit passer ce charabia à la place d'une réponse.
+_RE_APPEL_TEXTE = re.compile(
+    r'<function\s*=\s*([A-Za-z0-9_\-]+)\s*>\s*(\{.*?\})\s*(?:</function>)?',
+    re.DOTALL)
+
+
+def _contient_appel_texte(texte: str) -> bool:
+    return bool(texte) and '<function=' in texte
+
+
+def _parse_appels_texte(texte: str) -> list:
+    """Extrait les appels d'outils écrits en texte. Renvoie [{'id','name','args'}]."""
+    appels = []
+    for i, m in enumerate(_RE_APPEL_TEXTE.finditer(texte or '')):
+        nom = m.group(1).strip()
+        try:
+            args = json.loads(m.group(2))
+        except Exception:
+            continue                      # JSON illisible : on ignore cet appel
+        if isinstance(args, dict):
+            appels.append({'id': f'txt_{i}_{nom}', 'name': nom, 'args': args})
+    return appels
+
+
+# Une panne de fournisseur affichait son message technique brut, en anglais, lu tel
+# quel par la synthèse vocale. On la traduit, et on distingue ce qui est
+# RÉCUPÉRABLE (essayer un autre fournisseur a du sens) de ce qui ne l'est pas
+# (clé absente : changer de fournisseur ne réglera rien).
+def classer_erreur_fournisseur(exc, provider: str = '') -> dict:
+    """{'categorie', 'message', 'recuperable'} à partir d'une exception d'appel."""
+    txt = ''
+    code = 0
+    try:
+        rep = getattr(exc, 'response', None)
+        if rep is not None:
+            code = int(getattr(rep, 'status_code', 0) or 0)
+            txt = (getattr(rep, 'text', '') or '')[:800]
+    except Exception:
+        pass
+    txt = (txt + ' ' + str(exc)).lower()
+    nom = provider or 'le fournisseur'
+
+    if code == 401 or 'invalid x-api-key' in txt or 'invalid api key' in txt or 'unauthorized' in txt:
+        return {'categorie': 'clé', 'recuperable': False,
+                'message': f"La clé API de {nom} est refusée. Vérifie-la dans les réglages."}
+    if code == 402 or 'credit balance' in txt or 'insufficient' in txt or 'quota' in txt:
+        return {'categorie': 'crédit', 'recuperable': True,
+                'message': f"Le crédit de {nom} est épuisé."}
+    if code == 429 or 'rate limit' in txt or 'too many requests' in txt:
+        return {'categorie': 'débit', 'recuperable': True,
+                'message': f"{nom} limite le débit : trop de requêtes en peu de temps."}
+    if code in (500, 502, 503, 529) or 'overloaded' in txt or 'service unavailable' in txt:
+        return {'categorie': 'surcharge', 'recuperable': True,
+                'message': f"{nom} est momentanément surchargé ou indisponible."}
+    if 'timeout' in txt or 'timed out' in txt:
+        return {'categorie': 'délai', 'recuperable': True,
+                'message': f"{nom} n'a pas répondu dans le délai imparti."}
+    if 'connect' in txt or 'network' in txt or 'name resolution' in txt:
+        return {'categorie': 'réseau', 'recuperable': True,
+                'message': "La connexion réseau a échoué."}
+    return {'categorie': 'erreur', 'recuperable': False,
+            'message': f"Erreur inattendue de {nom} : {str(exc)[:200]}"}
+
+
+def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
+    """Premier fournisseur configuré autre que celui qui vient d'échouer, ou ''."""
+    ordre = ['mistral', 'anthropic', 'openai', 'gemini', 'deepseek', 'openrouter']
+    for p in ordre:
+        if p == (provider_courant or '').lower():
+            continue
+        if get_api_key(p, api_keys):
+            return p
+    return ''
+
+
+# Certains modèles de raisonnement n'acceptent NI les appels d'outils NI les
+# paramètres d'échantillonnage (deepseek-reasoner : « Not Supported Features:
+# Function Calling, FIM ; Not Supported Parameters: temperature, top_p… »).
+# Leur envoyer quand même produit au mieux une requête ignorée, au pire un refus.
+_MODELES_SANS_OUTILS = ('deepseek-reasoner',)
+
+
+# Les modèles de raisonnement OpenAI (série o) refusent `max_tokens` — il faut
+# `max_completion_tokens` — et n'acceptent pas `temperature`. Le catalogue de
+# modèles interrogé en direct les propose désormais : sans garde, les choisir
+# produirait une erreur 400 incompréhensible.
+def _modele_raisonnement_openai(model: str) -> bool:
+    import re as _re_o
+    return bool(_re_o.match(r'^o\d', (model or '').lower()))
+
+
+# Les caches de contexte sont AUTOMATIQUES chez Gemini (séries 2.5+) et DeepSeek :
+# rien à activer, et 90 % de remise sur les tokens servis par le cache. Mais chacun
+# le rapporte dans ses propres champs. Ne pas les distinguer surévalue la dépense
+# — symétrique du défaut inverse trouvé sur le cache Anthropic.
+_REMISE_CACHE = 0.1        # tokens relus = 10 % du prix plein
+
+
+def _gemini_tokens_entree(meta: dict) -> int:
+    """Tokens d'entrée Gemini en équivalent plein tarif (`cachedContentTokenCount`
+    est inclus dans `promptTokenCount` et facturé 10 %)."""
+    m = meta or {}
+    total = int(m.get('promptTokenCount', 0) or 0)
+    caches = int(m.get('cachedContentTokenCount', 0) or 0)
+    caches = min(caches, total)
+    return int(round((total - caches) + _REMISE_CACHE * caches))
+
+
+def _oai_tokens_entree(usage: dict) -> int:
+    """Idem pour les fournisseurs compatibles OpenAI. DeepSeek éclate l'entrée en
+    `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` ; ailleurs on retombe
+    sur `prompt_tokens`."""
+    u = usage or {}
+    hit = int(u.get('prompt_cache_hit_tokens', 0) or 0)
+    miss = int(u.get('prompt_cache_miss_tokens', 0) or 0)
+    if hit or miss:
+        return int(round(miss + _REMISE_CACHE * hit))
+    return int(u.get('prompt_tokens', 0) or 0)
+
+
+def _gemini_tokens_sortie(meta: dict) -> int:
+    """Tokens de sortie FACTURÉS par Gemini = réponse + PENSÉE.
+
+    La « pensée » est active par défaut sur les séries 3.x et 2.5, et sa
+    tarification s'ajoute à celle de la réponse (`thoughtsTokenCount` est distinct
+    de `candidatesTokenCount`). Ne compter que la réponse sous-évalue la dépense.
+    """
+    m = meta or {}
+    return int(m.get('candidatesTokenCount', 0) or 0) + int(m.get('thoughtsTokenCount', 0) or 0)
+
+
+def _modele_sans_outils(model: str) -> bool:
+    m = (model or '').lower()
+    return any(m.startswith(x) for x in _MODELES_SANS_OUTILS)
 
 
 def _anthropic_billable_input(usage: dict) -> int:
@@ -287,6 +432,425 @@ async def answer_with_citations_anthropic(passages: list, question: str, model: 
         sortie += '\n\nPassages cités :\n' + '\n'.join(
             f"- {t} : « {e} »" for t, e in cites[:15])
     return sortie
+
+
+VERIFY_SYSTEM_PROMPT = (
+    "Tu vérifies un texte à l'aide de recherches web. Procède ainsi :\n"
+    "1. Repère les affirmations FACTUELLES et vérifiables (dates, chiffres, noms, "
+    "événements). Ignore les opinions, les conseils et les formulations vagues.\n"
+    "2. Cherche sur le web pour les confronter.\n"
+    "3. Rends un verdict COURT et lisible à voix haute, dans cet ordre : d'abord ce "
+    "qui est ERRONÉ ou douteux, ensuite ce qui est confirmé, enfin ce que tu n'as pas "
+    "pu vérifier. Une ligne par point, sans tableau ni mise en forme complexe.\n"
+    "Si tout est correct, dis-le en une phrase. Si le texte ne contient aucune "
+    "affirmation vérifiable, dis-le simplement. Ne réécris jamais le texte."
+)
+
+
+async def verify_claims_anthropic(texte: str, model: str = None, api_keys: dict = None,
+                                  max_tokens: int = 1500) -> dict:
+    """Vérifie les affirmations factuelles d'un texte par recherche web.
+
+    Rendu pour quelqu'un qui ne peut pas survoler une réponse du regard : les
+    erreurs d'abord, sources listées ensuite. Renvoie {'verdict', 'sources'}.
+    """
+    api_key = get_api_key('anthropic', api_keys)
+    if not api_key:
+        return {'verdict': "[Vérification : clé Anthropic non configurée.]", 'sources': []}
+    texte = (texte or '').strip()
+    if len(texte) < 40:
+        return {'verdict': "[Texte trop court pour être vérifié.]", 'sources': []}
+    payload = {
+        'model': _resolve_model('anthropic', model),
+        'max_tokens': max_tokens,
+        'system': VERIFY_SYSTEM_PROMPT,
+        'messages': [{'role': 'user',
+                      'content': "Vérifie ce texte :\n\n" + texte[:6000]}],
+        'tools': [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 4}],
+    }
+    if _anthropic_cache_enabled():
+        payload['cache_control'] = {'type': 'ephemeral'}
+    txt, sources, vus = [], [], set()
+    entete = {'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+              'content-type': 'application/json'}
+    # La recherche web est un outil SERVEUR : le tour peut rendre la main en
+    # « pause_turn » avant d'avoir rédigé sa conclusion. Il faut alors relancer
+    # en renvoyant ce qui a déjà été produit — sinon on n'obtient aucun verdict.
+    stop = ''
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            for _tour in range(4):
+                r = await client.post('https://api.anthropic.com/v1/messages',
+                                      headers=entete, json=payload)
+                r.raise_for_status()
+                data = r.json()
+                usage = data.get('usage', {})
+                _log('anthropic', payload['model'], _anthropic_billable_input(usage),
+                     usage.get('output_tokens', 0), 'verification')
+                contenu = data.get('content', []) or []
+                for b in contenu:
+                    if b.get('type') != 'text':
+                        continue
+                    txt.append(b.get('text', ''))
+                    for c in (b.get('citations') or []):
+                        url = c.get('url', '')
+                        if url and url not in vus:
+                            vus.add(url)
+                            sources.append({'url': url, 'title': c.get('title') or url,
+                                            'snippet': (c.get('cited_text') or '')[:200]})
+                stop = data.get('stop_reason', '')
+                if stop != 'pause_turn':
+                    break
+                # On relance en conservant le contexte déjà produit.
+                payload['messages'] = payload['messages'] + [
+                    {'role': 'assistant', 'content': contenu}]
+    except Exception as e:
+        return {'verdict': f"[Vérification impossible ({e})]", 'sources': sources}
+
+    verdict = (''.join(txt) + _avis_stop_reason(stop)).strip()
+    if not verdict:
+        verdict = ("Aucune affirmation vérifiable n'a pu être évaluée dans ce message "
+                   "(il ne contient peut-être pas de fait à contrôler).")
+    return {'verdict': verdict, 'sources': sources}
+
+
+# Reprendre une réponse tronquée en envoyant « Continue. » fait redémarrer le
+# modèle : préambule (« Bien sûr, je reprends… »), redites, parfois une phrase
+# recommencée. Trois fournisseurs savent reprendre EXACTEMENT où ils se sont
+# arrêtés — en leur donnant le début de leur propre réponse à poursuivre.
+#   • Anthropic : préremplissage natif (dernier message = assistant).
+#   • Mistral et DeepSeek : champ `prefix` sur le dernier message assistant
+#     (DeepSeek exige son point d'entrée bêta).
+_PREFIXE_SUPPORTE = {'anthropic', 'mistral', 'deepseek'}
+
+
+def supporte_prefixe(provider: str) -> bool:
+    return (provider or '').lower() in _PREFIXE_SUPPORTE
+
+
+async def continuer_reponse_stream(messages: list, prefixe: str, provider: str,
+                                   model: str = None, system_prompt: str = None,
+                                   max_tokens: int = 1024, temperature: float = 0.7,
+                                   api_keys: dict = None):
+    """Poursuit une réponse tronquée, sans couture quand le fournisseur le permet.
+
+    Repli sur un tour « Continue. » pour les autres : le comportement d'avant.
+    """
+    provider = (provider or '').lower()
+    prefixe = (prefixe or '').strip()
+
+    if not prefixe or not supporte_prefixe(provider):
+        async for t in call_llm_stream(
+                messages=messages + [{'role': 'user', 'content': 'Continue.'}],
+                provider=provider, model=model, system_prompt=system_prompt,
+                max_tokens=max_tokens, temperature=temperature, api_keys=api_keys):
+            yield t
+        return
+
+    if provider == 'anthropic':
+        # Le dernier message étant de l'assistant, Claude le poursuit tel quel.
+        async for t in _call_anthropic_stream(
+                messages + [{'role': 'assistant', 'content': prefixe}],
+                _resolve_model('anthropic', model), system_prompt, max_tokens,
+                temperature, api_keys, None):
+            yield t
+        return
+
+    # Mistral / DeepSeek : dernier message assistant marqué `prefix`.
+    api_key = get_api_key(provider, api_keys)
+    if not api_key:
+        raise ValueError(f"Clé API {provider} manquante.")
+    base = ('https://api.deepseek.com/beta' if provider == 'deepseek'
+            else 'https://api.mistral.ai/v1')
+    oai = ([{'role': 'system', 'content': system_prompt}] if system_prompt else [])
+    oai += [{'role': m['role'], 'content': m.get('content', '')}
+            for m in messages if m.get('role') != 'system']
+    oai.append({'role': 'assistant', 'content': prefixe, 'prefix': True})
+    payload = {'model': _resolve_model(provider, model), 'messages': oai,
+               'max_tokens': max_tokens, 'temperature': temperature, 'stream': True}
+    async with httpx.AsyncClient(timeout=300) as client:
+        async with client.stream('POST', f'{base}/chat/completions',
+                                 headers={'Authorization': f'Bearer {api_key}',
+                                          'Content-Type': 'application/json'},
+                                 json=payload) as r:
+            r.raise_for_status()
+            async for ligne in r.aiter_lines():
+                if not ligne.startswith('data:'):
+                    continue
+                bout = ligne[5:].strip()
+                if bout == '[DONE]':
+                    break
+                try:
+                    d = json.loads(bout)
+                    ch = (d.get('choices') or [{}])[0]
+                    morceau = (ch.get('delta') or {}).get('content', '')
+                    if morceau:
+                        yield morceau
+                    if ch.get('finish_reason') == 'length':
+                        yield {'__truncated__': True}
+                except Exception:
+                    continue
+
+
+_GEMINI_CACHE_MIN_TOKENS = 2048   # plancher imposé par l'API (2.5) ; 4096 sur 3.5
+
+
+async def create_cache_gemini(contenu: str, titre: str = '', consigne: str = '',
+                              duree_h: float = 1.0, model: str = None,
+                              api_keys: dict = None) -> dict:
+    """Épingle un long texte chez Gemini pour l'interroger ensuite à tarif réduit.
+
+    C'est le cache EXPLICITE, à ne pas confondre avec le cache implicite déjà
+    exploité ailleurs : ici on paie une fois la lecture, puis chaque question
+    ne coûte plus qu'une fraction. Utile pour « je charge une étude de cent
+    pages et je pose dix questions dessus ».
+    """
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return {'ok': False, 'erreur': "Clé Gemini non configurée."}
+    contenu = (contenu or '').strip()
+    if not contenu:
+        return {'ok': False, 'erreur': "Rien à épingler : le contenu est vide."}
+
+    m = _resolve_model('gemini', model)
+    nb = await count_tokens('gemini', contenu, model=m, api_keys=api_keys)
+    if nb != -1 and nb < _GEMINI_CACHE_MIN_TOKENS:
+        return {'ok': False, 'nb_tokens': nb, 'erreur': (
+            "Document trop court pour être épinglé : Gemini exige au moins "
+            f"{_GEMINI_CACHE_MIN_TOKENS} jetons, celui-ci en fait environ {nb}. "
+            "Pour un texte de cette taille, une lecture normale coûte moins cher "
+            "que la mise en cache.")}
+
+    ttl = max(60, int(float(duree_h or 1.0) * 3600))
+    payload = {
+        'model': f'models/{m}',
+        'contents': [{'role': 'user', 'parts': [{'text': contenu}]}],
+        'ttl': f'{ttl}s',
+        'displayName': (titre or 'Document NIMM')[:120],
+    }
+    if (consigne or '').strip():
+        payload['systemInstruction'] = {'parts': [{'text': consigne.strip()}]}
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post(
+                f'https://generativelanguage.googleapis.com/v1beta/cachedContents?key={api_key}',
+                json=payload)
+            if r.status_code >= 400:
+                return {'ok': False, 'erreur': _gemini_message_erreur(r)}
+            data = r.json()
+    except Exception as e:
+        return {'ok': False, 'erreur': f"Mise en cache impossible ({e})"}
+
+    return {
+        'ok': True,
+        'name': data.get('name', ''),
+        'model': m,
+        'titre': data.get('displayName', titre),
+        'expire': data.get('expireTime', ''),
+        'nb_tokens': int((data.get('usageMetadata') or {}).get('totalTokenCount') or nb or 0),
+    }
+
+
+def _gemini_message_erreur(r) -> str:
+    """Traduit une erreur HTTP Gemini en une phrase lisible à la synthèse vocale."""
+    try:
+        det = (r.json().get('error') or {}).get('message') or ''
+    except Exception:
+        det = (r.text or '')[:300]
+    if r.status_code == 400 and 'token' in det.lower():
+        return ("Gemini refuse : le contenu est trop court pour un cache explicite "
+                f"(minimum {_GEMINI_CACHE_MIN_TOKENS} jetons).")
+    if r.status_code in (401, 403):
+        return "Gemini refuse la clé d'API (401/403)."
+    if r.status_code == 404:
+        return "Ce cache n'existe plus : il a sans doute expiré."
+    if r.status_code == 429:
+        return "Gemini est saturé ou le quota est atteint (429). Réessaie plus tard."
+    return f"Erreur Gemini {r.status_code} : {det[:200]}"
+
+
+async def ask_cache_gemini(cache_name: str, question: str, model: str = None,
+                           api_keys: dict = None, max_tokens: int = 4000) -> str:
+    """Pose une question à un document déjà épinglé (cache explicite Gemini)."""
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return "[Clé Gemini non configurée.]"
+    if not (cache_name or '').strip():
+        return "[Aucun document épinglé indiqué.]"
+    m = _resolve_model('gemini', model)
+    payload = {'contents': [{'role': 'user', 'parts': [{'text': question or ''}]}],
+               'cachedContent': cache_name,
+               'generationConfig': {'maxOutputTokens': max_tokens}}
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}',
+                json=payload)
+            if r.status_code >= 400:
+                return f"[{_gemini_message_erreur(r)}]"
+            data = r.json()
+    except Exception as e:
+        return f"[Interrogation impossible ({e})]"
+
+    meta = data.get('usageMetadata', {}) or {}
+    _log('gemini', m, _gemini_tokens_entree(meta), _gemini_tokens_sortie(meta), 'cache')
+    cand = (data.get('candidates') or [{}])[0]
+    texte = ''.join(p.get('text', '') for p in (cand.get('content', {}).get('parts') or [])
+                    if 'text' in p)
+    if cand.get('finishReason') == 'MAX_TOKENS':
+        texte += "\n\n⚠️ Réponse interrompue : la limite de longueur a été atteinte."
+    return texte.strip() or "[Aucune réponse produite.]"
+
+
+async def list_caches_gemini(api_keys: dict = None) -> list:
+    """Liste les documents épinglés côté Gemini (métadonnées seules : le contenu
+    n'est pas relisible, c'est une garantie de l'API)."""
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.get(
+                f'https://generativelanguage.googleapis.com/v1beta/cachedContents?key={api_key}')
+            r.raise_for_status()
+            items = r.json().get('cachedContents') or []
+    except Exception:
+        return []
+    return [{'name': c.get('name', ''), 'titre': c.get('displayName', ''),
+             'model': (c.get('model', '') or '').replace('models/', ''),
+             'expire': c.get('expireTime', ''),
+             'nb_tokens': int((c.get('usageMetadata') or {}).get('totalTokenCount') or 0)}
+            for c in items]
+
+
+async def delete_cache_gemini(cache_name: str, api_keys: dict = None) -> bool:
+    """Libère un document épinglé (on cesse de payer le stockage)."""
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key or not (cache_name or '').strip():
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.delete(
+                f'https://generativelanguage.googleapis.com/v1beta/{cache_name}?key={api_key}')
+            return r.status_code < 400 or r.status_code == 404
+    except Exception:
+        return False
+
+
+async def describe_audio_gemini(source: str, question: str = '', model: str = None,
+                                api_keys: dict = None, max_tokens: int = 3000) -> str:
+    """Décrit un fichier AUDIO : au-delà des paroles, ce qui s'entend.
+
+    Différent d'une transcription (Whisper le fait déjà, en local) : ici on veut
+    qui parle, le ton, les bruits, la musique, les silences — tout ce qu'un
+    document sonore porte et qu'un texte brut perd.
+    """
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return "[Audio : clé Gemini non configurée.]"
+    src_txt = (source or '').strip()
+    if not src_txt:
+        return "[Audio : aucun fichier ni lien fourni.]"
+
+    consigne = (question or '').strip() or (
+        "Décris ce document sonore : qui parle et sur quel ton, ce qui est dit "
+        "(transcris les passages importants), les bruits de fond, la musique, les "
+        "silences marquants. Donne des repères de temps (minute:seconde). Sépare "
+        "clairement la TRANSCRIPTION de tes OBSERVATIONS. N'invente rien.")
+
+    if src_txt.lower().startswith(('http://', 'https://')):
+        partie = {'file_data': {'file_uri': src_txt}}
+    else:
+        import base64 as _b64, os as _os, mimetypes as _mt
+        if not _os.path.isfile(src_txt):
+            return f"[Audio introuvable : {src_txt}]"
+        if _os.path.getsize(src_txt) > 18 * 1024 * 1024:
+            return ("[Audio trop volumineux pour un envoi direct (plus de 18 Mo). "
+                    "Fournis un lien, ou découpe-le.]")
+        mime = _mt.guess_type(src_txt)[0] or 'audio/mpeg'
+        with open(src_txt, 'rb') as fh:
+            partie = {'inline_data': {'mime_type': mime,
+                                      'data': _b64.standard_b64encode(fh.read()).decode()}}
+
+    m = _resolve_model('gemini', model)
+    payload = {'contents': [{'parts': [partie, {'text': consigne}]}],
+               'generationConfig': {'maxOutputTokens': max_tokens}}
+    try:
+        async with httpx.AsyncClient(timeout=600) as client:
+            r = await client.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}',
+                json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return f"[Audio : description impossible ({e})]"
+
+    meta = data.get('usageMetadata', {}) or {}
+    _log('gemini', m, _gemini_tokens_entree(meta), _gemini_tokens_sortie(meta), 'audio')
+    cand = (data.get('candidates') or [{}])[0]
+    texte = ''.join(p.get('text', '') for p in (cand.get('content', {}).get('parts') or [])
+                    if 'text' in p)
+    if cand.get('finishReason') == 'MAX_TOKENS':
+        texte += "\n\n⚠️ Description interrompue : la limite de longueur a été atteinte."
+    return texte.strip() or "[Aucune description produite.]"
+
+
+async def describe_video_gemini(source: str, question: str = '', model: str = None,
+                                api_keys: dict = None, max_tokens: int = 3000) -> str:
+    """Décrit une vidéo — fichier local ou lien YouTube — avec repères de temps.
+
+    Une vidéo est le contenu le plus opaque qui soit quand on ne voit pas : la
+    bande-son ne dit presque jamais ce qui est montré. Gemini accepte une vidéo
+    en ligne (moins de 20 Mo) ou une URL YouTube telle quelle.
+    """
+    api_key = get_api_key('gemini', api_keys)
+    if not api_key:
+        return "[Vidéo : clé Gemini non configurée.]"
+    src_txt = (source or '').strip()
+    if not src_txt:
+        return "[Vidéo : aucun fichier ni lien fourni.]"
+
+    consigne = (question or '').strip() or (
+        "Décris cette vidéo pour quelqu'un qui ne la voit pas : ce qui est montré, "
+        "le texte affiché à l'écran, les personnes et leurs actions. Donne des repères "
+        "de temps (minute:seconde) pour pouvoir s'y retrouver. Sépare clairement ce qui "
+        "est VU de ce qui est DIT. Sois factuel, n'invente rien.")
+
+    if src_txt.lower().startswith(('http://', 'https://')):
+        partie = {'file_data': {'file_uri': src_txt}}
+    else:
+        import base64 as _b64, os as _os, mimetypes as _mt
+        if not _os.path.isfile(src_txt):
+            return f"[Vidéo introuvable : {src_txt}]"
+        if _os.path.getsize(src_txt) > 18 * 1024 * 1024:
+            return ("[Vidéo trop volumineuse pour un envoi direct (plus de 18 Mo). "
+                    "Fournis un lien, ou découpe-la.]")
+        mime = _mt.guess_type(src_txt)[0] or 'video/mp4'
+        with open(src_txt, 'rb') as fh:
+            partie = {'inline_data': {'mime_type': mime,
+                                      'data': _b64.standard_b64encode(fh.read()).decode()}}
+
+    m = _resolve_model('gemini', model)
+    payload = {'contents': [{'parts': [partie, {'text': consigne}]}],
+               'generationConfig': {'maxOutputTokens': max_tokens}}
+    try:
+        async with httpx.AsyncClient(timeout=600) as client:
+            r = await client.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}',
+                json=payload)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return f"[Vidéo : description impossible ({e})]"
+
+    meta = data.get('usageMetadata', {}) or {}
+    _log('gemini', m, _gemini_tokens_entree(meta), _gemini_tokens_sortie(meta), 'video')
+    cand = (data.get('candidates') or [{}])[0]
+    texte = ''.join(p.get('text', '') for p in (cand.get('content', {}).get('parts') or [])
+                    if 'text' in p)
+    if cand.get('finishReason') == 'MAX_TOKENS':
+        texte += ("\n\n⚠️ Description interrompue : la limite de longueur a été atteinte.")
+    return texte.strip() or "[Aucune description produite.]"
 
 
 async def analyze_pdf_anthropic(pdf_bytes: bytes, question: str = '', model: str = None,
@@ -646,8 +1210,16 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
 
 
 async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
-    """Phase 1 Anthropic : un appel avec outils. Émet soit un événement tool_calls,
-    soit le texte en tokens."""
+    """Phase 1 Anthropic : un appel avec outils, DIFFUSÉ EN CONTINU.
+
+    Historiquement cet appel n'était pas streamé : le texte n'arrivait qu'une fois
+    la réponse entièrement générée, d'où un long silence avant que la synthèse
+    vocale ne démarre — alors que les fournisseurs OpenAI-compat, eux, diffusaient
+    au fil de l'eau. Même contrat d'événements qu'avant :
+      {'type':'token','text':…}  au fil de l'eau
+      {'type':'tool_calls', 'calls':[…], 'assistant_msg':{…}}  si outils demandés
+      {'type':'truncated'}  si la limite de longueur est atteinte
+    """
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
         raise ValueError("Clé API Anthropic manquante.")
@@ -659,40 +1231,118 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
         'temperature': temperature,
         'messages':    _oai_msgs_to_anthropic(messages),
         'tools':       _oai_tools_to_anthropic(tools),
+        'stream':      True,
     }
     if system_prompt:
         payload['system'] = system_prompt
     if _anthropic_cache_enabled():
         payload['cache_control'] = {'type': 'ephemeral'}
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(
-            'https://api.anthropic.com/v1/messages',
-            headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
-            json=payload
-        )
-        r.raise_for_status()
-        data = r.json()
+    texte_total = []
+    appel_en_texte = False
+    blocs_outils = {}      # index du bloc → {'id', 'name', 'json'}
+    tokens_in = tokens_out = 0
+    stop_reason = ''
 
-    usage = data.get('usage', {})
-    _log('anthropic', model, usage.get('input_tokens', 0), usage.get('output_tokens', 0))
-    content = data.get('content', []) or []
-    tool_uses = [b for b in content if b.get('type') == 'tool_use']
-    if tool_uses:
+    async with httpx.AsyncClient(timeout=300) as client:
+        if 'cache_control' in payload and not _anthropic_cache_enabled():
+            payload.pop('cache_control', None)
+        async with client.stream(
+            'POST',
+            'https://api.anthropic.com/v1/messages',
+            headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01',
+                     'content-type': 'application/json'},
+            json=payload
+        ) as r:
+            if r.status_code == 400 and 'cache_control' in payload:
+                await r.aread()
+                _err = httpx.HTTPStatusError('400', request=r.request, response=r)
+                if _anthropic_cache_fallback(_err):
+                    payload.pop('cache_control', None)
+                    async for _ev in _anthropic_tools_turn(
+                            messages, tools, model, system_prompt, max_tokens,
+                            temperature, api_keys):
+                        yield _ev
+                    return
+            r.raise_for_status()
+            async for ligne in r.aiter_lines():
+                if not ligne.startswith('data:'):
+                    continue
+                try:
+                    d = json.loads(ligne[5:].strip())
+                except Exception:
+                    continue
+                evt = d.get('type', '')
+                if evt == 'message_start':
+                    tokens_in = _anthropic_billable_input(
+                        d.get('message', {}).get('usage', {}))
+                elif evt == 'content_block_start':
+                    bloc = d.get('content_block', {}) or {}
+                    if bloc.get('type') == 'tool_use':
+                        blocs_outils[d.get('index')] = {
+                            'id': bloc.get('id', ''), 'name': bloc.get('name', ''), 'json': ''}
+                elif evt == 'content_block_delta':
+                    delta = d.get('delta', {}) or {}
+                    if delta.get('type') == 'text_delta':
+                        morceau = delta.get('text', '')
+                        if morceau:
+                            texte_total.append(morceau)
+                            # Si le modèle se met à écrire son appel d'outil en
+                            # texte, on cesse d'afficher : le repli le convertira.
+                            if not appel_en_texte and _contient_appel_texte(''.join(texte_total)):
+                                appel_en_texte = True
+                                _m = ("Le modèle a écrit son appel d'outil en texte au lieu "
+                                      "d'utiliser le format prévu — converti automatiquement.")
+                                print(f"[ENGINE] ⚠️ {_m}")
+                                try:
+                                    from core.database import add_diagnostic
+                                    add_diagnostic('outils', _m)
+                                except Exception:
+                                    pass
+                            if not appel_en_texte:
+                                yield {'type': 'token', 'text': morceau}
+                    elif delta.get('type') == 'input_json_delta':
+                        b = blocs_outils.get(d.get('index'))
+                        if b is not None:
+                            b['json'] += delta.get('partial_json', '')
+                elif evt == 'message_delta':
+                    tokens_out = (d.get('usage', {}) or {}).get('output_tokens', tokens_out)
+                    stop_reason = (d.get('delta', {}) or {}).get('stop_reason', stop_reason)
+
+    _log('anthropic', model, tokens_in, tokens_out)
+
+    if not blocs_outils and appel_en_texte:
+        _appels = _parse_appels_texte(''.join(texte_total))
+        if _appels:
+            yield {'type': 'tool_calls', 'calls': _appels,
+                   'assistant_msg': {'role': 'assistant', 'content': None,
+                                     'tool_calls': [
+                                         {'id': c['id'], 'type': 'function',
+                                          'function': {'name': c['name'],
+                                                       'arguments': json.dumps(c['args'], ensure_ascii=False)}}
+                                         for c in _appels]}}
+            return
+
+    if blocs_outils:
         calls, oai_tcs = [], []
-        for b in tool_uses:
-            calls.append({'name': b.get('name', ''), 'args': b.get('input', {}) or {}, 'id': b.get('id', '')})
-            oai_tcs.append({
-                'id': b.get('id', ''), 'type': 'function',
-                'function': {'name': b.get('name', ''),
-                             'arguments': json.dumps(b.get('input', {}) or {}, ensure_ascii=False)}
-            })
-        text = ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
-        assistant_msg = {'role': 'assistant', 'content': text, 'tool_calls': oai_tcs}
-        yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
+        for b in blocs_outils.values():
+            try:
+                args = json.loads(b['json']) if b['json'].strip() else {}
+            except Exception:
+                args = {}
+            calls.append({'name': b['name'], 'args': args, 'id': b['id']})
+            oai_tcs.append({'id': b['id'], 'type': 'function',
+                            'function': {'name': b['name'],
+                                         'arguments': json.dumps(args, ensure_ascii=False)}})
+        yield {'type': 'tool_calls', 'calls': calls,
+               'assistant_msg': {'role': 'assistant', 'content': ''.join(texte_total),
+                                 'tool_calls': oai_tcs}}
+    elif stop_reason == 'max_tokens':
+        yield {'type': 'truncated'}
     else:
-        text = ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
-        yield {'type': 'token', 'text': text}
+        avis = _avis_stop_reason(stop_reason)
+        if avis:
+            yield {'type': 'token', 'text': avis}
 
 
 # ══════════════════════════════════════════
@@ -750,7 +1400,7 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
         r.raise_for_status()
         data = r.json()
         usage = data.get('usage', {})
-        _log(provider_name, model, usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0))
+        _log(provider_name, model, _oai_tokens_entree(usage), usage.get('completion_tokens', 0))
         content = data['choices'][0]['message']['content'] or ''
         citations = (data.get('citations')
                      or data['choices'][0].get('message', {}).get('citations') or [])
@@ -850,21 +1500,24 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
         r.raise_for_status()
         data = r.json()
         meta = data.get('usageMetadata', {})
-        _log('gemini', model, meta.get('promptTokenCount', 0), meta.get('candidatesTokenCount', 0))
+        _log('gemini', model, _gemini_tokens_entree(meta), _gemini_tokens_sortie(meta))
         parts = (data.get('candidates') or [{}])[0].get('content', {}).get('parts', []) or []
         return ''.join(p.get('text', '') for p in parts if 'text' in p)
 
 
 async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
-    """Phase 1 Gemini : un appel avec outils. Émet soit un événement tool_calls,
-    soit le texte en tokens.
+    """Phase 1 Gemini : un appel avec outils, DIFFUSÉ EN CONTINU.
+
+    Utilise `streamGenerateContent?alt=sse` : le texte arrive au fil de l'eau, au
+    lieu d'attendre la génération complète. Les appels de fonction et les sources
+    du grounding ne sont émis qu'une fois le flux terminé (ils n'arrivent pas
+    fragmentés). Contrat d'événements identique aux autres fournisseurs.
     Si tools contient {'google_search': {}}, active le grounding natif Google Search."""
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
         raise ValueError("Clé API Gemini manquante.")
     model = model or 'gemini-3.5-flash'
 
-    # Détecter si on demande le grounding Google Search
     _grounding = any(isinstance(t, dict) and 'google_search' in t for t in (tools or []))
 
     payload = {
@@ -882,40 +1535,54 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
     if system_prompt:
         payload['systemInstruction'] = {'parts': [{'text': system_prompt}]}
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(
-            f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}',
-            json=payload
-        )
-        r.raise_for_status()
-        resp = r.json()
+    texte, fcalls, citations = [], [], []
+    prompt_tokens = cand_tokens = 0
+    finish_reason = ''
 
-    meta = resp.get('usageMetadata', {})
-    _log('gemini', model, meta.get('promptTokenCount', 0), meta.get('candidatesTokenCount', 0))
-    candidate = (resp.get('candidates') or [{}])[0]
-    parts  = candidate.get('content', {}).get('parts', []) or []
-    text   = ''.join(p.get('text', '') for p in parts if 'text' in p)
+    async with httpx.AsyncClient(timeout=120) as client:
+        async with client.stream(
+            'POST',
+            f'https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={api_key}',
+            json=payload
+        ) as r:
+            r.raise_for_status()
+            async for ligne in r.aiter_lines():
+                if not ligne.startswith('data:'):
+                    continue
+                try:
+                    d = json.loads(ligne[5:].strip())
+                except Exception:
+                    continue
+                meta = d.get('usageMetadata', {}) or {}
+                prompt_tokens = _gemini_tokens_entree(meta) or prompt_tokens
+                cand_tokens = _gemini_tokens_sortie(meta) or cand_tokens
+                cand = (d.get('candidates') or [{}])[0]
+                finish_reason = cand.get('finishReason', finish_reason) or finish_reason
+                for p in (cand.get('content', {}).get('parts', []) or []):
+                    if 'text' in p and p['text']:
+                        texte.append(p['text'])
+                        yield {'type': 'token', 'text': p['text']}
+                    elif 'functionCall' in p:
+                        fcalls.append(p['functionCall'])
+                gm = cand.get('groundingMetadata', {}) or {}
+                queries = gm.get('webSearchQueries', []) or []
+                for c in (gm.get('groundingChunks', []) or []):
+                    uri = c.get('web', {}).get('uri', '')
+                    if uri and not any(x['url'] == uri for x in citations):
+                        citations.append({'url': uri,
+                                          'title': c.get('web', {}).get('title', ''),
+                                          'snippet': '',
+                                          'query': queries[0] if queries else ''})
+
+    _log('gemini', model, prompt_tokens, cand_tokens)
 
     if _grounding:
-        # Extraire les sources depuis groundingMetadata
-        grounding_meta = candidate.get('groundingMetadata', {})
-        chunks = grounding_meta.get('groundingChunks', [])
-        queries = grounding_meta.get('webSearchQueries', [])
-        citations = [
-            {
-                'url':     c.get('web', {}).get('uri', ''),
-                'title':   c.get('web', {}).get('title', ''),
-                'snippet': '',
-                'query':   queries[0] if queries else '',
-            }
-            for c in chunks if c.get('web', {}).get('uri')
-        ]
         if citations:
             yield {'type': 'citations', 'citations': citations}
-        yield {'type': 'token', 'text': text}
+        if finish_reason == 'MAX_TOKENS':
+            yield {'type': 'truncated'}
         return
 
-    fcalls = [p['functionCall'] for p in parts if 'functionCall' in p]
     if fcalls:
         calls, oai_tcs = [], []
         for i, fc in enumerate(fcalls):
@@ -927,10 +1594,10 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
                 'id': cid, 'type': 'function',
                 'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)}
             })
-        assistant_msg = {'role': 'assistant', 'content': text, 'tool_calls': oai_tcs}
+        assistant_msg = {'role': 'assistant', 'content': ''.join(texte), 'tool_calls': oai_tcs}
         yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
-    else:
-        yield {'type': 'token', 'text': text}
+    elif finish_reason == 'MAX_TOKENS':
+        yield {'type': 'truncated'}
 
 
 # ══════════════════════════════════════════
@@ -988,30 +1655,55 @@ async def _call_ollama(messages, model, system_prompt, max_tokens, temperature):
 
 
 async def _ollama_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature):
-    """Phase 1 Ollama : un appel avec outils. Émet soit un événement tool_calls,
-    soit le texte en tokens. Ollama accepte le format d'outils OpenAI tel quel."""
+    """Phase 1 Ollama : un appel avec outils, DIFFUSÉ EN CONTINU.
+
+    Ollama répond en NDJSON (un objet JSON par ligne). Les appels d'outils, eux,
+    n'arrivent pas fragmentés : on les récolte au fil des lignes. Même contrat
+    d'événements que les autres fournisseurs."""
     ollama_messages = []
     if system_prompt:
         ollama_messages.append({'role': 'system', 'content': system_prompt})
     ollama_messages.extend(_oai_msgs_to_ollama(messages))
 
+    texte, tcs = [], []
+    prompt_tokens = eval_tokens = 0
+    done_reason = ''
+
     async with httpx.AsyncClient(timeout=180) as client:
-        r = await client.post(
+        async with client.stream(
+            'POST',
             'http://localhost:11434/api/chat',
             json={
                 'model':    model or 'llama3.1',
                 'messages': ollama_messages,
                 'tools':    tools,
-                'stream':   False,
+                'stream':   True,
                 'options':  {'num_predict': max_tokens, 'temperature': temperature},
             }
-        )
-        r.raise_for_status()
-        data = r.json()
+        ) as r:
+            r.raise_for_status()
+            async for ligne in r.aiter_lines():
+                ligne = (ligne or '').strip()
+                if not ligne:
+                    continue
+                try:
+                    d = json.loads(ligne)
+                except Exception:
+                    continue
+                msg = d.get('message', {}) or {}
+                morceau = msg.get('content', '')
+                if morceau:
+                    texte.append(morceau)
+                    yield {'type': 'token', 'text': morceau}
+                if msg.get('tool_calls'):
+                    tcs.extend(msg['tool_calls'])
+                if d.get('done'):
+                    prompt_tokens = d.get('prompt_eval_count', 0) or 0
+                    eval_tokens = d.get('eval_count', 0) or 0
+                    done_reason = d.get('done_reason', '') or ''
 
-    msg = data.get('message', {}) or {}
-    _log('ollama', model or 'llama3.1', data.get('prompt_eval_count', 0), data.get('eval_count', 0))
-    tcs = msg.get('tool_calls') or []
+    _log('ollama', model or 'llama3.1', prompt_tokens, eval_tokens)
+
     if tcs:
         calls, oai_tcs = [], []
         for i, tc in enumerate(tcs):
@@ -1027,10 +1719,10 @@ async def _ollama_tools_turn(messages, tools, model, system_prompt, max_tokens, 
                 'id': cid, 'type': 'function',
                 'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)}
             })
-        assistant_msg = {'role': 'assistant', 'content': msg.get('content') or '', 'tool_calls': oai_tcs}
+        assistant_msg = {'role': 'assistant', 'content': ''.join(texte), 'tool_calls': oai_tcs}
         yield {'type': 'tool_calls', 'calls': calls, 'assistant_msg': assistant_msg}
-    else:
-        yield {'type': 'token', 'text': msg.get('content', '')}
+    elif done_reason == 'length':
+        yield {'type': 'truncated'}
 
 
 # ══════════════════════════════════════════
@@ -1162,6 +1854,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
     _dsml_stream = False
     _usage_tokens = None  # {'tokens_in': N, 'tokens_out': M} si l'API retourne l'usage réel
 
+    _finish_reason = None
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
             'POST',
@@ -1191,16 +1884,20 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                     if data.get('usage') and not data.get('choices'):
                         u = data['usage']
                         _usage_tokens = {
-                            'tokens_in':  u.get('prompt_tokens', 0),
+                            'tokens_in':  _oai_tokens_entree(u),
                             'tokens_out': u.get('completion_tokens', 0),
                         }
                         continue
+                    if data.get('choices'):
+                        _fr = data['choices'][0].get('finish_reason')
+                        if _fr:
+                            _finish_reason = _fr
                     token = data['choices'][0]['delta'].get('content', '') if data.get('choices') else ''
                     # Certaines APIs incluent usage dans le dernier chunk avec choices
                     if data.get('usage') and data.get('choices'):
                         u = data['usage']
                         _usage_tokens = {
-                            'tokens_in':  u.get('prompt_tokens', 0),
+                            'tokens_in':  _oai_tokens_entree(u),
                             'tokens_out': u.get('completion_tokens', 0),
                         }
                     if token:
@@ -1223,6 +1920,10 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
     # Émettre le sentinel d'usage (tokens réels si disponibles)
     if _usage_tokens and (_usage_tokens['tokens_in'] or _usage_tokens['tokens_out']):
         yield {'__usage__': True, **_usage_tokens}
+    if _raisonnement_acc.strip():
+        yield {'__raisonnement__': _raisonnement_acc.strip()}
+    if _finish_reason == 'length':
+        yield {'__truncated__': True}
 
 async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None):
     """Stream tokens via API Anthropic."""
@@ -1302,10 +2003,15 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                     elif evt == 'message_delta':
                         u = data.get('usage', {})
                         _ant_tokens_out = u.get('output_tokens', 0)
-                        _avis = _avis_stop_reason(
-                            (data.get('delta') or {}).get('stop_reason', ''))
-                        if _avis:
-                            yield _avis
+                        _sr = (data.get('delta') or {}).get('stop_reason', '')
+                        if _sr == 'max_tokens':
+                            # Sentinelle : hub la traduit en [TRUNCATED] et le
+                            # frontend affiche le bouton « Continuer ».
+                            yield {'__truncated__': True}
+                        else:
+                            _avis = _avis_stop_reason(_sr)
+                            if _avis:
+                                yield _avis
                     elif evt == 'content_block_delta':
                         token = data.get('delta', {}).get('text', '')
                         if token:
@@ -1338,8 +2044,11 @@ async def call_llm_stream(
     try:
         if provider == 'anthropic':
             async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools):
-                if isinstance(token, dict) and token.get('__usage__'):
-                    _real_usage = token
+                if isinstance(token, dict):
+                    if token.get('__usage__'):
+                        _real_usage = token
+                    else:
+                        yield token      # sentinelle (troncature) : transmise, non accumulée
                 else:
                     _accumulated.append(token)
                     yield token
@@ -1360,8 +2069,11 @@ async def call_llm_stream(
                 messages, model or models[provider], system_prompt,
                 max_tokens, temperature, api_keys, provider, urls[provider], tools=tools
             ):
-                if isinstance(token, dict) and token.get('__usage__'):
-                    _real_usage = token
+                if isinstance(token, dict):
+                    if token.get('__usage__'):
+                        _real_usage = token
+                    else:
+                        yield token      # sentinelle (troncature) : transmise, non accumulée
                 else:
                     _accumulated.append(token)
                     yield token
@@ -1488,20 +2200,28 @@ async def call_llm_stream_with_tools(
     _only_builtins = tools and all(
         t.get('type') != 'function' for t in tools
     )
+    _sans_outils = _modele_sans_outils(_model)
+    _raisonneur_oai = _modele_raisonnement_openai(_model)
     payload = {
-        'model':       _model,
-        'messages':    oai_messages,
-        'max_tokens':  max_tokens,
-        'temperature': temperature,
-        'tools':       tools,
-        **({} if _only_builtins else {'tool_choice': 'auto'}),
-        'stream':      True,
+        'model':    _model,
+        'messages': oai_messages,
+        'stream':   True,
     }
+    # La série o d'OpenAI n'accepte que max_completion_tokens.
+    payload['max_completion_tokens' if _raisonneur_oai else 'max_tokens'] = max_tokens
+    if not _sans_outils and not _raisonneur_oai:
+        payload['temperature'] = temperature
+        payload['tools'] = tools
+        if not _only_builtins:
+            payload['tool_choice'] = 'auto'
+    else:
+        print(f"[ENGINE] {_model} : modèle de raisonnement — outils et température non transmis.")
 
     # Accumulateurs pour reconstruire les tool_calls fragmentés
     _tool_calls_acc = {}   # index → {"id": str, "name": str, "arguments": str}
     _finish_reason  = None
     _raw_acc        = ''   # accumule le content brut pour détecter le DSML
+    _raisonnement_acc = ''  # chaîne de pensée (deepseek-reasoner et similaires)
     _dsml_detected  = False
 
     async with httpx.AsyncClient(timeout=300) as client:
@@ -1531,11 +2251,20 @@ async def call_llm_stream_with_tools(
                     # au lieu du champ structuré tool_calls. On accumule tout le
                     # content brut ; dès qu'un bloc DSML est détecté on coupe le
                     # flux visible et on laisse le post-traitement gérer.
+                    # Chaîne de pensée des modèles de raisonnement : elle arrive
+                    # dans un champ SÉPARÉ et était purement perdue. Elle est déjà
+                    # payée — autant la rendre consultable.
+                    _rais = delta.get('reasoning_content', '')
+                    if _rais:
+                        _raisonnement_acc += _rais
+
                     text = delta.get('content', '')
                     if text:
                         _raw_acc += text
                         if not _dsml_detected and '\uff5c\uff5cDSML\uff5c\uff5c' in _raw_acc:
                             _dsml_detected = True
+                        if not _dsml_detected and _contient_appel_texte(_raw_acc):
+                            _dsml_detected = True   # appel d'outil en texte : on coupe l'affichage
                         if not _dsml_detected:
                             import re as _re
                             clean = _re.sub(r'<｜[^｜>]*(?:｜[^>]*)?>?', '', text)
@@ -1567,6 +2296,19 @@ async def call_llm_stream_with_tools(
 
                 except Exception:
                     continue
+
+    # ── Repli : appel d'outil écrit en texte (« <function=nom>{…} ») ──
+    if not _tool_calls_acc and _contient_appel_texte(_raw_acc):
+        _appels = _parse_appels_texte(_raw_acc)
+        if _appels:
+            yield {'type': 'tool_calls', 'calls': _appels,
+                   'assistant_msg': {'role': 'assistant', 'content': None,
+                                     'tool_calls': [
+                                         {'id': c['id'], 'type': 'function',
+                                          'function': {'name': c['name'],
+                                                       'arguments': json.dumps(c['args'], ensure_ascii=False)}}
+                                         for c in _appels]}}
+            return
 
     # ── Fallback DSML : DeepSeek a mis le tool_call dans le content ──
     if not _tool_calls_acc and _dsml_detected:
