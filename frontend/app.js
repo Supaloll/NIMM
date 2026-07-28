@@ -8242,25 +8242,33 @@ function setupUpload() {
 // MOBILE — ADAPTATION HAUTEUR CLAVIER
 // ══════════════════════════════════════════
 
-if (window.visualViewport) {
-    const appEl = document.getElementById('app');
-    window.visualViewport.addEventListener('resize', () => {
-        if (isMobile()) {
-            appEl.style.height = window.visualViewport.height + 'px';
-            // Maintenir le scroll bas pendant la frappe
-            const inputEl = document.getElementById('user-input');
-            if (document.activeElement === inputEl) {
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            }
-        }
-    });
-    // Reset hauteur si retour paysage / clavier fermé
-    window.visualViewport.addEventListener('scroll', () => {
-        if (isMobile()) {
-            appEl.style.height = window.visualViewport.height + 'px';
-        }
-    });
-}
+// Redimensionnement JS désactivé (2026-07-26) : le CSS (100dvh) combiné à
+// l'attribut viewport "interactive-widget=resizes-content" gère maintenant
+// nativement l'adaptation au clavier, sans les bugs de rendu (écran/texte
+// invisible sur iPhone, zone noire sur Android) causés par ce script.
+// Conservé en commentaire au cas où un ancien navigateur en aurait besoin :
+//
+// if (window.visualViewport) {
+//     const appEl = document.getElementById('app');
+//     let _vvTimer = null;
+//     function _applyViewportHeight() {
+//         if (!isMobile()) return;
+//         appEl.style.height = window.visualViewport.height + 'px';
+//         void appEl.offsetHeight;
+//         const inputEl = document.getElementById('user-input');
+//         if (document.activeElement === inputEl) {
+//             messagesDiv.scrollTop = messagesDiv.scrollHeight;
+//         }
+//     }
+//     window.visualViewport.addEventListener('resize', () => {
+//         if (_vvTimer) clearTimeout(_vvTimer);
+//         _vvTimer = setTimeout(_applyViewportHeight, 120);
+//     });
+//     window.visualViewport.addEventListener('scroll', () => {
+//         if (_vvTimer) clearTimeout(_vvTimer);
+//         _vvTimer = setTimeout(_applyViewportHeight, 120);
+//     });
+// }
 
 // ══════════════════════════════════════════
 // ONGLETS PARAMÈTRES
