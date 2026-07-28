@@ -2214,7 +2214,39 @@ def _choisir_recherche_web(provider: str, api_keys: dict) -> tuple:
         if provider == 'gemini' and (cles.get('gemini') or '').strip():
             return 'gemini_natif', 'ancrage Google (Gemini)'
         return 'brave', "l'ancrage Google exige que Gemini soit le modèle actif — repli sur Brave/Tavily"
+    if choisi == 'exa':
+        if (cles.get('exa') or '').strip():
+            # Appel séparé, comme Claude et Mistral : valable avec n'importe quel modèle.
+            return 'exa', 'recherche par le sens (Exa)'
+        return 'brave', "clé Exa absente — repli sur Brave/Tavily"
     return 'brave', 'Brave/Tavily'
+
+
+async def _search_via_exa(query: str, api_keys: dict) -> str:
+    """Recherche par le SENS pour la conversation.
+
+    Brave et Tavily cherchent des mots ; Exa cherche des documents proches de
+    l'idée exprimée. Sur une question formulée en toutes lettres — ce qui est
+    la norme en conversation — c'est souvent plus juste. On demande à Exa de
+    résumer chaque résultat par rapport à LA question : ce qui remonte au
+    modèle est déjà une réponse, pas un début de page.
+    """
+    import asyncio as _aio, functools as _ft
+    from modules.veille import exa_search
+    resultats, erreur = await _aio.get_event_loop().run_in_executor(
+        None, _ft.partial(exa_search, query, 6, None, None, '', api_keys, True))
+    if erreur:
+        raise RuntimeError(erreur)
+    if not resultats:
+        return ''
+    blocs = []
+    for r in resultats:
+        entete = r['titre'] + (f" ({r['date']})" if r.get('date') else '')
+        blocs.append(f"[{entete}]\n{r['url']}\n{(r.get('extrait') or '').strip()[:1200]}")
+    # Mêmes citations que pour Claude : le frontend sait déjà les afficher.
+    import json as _js
+    citations = [{'title': r['titre'], 'url': r['url']} for r in resultats]
+    return ('\n\n'.join(blocs) + '\n[NIMM_CITATIONS]' + _js.dumps(citations, ensure_ascii=False))
 
 
 async def _search_via_anthropic(query: str, api_keys: dict) -> str:
@@ -3943,10 +3975,11 @@ async def process_message(
         _gemini_gs_tools = [{'google_search': {}}]
     elif _mode_ws == 'mistral_natif':
         _mistral_ws_tools = [{'type': 'web_search'}]
-    elif _mode_ws in ('mistral', 'anthropic'):
+    elif _mode_ws in ('mistral', 'anthropic', 'exa'):
         # Appel séparé : fonctionne quel que soit le modèle qui répond.
         try:
-            _f = _search_via_anthropic if _mode_ws == 'anthropic' else _search_via_mistral
+            _f = {'anthropic': _search_via_anthropic, 'exa': _search_via_exa}.get(
+                _mode_ws, _search_via_mistral)
             web_context = await _f(user_message, api_keys)
             import re as _rc, json as _jc
             _m = _rc.search(r'\[NIMM_CITATIONS\](.*)', web_context or '')
@@ -4308,10 +4341,11 @@ async def process_message_stream(
         _gemini_gs_tools = [{'google_search': {}}]
     elif _mode_ws == 'mistral_natif':
         _mistral_ws_tools = [{'type': 'web_search'}]
-    elif _mode_ws in ('mistral', 'anthropic'):
+    elif _mode_ws in ('mistral', 'anthropic', 'exa'):
         # Appel séparé : fonctionne quel que soit le modèle qui répond.
         try:
-            _f = _search_via_anthropic if _mode_ws == 'anthropic' else _search_via_mistral
+            _f = {'anthropic': _search_via_anthropic, 'exa': _search_via_exa}.get(
+                _mode_ws, _search_via_mistral)
             web_context = await _f(user_message, api_keys)
             import re as _rcs, json as _jcs
             _mws = _rcs.search(r'\[NIMM_CITATIONS\](.*)', web_context or '')

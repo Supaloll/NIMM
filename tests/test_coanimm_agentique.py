@@ -1886,6 +1886,51 @@ def test_exa_avance():
     ok("Exa avancé : catégories filtrées, résumé ciblé, lecture propre d’une page")
 
 
+def test_exa_dans_le_chat():
+    """Exa était bâti mais inatteignable depuis une conversation.
+
+    Un outil qui n'existe que dans un panneau de réglages n'est pas vraiment
+    branché : quand on demande « cherche-moi ça » en discutant, c'est Brave qui
+    répondait. Exa devient un mode de recherche à part entière, appelé à part —
+    donc valable avec n'importe quel modèle, contrairement à l'ancrage Google.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    arbre = ast.parse(hub)
+
+    # Routage : Exa reconnu, et repli EXPLIQUÉ si la clé manque
+    seg = ''
+    for n in ast.walk(arbre):
+        if getattr(n, 'name', '') == '_choisir_recherche_web':
+            seg = ast.get_source_segment(hub, n) or ''
+    assert "choisi == 'exa'" in seg, 'Exa doit être un mode de routage'
+    assert "clé Exa absente" in seg, 'un repli silencieux serait un mensonge'
+    # Contrairement à l'ancrage Google, Exa ne dépend PAS du modèle actif
+    i_exa = seg.find("choisi == 'exa'")
+    assert "provider == 'exa'" not in seg[i_exa:], \
+        "Exa est un appel séparé : il ne doit exiger aucun modèle particulier"
+
+    # Fonction de recherche : résumé ciblé et citations réutilisant le format existant
+    fn = ''
+    for n in ast.walk(arbre):
+        if getattr(n, 'name', '') == '_search_via_exa':
+            fn = ast.get_source_segment(hub, n) or ''
+    assert fn, '_search_via_exa introuvable'
+    assert 'run_in_executor' in fn, 'exa_search est bloquant : hors du fil principal'
+    assert '[NIMM_CITATIONS]' in fn, 'réutiliser le format de citations déjà affiché'
+    assert 'raise RuntimeError' in fn, 'une panne doit déclencher le repli Brave/Tavily'
+
+    # Branché dans les DEUX chemins de conversation
+    assert hub.count("'mistral', 'anthropic', 'exa'") == 2, \
+        'le chemin avec outils ET le chemin en streaming'
+    assert hub.count("'exa': _search_via_exa") == 2
+
+    assert 'value="exa" data-needs-key="exa"' in html, 'option grisée sans clé Exa'
+    assert 'tous modèles' in html, "dire que ça marche avec n'importe quel modèle"
+    ok("Exa dans la conversation : mode de recherche à part entière, repli expliqué")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -1913,6 +1958,7 @@ if __name__ == '__main__':
                test_reordonnancement,
                test_veille,
                test_catalogue_services, test_exa_avance,
+               test_exa_dans_le_chat,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:
