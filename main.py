@@ -180,7 +180,31 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(memory_worker())
     from modules.coanimm import schedule_worker
     asyncio.create_task(schedule_worker())
+    asyncio.create_task(_veille_worker())
     yield
+
+async def _veille_worker():
+    """Relève les sujets de veille échus, une fois par heure.
+
+    Le relevé fait des appels réseau bloquants : il part dans un fil
+    d'exécution séparé, sinon toute la conversation attendrait. Toute panne
+    est avalée — une veille qui échoue ne doit jamais arrêter NIMM.
+    """
+    import asyncio as _aio
+    await _aio.sleep(120)          # laisser NIMM démarrer avant d'appeler l'extérieur
+    while True:
+        try:
+            from modules.veille import relever_les_dus, list_sujets
+            if list_sujets():
+                from core.database import get_api_keys
+                cles = get_api_keys()
+                messages = await _aio.get_event_loop().run_in_executor(
+                    None, lambda: relever_les_dus(cles))
+                for m in messages:
+                    print(f"[VEILLE] {m}")
+        except Exception as e:
+            print(f"[VEILLE] Relevé impossible : {e}")
+        await _aio.sleep(3600)
 
 app = FastAPI(title="NIMM", lifespan=lifespan)
 
@@ -1753,8 +1777,9 @@ async def thread_document_attacher(thread_id: str, req: ThreadDocReq):
         return {"ok": False, "erreur": "Document vide : rien à attacher."}
     fiche = _db.set_thread_document(thread_id, titre, texte, source)
     prov = _provider_actif(thread_id)
-    _db.add_diagnostic("documents", "Document attaché à un fil",
-                       f"« {fiche['titre']} » — {fiche['nb_car']} caractères")
+    _db.add_diagnostic("documents",
+                       f"Document attaché au fil : « {fiche['titre']} » — "
+                       f"{fiche['nb_car']} caractères")
     return {"ok": True, "titre": fiche["titre"], "nb_car": fiche["nb_car"],
             "tronque": fiche["tronque"], "provider": prov,
             "regime": regime_de_cache(prov)}
@@ -1818,8 +1843,9 @@ async def gemini_pin_creer(req: GeminiPinReq):
     if res.get("ok"):
         _db.add_gemini_pin(res["name"], res.get("titre") or titre, res.get("model", ""),
                            res.get("expire", ""), res.get("nb_tokens", 0))
-        _db.add_diagnostic("gemini", "Document épinglé",
-                           f"« {res.get('titre') or titre} » — {res.get('nb_tokens', 0)} jetons")
+        _db.add_diagnostic("gemini",
+                           f"Document épinglé : « {res.get('titre') or titre} » — "
+                           f"{res.get('nb_tokens', 0)} jetons")
     return res
 
 @app.get("/api/gemini/pins")
@@ -2776,6 +2802,7 @@ _COANIMM_TOOLS = [
     {"tool": "describe_audio", "label": "Décrire un document sonore (ton, bruits, musique)", "category": "Audio & voix"},
     {"tool": "pin_document", "label": "Épingler un document et l'interroger (cache Gemini)", "category": "Documents"},
     {"tool": "thread_document", "label": "Attacher un document à la conversation", "category": "Documents"},
+    {"tool": "veille", "label": "Recherche par le sens et sujets de veille (Exa)", "category": "Recherche & web"},
     {"tool": "make_document", "label": "Créer un document accessible (docx/pdf/epub/pptx)", "category": "Documents"},
     {"tool": "merge_pdf", "label": "Fusionner des PDF", "category": "Documents"},
     {"tool": "split_pdf", "label": "Découper / extraire des pages PDF", "category": "Documents"},
@@ -3882,6 +3909,91 @@ async def set_stt_settings(req: dict):
     if req.get('model') in ('tiny', 'base', 'small', 'medium', 'large'):
         set_setting('stt_model', req['model'])
     return {"status": "ok"}
+
+class VeilleSujetReq(BaseModel):
+    libelle: Optional[str] = None
+    requete: Optional[str] = None
+    url_reference: Optional[str] = None
+    periode: str = "hebdomadaire"
+    nb: int = 8
+    actif: Optional[bool] = None
+
+@app.get("/api/veille/sujets")
+async def veille_lister():
+    """Sujets suivis, avec leur dernier relevé."""
+    from modules.veille import list_sujets, veille_due, PERIODES
+    sujets = list_sujets()
+    for s in sujets:
+        s["du"] = veille_due(s)
+    return {"sujets": sujets, "periodes": list(PERIODES.keys())}
+
+@app.post("/api/veille/sujets")
+async def veille_ajouter(req: VeilleSujetReq):
+    """Crée un sujet de veille. Une adresse de référence prime sur la requête :
+    on cherche alors ce qui RESSEMBLE à cette page, pas ce qui contient ces mots."""
+    from modules.veille import add_sujet
+    if not (req.requete or "").strip() and not (req.url_reference or "").strip():
+        raise HTTPException(400, "Indique une requête ou une adresse de référence.")
+    return add_sujet(req.libelle or "", req.requete or "", req.periode,
+                     req.url_reference or "", req.nb)
+
+@app.patch("/api/veille/sujets/{sujet_id}")
+async def veille_modifier(sujet_id: str, req: VeilleSujetReq):
+    from modules.veille import update_sujet
+    champs = {}
+    if req.actif is not None:
+        champs["actif"] = bool(req.actif)
+    if req.periode:
+        champs["periode"] = req.periode
+    if req.libelle is not None:
+        champs["libelle"] = req.libelle
+    sujet = update_sujet(sujet_id, **champs)
+    if not sujet:
+        raise HTTPException(404, "Sujet de veille introuvable.")
+    return sujet
+
+@app.delete("/api/veille/sujets/{sujet_id}")
+async def veille_supprimer(sujet_id: str):
+    from modules.veille import remove_sujet
+    return {"sujets": remove_sujet(sujet_id)}
+
+@app.post("/api/veille/relever/{sujet_id}")
+async def veille_relever(sujet_id: str):
+    """Relève un sujet tout de suite, sans attendre son échéance."""
+    import asyncio as _aio, functools as _ft
+    from modules.veille import list_sujets, relever_sujet, update_sujet
+    from core.database import get_api_keys
+    sujet = next((s for s in list_sujets() if s.get("id") == sujet_id), None)
+    if not sujet:
+        raise HTTPException(404, "Sujet de veille introuvable.")
+    cles = get_api_keys()
+    nouveaux, message = await _aio.get_event_loop().run_in_executor(
+        None, _ft.partial(relever_sujet, sujet, cles))
+    update_sujet(sujet_id, dernier_run=datetime.now().isoformat(timespec="seconds"),
+                 dernier_statut=message, nb_trouves=len(nouveaux))
+    return {"nouveautes": nouveaux, "message": message}
+
+class ExaReq(BaseModel):
+    requete: Optional[str] = None
+    url: Optional[str] = None
+    nb: int = 8
+    depuis_jours: Optional[int] = None
+
+@app.post("/api/exa/search")
+async def exa_chercher(req: ExaReq):
+    """Recherche par le SENS : Exa cherche des documents proches d'une idée, là
+    où Brave et Tavily cherchent des mots. Complémentaire, pas concurrent."""
+    import asyncio as _aio, functools as _ft
+    from modules.veille import exa_search, exa_similar
+    from core.database import get_api_keys
+    cles = get_api_keys()
+    if (req.url or "").strip():
+        fn = _ft.partial(exa_similar, req.url, req.nb, req.depuis_jours, cles)
+    else:
+        fn = _ft.partial(exa_search, req.requete or "", req.nb, req.depuis_jours,
+                         None, "", cles)
+    resultats, erreur = await _aio.get_event_loop().run_in_executor(None, fn)
+    return {"resultats": resultats, "erreur": erreur}
 
 @app.get("/api/settings/rerank")
 async def get_rerank_settings():

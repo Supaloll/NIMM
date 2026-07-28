@@ -186,6 +186,12 @@ GENERATE_SYSTEM_PROMPT = (
     "voice : id de voix (appeler nimm_list_voices() pour les options y compris voix Voxtral personnalisées) ; "
     "vide = voix par défaut. "
     "Retourne le chemin du fichier .daisy.\n"
+    "nimm_veille(requete='', url='', nb=8, depuis_jours=None) : recherche par le SENS "
+    "(Exa). Donne une requête OU une adresse : avec une adresse, on cherche ce qui "
+    "RESSEMBLE à cette page. Complète search_web, qui cherche des mots.\n"
+    "nimm_suivre_sujet(libelle, requete='', url_reference='', periode='hebdomadaire') : "
+    "met un sujet sous surveillance. NIMM le relève tout seul et verse les nouveautés "
+    "dans la base de connaissances.\n"
     "nimm_attach_document(chemin='', texte='', titre='') : ATTACHE un document à LA "
     "CONVERSATION EN COURS. Il est ensuite fourni au modèle à chaque question du fil, "
     "et la base de connaissances cesse de proposer autre chose. C'est le bon outil "
@@ -448,6 +454,26 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    with _nimm_ur.urlopen(_req, timeout=600) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
+    vg = (
+        "def nimm_veille(requete='', url='', nb=8, depuis_jours=None):\n"
+        "    _data = _nimm_json.dumps({\"requete\": requete, \"url\": url,\n"
+        "        \"nb\": nb, \"depuis_jours\": depuis_jours}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/exa/search\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
+        "        _d = _nimm_json.loads(_r.read())\n"
+        "    return _d.get(\"resultats\", []) if not _d.get(\"erreur\") else _d[\"erreur\"]\n"
+        "\n"
+        "def nimm_suivre_sujet(libelle, requete='', url_reference='', periode='hebdomadaire'):\n"
+        "    _data = _nimm_json.dumps({\"libelle\": libelle, \"requete\": requete,\n"
+        "        \"url_reference\": url_reference, \"periode\": periode}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/veille/sujets\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=60) as _r:\n"
+        "        return _nimm_json.loads(_r.read())\n"
+    )
     ad = (
         "def nimm_attach_document(chemin='', texte='', titre='', _tid='%(t)s'):\n"
         "    _data = _nimm_json.dumps({\"chemin\": chemin, \"texte\": texte, \"titre\": titre}).encode()\n"
@@ -528,6 +554,11 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
     parts.append(ad if "ask_documents" not in _disabled else _stub("nimm_ask_documents", "interroger la base avec citations"))
     parts.append(dv if "describe_video" not in _disabled else _stub("nimm_describe_video", "décrire une vidéo"))
     parts.append(da if "describe_audio" not in _disabled else _stub("nimm_describe_audio", "décrire un audio"))
+    if "veille" not in _disabled:
+        parts.append(vg)
+    else:
+        parts.append(_stub("nimm_veille", "recherche par le sens"))
+        parts.append(_stub("nimm_suivre_sujet", "suivre un sujet de veille"))
     if "thread_document" not in _disabled:
         parts.append(ad)
     else:
