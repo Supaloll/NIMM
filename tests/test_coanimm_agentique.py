@@ -9,6 +9,7 @@ Sortie : une ligne « OK » par scénario, « TOUS LES TESTS PASSENT » à la fi
 """
 import ast
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -1677,6 +1678,99 @@ def test_reordonnancement():
     ok("réordonnancement : inerte sans réglage, muet en panne, seuil respecté, jamais lent d’office")
 
 
+def test_veille():
+    """Veille : Exa cherche par le SENS, et NIMM relève tout seul.
+
+    NIMM savait déjà planifier et déjà ingérer ; la veille relie les deux. Trois
+    exigences : une échéance calculable SANS horloge ni réseau, un déjà-vu qui
+    ne resserve jamais deux fois le même article, et une panne qui ne remonte
+    jamais en exception — un relevé raté ne doit pas arrêter NIMM.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    coa = open(os.path.join(racine, 'modules', 'coanimm.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    import modules.veille as V
+
+    # (1) Échéance : fonction pure, testable sans horloge
+    maintenant = _dt(2026, 7, 27, 9, 0, 0)
+    assert V.veille_due({'periode': 'hebdomadaire', 'dernier_run': ''}, maintenant), \
+        'jamais relevé → à relever tout de suite'
+    recent = (maintenant - _td(days=2)).isoformat()
+    assert not V.veille_due({'periode': 'hebdomadaire', 'dernier_run': recent}, maintenant)
+    assert V.veille_due({'periode': 'quotidienne', 'dernier_run': recent}, maintenant)
+    vieux = (maintenant - _td(days=8)).isoformat()
+    assert V.veille_due({'periode': 'hebdomadaire', 'dernier_run': vieux}, maintenant)
+    assert not V.veille_due({'actif': False, 'periode': 'quotidienne',
+                             'dernier_run': vieux}, maintenant), 'un sujet éteint dort'
+    assert V.veille_due({'periode': 'hebdomadaire', 'dernier_run': 'n’importe quoi'},
+                        maintenant), 'date illisible → relever plutôt que bloquer'
+    futur = (maintenant + _td(days=3)).isoformat()
+    assert V.veille_due({'periode': 'hebdomadaire', 'dernier_run': futur}, maintenant), \
+        'horloge reculée : ne pas rester coincé des jours'
+
+    # (2) Déjà-vu et ingestion — magasin et réseau simulés
+    store, vlire, vecrire = {}, V._lire, V._ecrire
+    V._lire = lambda c, d: json.loads(store.get(c, d))
+    V._ecrire = lambda c, v: store.__setitem__(c, json.dumps(v))
+    vsearch = V.exa_search
+    lot1 = [{'titre': 'A', 'url': 'http://a', 'date': '', 'auteur': '', 'extrait': 'xa', 'score': 1},
+            {'titre': 'B', 'url': 'http://b', 'date': '', 'auteur': '', 'extrait': 'xb', 'score': 1}]
+    try:
+        sujet = {'id': 's1', 'libelle': 'Accessibilité', 'requete': 'q',
+                 'periode': 'hebdomadaire', 'nb': 8}
+        V.exa_search = lambda *a, **k: (lot1, '')
+        neufs, msg = V.relever_sujet(sujet, ingerer=False)
+        assert len(neufs) == 2 and '2 nouveauté' in msg, msg
+
+        # Deuxième passage : rien de neuf, et on le DIT
+        neufs, msg = V.relever_sujet(sujet, ingerer=False)
+        assert neufs == [] and 'rien de nouveau' in msg, msg
+
+        # Un seul article inédit ressort
+        lot2 = lot1 + [{'titre': 'C', 'url': 'http://c', 'date': '', 'auteur': '',
+                        'extrait': 'xc', 'score': 1}]
+        V.exa_search = lambda *a, **k: (lot2, '')
+        neufs, msg = V.relever_sujet(sujet, ingerer=False)
+        assert [n['url'] for n in neufs] == ['http://c'], neufs
+
+        # (3) Panne : message en français, aucune exception
+        V.exa_search = lambda *a, **k: ([], 'Exa refuse la clé d’API.')
+        neufs, msg = V.relever_sujet(sujet, ingerer=False)
+        assert neufs == [] and 'refuse la clé' in msg
+
+        # Une adresse de référence prend le pas sur la requête
+        appels = []
+        V.exa_similar = lambda url, *a, **k: (appels.append(url), ([], ''))[1]
+        V.relever_sujet({'id': 's2', 'libelle': 'L', 'requete': 'q',
+                         'url_reference': 'http://ref', 'periode': 'mensuelle'},
+                        ingerer=False)
+        assert appels == ['http://ref'], 'la page de référence doit primer'
+    finally:
+        V._lire, V._ecrire, V.exa_search = vlire, vecrire, vsearch
+        import importlib
+        importlib.reload(V)
+
+    # (4) Lecture souple des réponses d'Exa
+    assert V._lire_resultats({'results': [{'title': 'T', 'url': 'http://u'}]})[0]['titre'] == 'T'
+    assert V._lire_resultats([{'id': 'http://u', 'title': 'T'}])[0]['url'] == 'http://u'
+    assert V._lire_resultats({'results': [{'title': 'sans url'}]}) == [], 'sans adresse, inutilisable'
+    assert V._lire_resultats('bruit') == []
+
+    # (5) Le relevé est BLOQUANT : il doit partir dans un fil séparé
+    assert '_veille_worker' in mn and 'run_in_executor' in mn, \
+        'sinon toute la conversation attendrait le réseau'
+    assert 'await _aio.sleep(120)' in mn, 'laisser NIMM démarrer avant d’appeler l’extérieur'
+    assert '/api/veille/sujets' in mn and '/api/exa/search' in mn
+    assert 'nimm_veille' in coa and 'nimm_suivre_sujet' in coa
+    assert 'id="veille-section" data-needs-key="exa"' in html, 'masqué sans clé Exa'
+    assert 'aria-live="polite"' in html and '_veilleCharger' in app
+    ok("veille : échéance pure, déjà-vu respecté, panne muette, relevé hors du chemin chaud")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -1702,6 +1796,7 @@ if __name__ == '__main__':
                test_magasin_documents_de_fil,
                test_choix_dans_la_base,
                test_reordonnancement,
+               test_veille,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

@@ -706,6 +706,60 @@
             </details>
         </div>
 
+        <!-- ── VEILLE (recherche par le sens, Exa) ── -->
+        <div class="setting-group" id="veille-section" data-needs-key="exa">
+            <details id="veille-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">🔭 Veille documentaire</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Brave et Tavily cherchent des mots ; Exa cherche des documents proches
+                    par le SENS. Mets un sujet sous surveillance : NIMM le relève tout seul,
+                    écarte ce qu'il t'a déjà montré, et verse les nouveautés dans ta base
+                    de connaissances.
+                </p>
+                <div class="setting-group">
+                    <label for="veille-libelle">Nom du sujet</label>
+                    <input type="text" id="veille-libelle" placeholder="Accessibilité du livre numérique"
+                        aria-label="Nom du sujet de veille"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="veille-requete">Ce que tu cherches (en toutes lettres)</label>
+                    <textarea id="veille-requete" rows="2"
+                        placeholder="Obligations d'accessibilité des plateformes de vente de livres numériques en Europe"
+                        aria-label="Description de ce que tu cherches"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;"></textarea>
+                </div>
+                <div class="setting-group">
+                    <label for="veille-url">…ou adresse d'une page de référence (« encore comme celle-ci »)</label>
+                    <input type="text" id="veille-url" placeholder="https://…"
+                        aria-label="Adresse d'une page de référence"
+                        style="width:100%;box-sizing:border-box;font-size:0.85rem;">
+                </div>
+                <div class="setting-group">
+                    <label for="veille-periode">Périodicité</label>
+                    <select id="veille-periode" aria-label="Périodicité du relevé">
+                        <option value="quotidienne">Chaque jour</option>
+                        <option value="hebdomadaire" selected>Chaque semaine</option>
+                        <option value="mensuelle">Chaque mois</option>
+                    </select>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button id="veille-add-btn" class="btn-primary" aria-label="Mettre ce sujet sous surveillance">Suivre ce sujet</button>
+                    <button id="veille-refresh-btn" class="btn-secondary" aria-label="Rafraîchir la liste des sujets suivis">Rafraîchir</button>
+                </div>
+                <div id="veille-status" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:8px;min-height:1.2em;"></div>
+                <div class="setting-group" style="margin-top:10px;">
+                    <label for="veille-select">Sujets suivis</label>
+                    <select id="veille-select" aria-label="Sujet de veille suivi" style="width:100%;box-sizing:border-box;"></select>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+                        <button id="veille-run-btn" class="btn-primary" aria-label="Relever ce sujet maintenant">Relever maintenant</button>
+                        <button id="veille-del-btn" class="btn-secondary" aria-label="Ne plus suivre ce sujet">Ne plus suivre</button>
+                    </div>
+                </div>
+                <div id="veille-out" role="region" aria-label="Nouveautés de la veille" style="margin-top:8px;"></div>
+            </details>
+        </div>
+
         <!-- ── RÉORDONNANCEMENT DE LA BASE DE CONNAISSANCES ── -->
         <div class="setting-group" id="rerank-section">
             <details id="rerank-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">

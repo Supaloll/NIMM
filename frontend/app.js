@@ -11892,6 +11892,106 @@ setupSettingsTabs();
 init();
 
 // ══════════════════════════════════════════
+// VEILLE DOCUMENTAIRE (Exa)
+// ══════════════════════════════════════════
+(function () {
+    function _vStatus(msg) {
+        var el = document.getElementById('veille-status');
+        if (el) el.textContent = msg;
+    }
+
+    async function _veilleCharger(annoncer) {
+        var sel = document.getElementById('veille-select');
+        if (!sel) return;
+        try {
+            var r = await fetch('/api/veille/sujets');
+            var d = await r.json();
+            var sujets = d.sujets || [];
+            sel.innerHTML = sujets.length
+                ? sujets.map(function (s) {
+                      var etat = s.dernier_run
+                          ? ('relevé le ' + s.dernier_run.slice(0, 10)
+                             + (s.nb_trouves ? ', ' + s.nb_trouves + ' nouveauté(s)' : ''))
+                          : 'jamais relevé';
+                      return '<option value="' + s.id + '">' + s.libelle
+                           + ' — ' + s.periode + ', ' + etat
+                           + (s.du ? ' (à relever)' : '') + '</option>';
+                  }).join('')
+                : '<option value="">Aucun sujet suivi</option>';
+            if (annoncer) {
+                _vStatus(sujets.length ? sujets.length + ' sujet(s) suivi(s).'
+                                       : 'Aucun sujet suivi pour l\'instant.');
+            }
+        } catch (e) { if (annoncer) _vStatus('Liste indisponible : ' + e.message); }
+    }
+
+    document.getElementById('veille-add-btn')?.addEventListener('click', async function () {
+        var lib = (document.getElementById('veille-libelle')?.value || '').trim();
+        var req = (document.getElementById('veille-requete')?.value || '').trim();
+        var url = (document.getElementById('veille-url')?.value || '').trim();
+        var per = document.getElementById('veille-periode')?.value || 'hebdomadaire';
+        if (!req && !url) { _vStatus('Décris ce que tu cherches, ou donne une adresse de référence.'); return; }
+        try {
+            var r = await fetch('/api/veille/sujets', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ libelle: lib, requete: req, url_reference: url, periode: per })
+            });
+            if (!r.ok) throw new Error(await r.text());
+            var d = await r.json();
+            _vStatus('Sujet suivi : « ' + d.libelle + ' », relevé ' + d.periode + '.');
+            await _veilleCharger(false);
+        } catch (e) { _vStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('veille-refresh-btn')?.addEventListener('click', function () {
+        _veilleCharger(true);
+    });
+
+    document.getElementById('veille-run-btn')?.addEventListener('click', async function () {
+        var id = document.getElementById('veille-select')?.value || '';
+        if (!id) return;
+        _vStatus('Relevé en cours… (cela peut prendre une minute)');
+        var out = document.getElementById('veille-out');
+        try {
+            var r = await fetch('/api/veille/relever/' + encodeURIComponent(id), { method: 'POST' });
+            var d = await r.json();
+            _vStatus(d.message || 'Relevé terminé.');
+            if (out) {
+                out.innerHTML = '';
+                (d.nouveautes || []).forEach(function (n, i) {
+                    var det = document.createElement('details');
+                    det.style.cssText = 'margin-top:6px;border:1px solid var(--border);border-radius:4px;padding:4px 8px;';
+                    var sum = document.createElement('summary');
+                    sum.textContent = (i + 1) + '. ' + n.titre + (n.date ? ' (' + n.date + ')' : '');
+                    sum.style.cursor = 'pointer';
+                    var pre = document.createElement('pre');
+                    pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;font-size:0.82rem;margin:6px 0 0;';
+                    pre.textContent = n.url + '\n\n' + (n.extrait || '(pas d\'extrait)');
+                    det.appendChild(sum); det.appendChild(pre);
+                    out.appendChild(det);
+                });
+            }
+            await _veilleCharger(false);
+        } catch (e) { _vStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('veille-del-btn')?.addEventListener('click', async function () {
+        var id = document.getElementById('veille-select')?.value || '';
+        if (!id) return;
+        if (!confirm('Ne plus suivre ce sujet ?')) return;
+        try {
+            await fetch('/api/veille/sujets/' + encodeURIComponent(id), { method: 'DELETE' });
+            _vStatus('Sujet retiré.');
+            await _veilleCharger(false);
+        } catch (e) { _vStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('veille-details')?.addEventListener('toggle', function () {
+        if (this.open) _veilleCharger(true);
+    });
+})();
+
+// ══════════════════════════════════════════
 // PERTINENCE DE LA BASE DE CONNAISSANCES (réordonnancement)
 // ══════════════════════════════════════════
 (function () {
