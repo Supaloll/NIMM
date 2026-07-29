@@ -48,6 +48,8 @@
         <!-- Indicateur masque verrouillé sur le fil -->
         <div id="top-right">
             <button id="toggle-galerie" title="Galerie d'images" aria-label="Galerie d'images"><span aria-hidden="true">🖼️</span></button>
+            <button id="toggle-musique" title="Musique (Lyria)" aria-label="Musique, génération et bibliothèque" hidden><span aria-hidden="true">🎵</span></button>
+            <button id="toggle-studio" title="Studio image et vidéo" aria-label="Studio image et vidéo" hidden><span aria-hidden="true">🎬</span></button>
             <button id="toggle-agenda" title="Agenda" aria-label="Agenda">
                 <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="2" y="3" width="12" height="11" rx="1.5"/>
@@ -801,6 +803,41 @@
                     <button id="rerank-test-btn" class="btn-secondary" aria-label="Vérifier quel réordonnanceur s'appliquera">Vérifier</button>
                 </div>
                 <div id="rerank-status" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:8px;min-height:1.2em;"></div>
+
+                <!-- Banc d'essai : la même question dans chaque moteur, côte à côte -->
+                <details id="banc-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-top:10px;">
+                    <summary style="font-weight:600;cursor:pointer;">🔬 Banc d'essai des réordonnanceurs</summary>
+                    <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0;">
+                        Pose une vraie question à ta base de connaissances. NIMM la passe dans
+                        chaque moteur disponible et te montre, pour chacun, quels passages
+                        remontent, avec quel score et en combien de temps. Aucun réglage n'est modifié.
+                    </p>
+                    <div class="setting-item">
+                        <label for="banc-question">Question à mesurer</label>
+                        <input type="text" id="banc-question"
+                            placeholder="Quelles sont les obligations d'accessibilité du livre numérique ?"
+                            aria-label="Question posée au banc d'essai"
+                            style="width:100%;box-sizing:border-box;">
+                    </div>
+                    <div class="setting-item">
+                        <label for="banc-k">Nombre de passages candidats</label>
+                        <input type="number" id="banc-k" value="10" min="2" max="20" step="1"
+                            aria-label="Nombre de passages candidats soumis à chaque moteur"
+                            style="width:6rem;">
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                        <button id="banc-run-btn" class="btn-primary" aria-label="Lancer le banc d'essai">Lancer le banc</button>
+                        <button id="banc-copy-btn" class="btn-secondary" aria-label="Copier le rapport du banc d'essai">Copier le rapport</button>
+                    </div>
+                    <div id="banc-status" role="status" aria-live="polite" style="font-size:0.82rem;margin-top:8px;min-height:1.2em;"></div>
+                    <div id="banc-out" role="region" aria-label="Résultats du banc d'essai" style="margin-top:8px;"></div>
+                    <details id="banc-texte-details" style="margin-top:8px;" hidden>
+                        <summary style="cursor:pointer;font-size:0.85rem;">Rapport en texte brut (copiable)</summary>
+                        <textarea id="banc-texte" rows="14" readonly
+                            aria-label="Rapport du banc d'essai en texte brut"
+                            style="width:100%;box-sizing:border-box;font-family:monospace;font-size:0.8rem;margin-top:6px;"></textarea>
+                    </details>
+                </details>
             </details>
         </div>
 
@@ -1725,7 +1762,7 @@ Analyse les sentiments de : ..."
             <span class="routing-label">🖼️ Image</span>
             <select id="new-thread-routing-image" class="routing-select" aria-label="Fournisseur image pour ce fil">
                 <option value="same">↩ Même que le fil</option>
-                <option value="gemini"     data-needs-key="gemini">🟡 Gemini (Imagen)</option>
+                <option value="gemini"     data-needs-key="gemini">🟡 Gemini (Nano Banana)</option>
                 <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI (DALL–E)</option>
                 <option value="stability"  data-needs-key="stability">Stability AI</option>
@@ -1928,6 +1965,129 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
+<!-- MODALE STUDIO — image réglée (Nano Banana) et vidéo (Veo) -->
+<div id="studio-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="studio-modal-title" style="max-width:760px;width:95vw;">
+        <div class="modal-header">
+            <h3 id="studio-modal-title"><span aria-hidden="true">🎬</span> Studio image et vidéo</h3>
+            <button id="studio-close" class="modal-close" aria-label="Fermer le studio">✕</button>
+        </div>
+
+        <!-- ── IMAGE ── -->
+        <details id="studio-image-details" open style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            <summary style="font-weight:600;cursor:pointer;">🖼️ Image — format, résolution, modèle</summary>
+            <p id="studio-image-note" style="font-size:0.8rem;color:var(--text-muted);margin:6px 0;"></p>
+            <div class="setting-item">
+                <label for="studio-image-prompt">Décris l'image</label>
+                <textarea id="studio-image-prompt" rows="3"
+                    placeholder="Une bibliothèque ancienne baignée de lumière rasante, plans larges."
+                    aria-label="Description de l'image à générer"
+                    style="width:100%;box-sizing:border-box;"></textarea>
+            </div>
+            <div class="setting-item">
+                <label for="studio-image-modele">Modèle</label>
+                <select id="studio-image-modele" aria-label="Modèle de génération d'image" style="width:100%;box-sizing:border-box;"></select>
+                <div id="studio-image-aide" style="font-size:0.78rem;color:var(--text-muted);margin-top:4px;"></div>
+            </div>
+            <div class="setting-item">
+                <label for="studio-image-ratio">Format</label>
+                <select id="studio-image-ratio" aria-label="Format de l'image" style="width:100%;box-sizing:border-box;"></select>
+            </div>
+            <div class="setting-item">
+                <label for="studio-image-taille">Résolution</label>
+                <select id="studio-image-taille" aria-label="Résolution de l'image" style="width:8rem;"></select>
+            </div>
+            <div class="setting-item">
+                <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;">
+                    <input type="checkbox" id="studio-image-decrire" checked
+                        aria-label="Décrire l'image après génération">
+                    Décrire l'image après génération (texte alternatif accessible)
+                </label>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <button id="studio-image-btn" class="btn-primary" aria-label="Générer l'image">Générer l'image</button>
+            </div>
+            <div id="studio-image-status" role="status" aria-live="polite" style="font-size:0.85rem;margin-top:10px;min-height:1.2em;"></div>
+            <div id="studio-image-out" role="region" aria-label="Image générée" style="margin-top:8px;"></div>
+        </details>
+
+        <!-- ── VIDÉO ── -->
+        <details id="studio-video-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-top:10px;">
+            <summary style="font-weight:600;cursor:pointer;">🎥 Vidéo — Veo</summary>
+            <p id="studio-video-note" style="font-size:0.8rem;color:var(--text-muted);margin:6px 0;"></p>
+            <div class="setting-item">
+                <label for="studio-video-prompt">Décris la vidéo</label>
+                <textarea id="studio-video-prompt" rows="3"
+                    placeholder="Plan aérien d'une côte rocheuse au lever du jour, les vagues éclatent sur les rochers."
+                    aria-label="Description de la vidéo à générer"
+                    style="width:100%;box-sizing:border-box;"></textarea>
+            </div>
+            <div class="setting-item">
+                <label for="studio-video-modele">Modèle</label>
+                <select id="studio-video-modele" aria-label="Modèle de génération vidéo" style="width:100%;box-sizing:border-box;"></select>
+                <div id="studio-video-aide" style="font-size:0.78rem;color:var(--text-muted);margin-top:4px;"></div>
+            </div>
+            <div class="setting-item">
+                <label for="studio-video-ratio">Format</label>
+                <select id="studio-video-ratio" aria-label="Format de la vidéo" style="width:100%;box-sizing:border-box;"></select>
+            </div>
+            <div class="setting-item">
+                <label for="studio-video-duree">Durée (secondes)</label>
+                <select id="studio-video-duree" aria-label="Durée de la vidéo" style="width:8rem;"></select>
+            </div>
+            <div class="setting-item">
+                <label for="studio-video-resolution">Résolution</label>
+                <select id="studio-video-resolution" aria-label="Résolution de la vidéo" style="width:8rem;"></select>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <button id="studio-video-btn" class="btn-primary" aria-label="Lancer la génération vidéo">Lancer la vidéo</button>
+                <button id="studio-video-refresh" class="btn-secondary" aria-label="Rafraîchir la bibliothèque vidéo">Rafraîchir la bibliothèque</button>
+            </div>
+            <div id="studio-video-status" role="status" aria-live="polite" style="font-size:0.85rem;margin-top:10px;min-height:1.2em;"></div>
+            <div id="studio-video-biblio" role="region" aria-label="Bibliothèque vidéo" style="margin-top:8px;max-height:40vh;overflow-y:auto;"></div>
+        </details>
+    </div>
+</div>
+
+<!-- MODALE MUSIQUE (Lyria 3) -->
+<div id="musique-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="musique-modal-title" style="max-width:720px;width:95vw;">
+        <div class="modal-header">
+            <h3 id="musique-modal-title"><span aria-hidden="true">🎵</span> Musique</h3>
+            <button id="musique-close" class="modal-close" aria-label="Fermer la musique">✕</button>
+        </div>
+        <p id="musique-note" style="font-size:0.82rem;color:var(--text-muted);margin:4px 0 10px;"></p>
+
+        <div class="setting-item">
+            <label for="musique-prompt">Décris la musique</label>
+            <textarea id="musique-prompt" rows="3"
+                placeholder="Un morceau folk acoustique enjoué, guitare et harmonica."
+                aria-label="Description de la musique à générer"
+                style="width:100%;box-sizing:border-box;"></textarea>
+        </div>
+        <div class="setting-item">
+            <label for="musique-modele">Modèle</label>
+            <select id="musique-modele" aria-label="Modèle de génération musicale" style="width:100%;box-sizing:border-box;"></select>
+            <div id="musique-modele-aide" style="font-size:0.78rem;color:var(--text-muted);margin-top:4px;"></div>
+        </div>
+        <div class="setting-item">
+            <label for="musique-format">Format du fichier</label>
+            <select id="musique-format" aria-label="Format du fichier audio" style="width:8rem;">
+                <option value="mp3">MP3</option>
+                <option value="wav">WAV</option>
+            </select>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <button id="musique-gen-btn" class="btn-primary" aria-label="Générer le morceau">Générer</button>
+            <button id="musique-refresh-btn" class="btn-secondary" aria-label="Rafraîchir la bibliothèque musicale">Rafraîchir la bibliothèque</button>
+        </div>
+        <div id="musique-status" role="status" aria-live="polite" style="font-size:0.85rem;margin-top:10px;min-height:1.2em;"></div>
+
+        <div id="musique-biblio" role="region" aria-label="Bibliothèque musicale"
+             style="margin-top:10px;max-height:50vh;overflow-y:auto;"></div>
+    </div>
+</div>
+
 <!-- MODALE GALERIE IMAGES -->
 <div id="galerie-modal" class="modal-overlay hidden">
     <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="galerie-modal-title" style="max-width:700px;width:95vw;">
@@ -2039,7 +2199,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260728"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260729-studio"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

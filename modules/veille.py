@@ -239,12 +239,19 @@ def add_sujet(libelle, requete, periode='hebdomadaire', url_reference='', nb=8,
     return sujet
 
 
+_CHAMPS_INSCRIPTIBLES = ('dernier_run', 'dernier_statut', 'nb_trouves',
+                         'notifie', 'dernieres_nouveautes', 'dernier_signal')
+
+
 def update_sujet(sujet_id, **champs):
+    """Met à jour un sujet. La liste blanche compte : les sujets créés avant
+    l'ajout du signalement n'ont pas encore les champs `notifie` et compagnie,
+    et un simple `k in s` les rejetterait en silence."""
     sujets = list_sujets()
     for s in sujets:
         if s.get('id') == sujet_id:
             for k, v in champs.items():
-                if k in s or k in ('dernier_run', 'dernier_statut', 'nb_trouves'):
+                if k in s or k in _CHAMPS_INSCRIPTIBLES:
                     s[k] = v
             _ecrire('veille_sujets', sujets)
             return s
@@ -332,16 +339,57 @@ def relever_sujet(sujet, api_keys=None, ingerer=True):
                       f"nouveauté(s) — {titres}{suite}.")
 
 
-def relever_les_dus(api_keys=None, maintenant=None):
-    """Passe tous les sujets échus. Appelé par le travailleur de fond."""
+def _merite_signalement(nouveaux, message, sujet):
+    """Ce relevé mérite-t-il de déranger ? Fonction PURE, donc testable.
+
+    Trois cas, et une seule règle de fond : ne signaler que ce qui APPREND
+    quelque chose. Une annonce toutes les heures qui répète « rien de nouveau »
+    finit par être ignorée — et le jour où elle dit quelque chose, on ne l'écoute
+    plus. C'est le défaut qu'on corrige ici.
+
+      - des nouveautés          → toujours signalé ;
+      - rien de nouveau         → jamais signalé (c'est le fonctionnement normal) ;
+      - une panne (clé absente, réseau, Exa qui refuse) → signalée UNE fois,
+        puis tue tant que la panne reste la même. Sinon « aucune clé Exa »
+        reviendrait à chaque heure.
+    """
+    if nouveaux:
+        return True
+    texte = (message or '')
+    if 'rien de nouveau' in texte.lower():
+        return False
+    return texte.strip() != (sujet.get('dernier_signal') or '').strip()
+
+
+def relever_les_dus(api_keys=None, maintenant=None, ingerer=True):
+    """Passe tous les sujets échus. Appelé par le travailleur de fond.
+
+    Pose au passage le drapeau de signalement : le relevé se fait en arrière-plan,
+    il faut donc laisser une trace que l'interface viendra lire et annoncer.
+
+    `ingerer=False` mesure la boucle sans toucher à la base de connaissances —
+    c'est ce qui rend cette fonction testable sans embarquer tout le RAG.
+    """
     messages = []
     for sujet in list_sujets():
         if not veille_due(sujet, maintenant):
             continue
-        nouveaux, message = relever_sujet(sujet, api_keys)
-        update_sujet(sujet['id'],
-                     dernier_run=(maintenant or datetime.now()).isoformat(timespec='seconds'),
-                     dernier_statut=message, nb_trouves=len(nouveaux))
+        nouveaux, message = relever_sujet(sujet, api_keys, ingerer=ingerer)
+        champs = {
+            'dernier_run': (maintenant or datetime.now()).isoformat(timespec='seconds'),
+            'dernier_statut': message,
+            'nb_trouves': len(nouveaux),
+        }
+        if _merite_signalement(nouveaux, message, sujet):
+            champs['notifie'] = False
+            champs['dernier_signal'] = message
+            champs['dernieres_nouveautes'] = [
+                {'titre': (r.get('titre') or '')[:200],
+                 'url': (r.get('url') or '')[:500],
+                 'date': (r.get('date') or '')[:10]}
+                for r in nouveaux[:10]
+            ]
+        update_sujet(sujet['id'], **champs)
         messages.append(message)
         try:
             from core.database import add_diagnostic
@@ -349,3 +397,26 @@ def relever_les_dus(api_keys=None, maintenant=None):
         except Exception:
             pass
     return messages
+
+
+def notifications_en_attente():
+    """Relevés terminés en arrière-plan et pas encore annoncés.
+
+    LECTURE UNIQUE : appeler cette fonction consomme les notifications
+    (`notifie` repasse à vrai). Même contrat que les ricochets planifiés —
+    l'interface annonce une fois, pas à chaque battement d'horloge.
+    """
+    en_attente = []
+    for sujet in list_sujets():
+        if sujet.get('notifie') is not False:
+            continue
+        en_attente.append({
+            'id': sujet.get('id', ''),
+            'libelle': sujet.get('libelle', ''),
+            'message': sujet.get('dernier_statut', ''),
+            'quand': sujet.get('dernier_run', ''),
+            'nb': int(sujet.get('nb_trouves') or 0),
+            'nouveautes': sujet.get('dernieres_nouveautes') or [],
+        })
+        update_sujet(sujet.get('id', ''), notifie=True)
+    return en_attente

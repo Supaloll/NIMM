@@ -2041,6 +2041,371 @@ def test_audit_structurel():
     ok("audit structurel : aucun nom indéfini, aucune route en double, journal bien appelé")
 
 
+def test_veille_se_signale():
+    """La veille relevait en arrière-plan… et se taisait.
+
+    Le travailleur de fond existait bien, mais son résultat n'allait que dans la
+    console du serveur et un diagnostic : rien de tout cela ne se lit à
+    l'afficheur braille pendant qu'on travaille. Trois exigences : signaler ce
+    qui APPREND quelque chose, ne PAS radoter, et consommer la notification une
+    seule fois.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    import modules.veille as V
+
+    # (1) Règle de signalement — fonction PURE, testable sans horloge ni réseau
+    art = [{'titre': 'A', 'url': 'http://a'}]
+    assert V._merite_signalement(art, 'Veille « X » : 1 nouveauté', {}), \
+        'des nouveautés se signalent toujours'
+    assert not V._merite_signalement([], 'Veille « X » : rien de nouveau (3 vus).', {}), \
+        'le fonctionnement normal ne dérange pas'
+    panne = 'Veille « X » : Aucune clé Exa enregistrée.'
+    assert V._merite_signalement([], panne, {}), 'une panne inédite se signale'
+    assert not V._merite_signalement([], panne, {'dernier_signal': panne}), \
+        'la MÊME panne ne se signale pas toutes les heures'
+    assert V._merite_signalement([], 'Veille « X » : Exa refuse la clé.',
+                                 {'dernier_signal': panne}), \
+        'une panne DIFFÉRENTE, elle, mérite d’être dite'
+
+    # (2) Magasin simulé : le drapeau est posé, puis consommé UNE fois
+    store, vlire, vecrire = {}, V._lire, V._ecrire
+    V._lire = lambda c, d: json.loads(store.get(c, d))
+    V._ecrire = lambda c, v: store.__setitem__(c, json.dumps(v))
+    vsearch = V.exa_search
+    try:
+        store['veille_sujets'] = json.dumps([
+            {'id': 's1', 'libelle': 'Accessibilité', 'requete': 'q',
+             'periode': 'hebdomadaire', 'nb': 8, 'actif': True, 'dernier_run': ''}])
+        V.exa_search = lambda *a, **k: (
+            [{'titre': 'A', 'url': 'http://a', 'date': '2026-07-28', 'auteur': '',
+              'extrait': 'xa', 'score': 1}], '')
+        V.relever_les_dus(ingerer=False)
+
+        sujet = V.list_sujets()[0]
+        assert sujet.get('notifie') is False, \
+            'un sujet créé AVANT le signalement doit quand même recevoir le drapeau'
+        assert sujet.get('dernieres_nouveautes'), 'les articles trouvés sont conservés'
+
+        attente = V.notifications_en_attente()
+        assert len(attente) == 1 and attente[0]['libelle'] == 'Accessibilité'
+        assert attente[0]['nouveautes'][0]['url'] == 'http://a'
+        assert V.notifications_en_attente() == [], \
+            'LECTURE UNIQUE : la deuxième lecture ne doit plus rien rendre'
+    finally:
+        V._lire, V._ecrire, V.exa_search = vlire, vecrire, vsearch
+        import importlib
+        importlib.reload(V)
+
+    # (3) Le chemin complet existe : route consommatrice + annonce côté interface
+    assert '@app.post("/api/veille/notifications")' in mn, 'POST : la lecture consomme'
+    assert 'notifications_en_attente' in mn
+    assert 'nb_trouves=len(nouveaux), notifie=True' in mn, \
+        'un relevé manuel est déjà sous les yeux : il ne doit pas ressortir en annonce'
+    assert '_veillePollNotifications' in app and 'coanimm-status-announce' in app
+    assert '_veilleRendreNouveautes' in app, 'l’annonce passe, le texte doit rester'
+    ok("veille : les relevés de fond se signalent, une fois, et seulement s’ils apprennent quelque chose")
+
+
+def test_banc_essai_reordonnanceur():
+    """Choisir un réordonnanceur au jugé, c'est régler un instrument sans l'entendre.
+
+    Le banc pose la MÊME question aux mêmes passages dans chaque moteur. Trois
+    exigences : ne modifier AUCUN réglage, ne pas bloquer la conversation
+    pendant qu'il mesure, et rendre un rapport COPIABLE — un tableau qui
+    n'existe qu'à l'écran ne se compare pas d'une semaine à l'autre.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    src = open(os.path.join(racine, 'modules', 'reranker.py'), encoding='utf-8').read()
+    import modules.reranker as R
+
+    cfg = {}
+    vrai = R._reglage
+    R._reglage = lambda n, d='': cfg.get(n, d)
+    try:
+        # (1) Le modèle par défaut suit le MOTEUR, pas un réglage unique mal partagé
+        assert R._modele_pour('jina', '') == 'jina-reranker-v2-base-multilingual'
+        assert R._modele_pour('cohere', '') == 'rerank-v3.5'
+        cfg['rag_rerank_modele'] = 'bge-reranker-v2-m3'
+        assert R._modele_pour('jina') == 'bge-reranker-v2-m3', 'le réglage explicite prime'
+        assert R._modele_pour('jina', '') == 'jina-reranker-v2-base-multilingual', \
+            'le banc doit pouvoir imposer le défaut de chaque moteur'
+        cfg.clear()
+
+        # (2) Inventaire honnête : les moteurs absents sont LISTÉS avec leur raison
+        noms = [m['nom'] for m in R.moteurs_testables({})]
+        assert noms == list(R.MOTEURS_BANC), noms
+        par_nom = {m['nom']: m for m in R.moteurs_testables({'cohere': 'k'})}
+        assert par_nom['cohere']['disponible'] and par_nom['semantique']['disponible']
+        assert not par_nom['voyage']['disponible'] and 'Aucune clé' in par_nom['voyage']['raison']
+        assert not par_nom['local']['disponible'], 'aucune adresse renseignée'
+        cfg['rag_rerank_url'] = 'http://localhost:8081'
+        assert [m for m in R.moteurs_testables({}) if m['nom'] == 'local'][0]['disponible']
+        cfg.clear()
+
+        # (3) Une question vide n'appelle personne
+        assert 'erreur' in asyncio.run(R.banc_essai('', {}))
+
+        # (4) Mesure complète, réseau et base simulés
+        passages = [{'passage': 'la loi sur le livre numérique', 'titre': 'Loi',
+                     'source': 'loi.pdf', 'score': 0.9},
+                    {'passage': 'recette de tarte', 'titre': 'Tarte',
+                     'source': 'cuisine.pdf', 'score': 0.7}]
+        faux_enrich = types.ModuleType('modules.enrichissement')
+        faux_enrich.search_documents = lambda q, k=5: list(passages)
+        vrai_enrich = sys.modules.get('modules.enrichissement')
+        sys.modules['modules.enrichissement'] = faux_enrich
+        vcohere = R._rerank_cohere
+        R._rerank_cohere = lambda q, t, c, modele=None: [(0, 0.94), (1, 0.02)]
+        try:
+            rap = asyncio.run(R.banc_essai('obligations du livre numérique',
+                                           {'cohere': 'k'},
+                                           moteurs=['semantique', 'cohere', 'voyage']))
+        finally:
+            R._rerank_cohere = vcohere
+            if vrai_enrich is not None:
+                sys.modules['modules.enrichissement'] = vrai_enrich
+            else:
+                sys.modules.pop('modules.enrichissement', None)
+
+        par_moteur = {m['moteur']: m for m in rap['moteurs']}
+        assert set(par_moteur) == {'semantique', 'cohere', 'voyage'}
+        assert par_moteur['cohere']['ok'] and par_moteur['cohere']['classement'][0]['titre'] == 'Loi'
+        assert par_moteur['cohere']['classement'][0]['retenu']
+        assert not par_moteur['cohere']['classement'][1]['retenu'], 'sous le seuil'
+        assert not par_moteur['voyage']['ok'] and 'Aucune clé' in par_moteur['voyage']['note'], \
+            'un moteur sans clé est rapporté, pas masqué'
+        assert par_moteur['semantique']['ok'], 'la référence sans réordonnanceur est mesurée'
+        assert rap['nb_passages'] == 2 and rap['texte'], 'un rapport copiable est produit'
+        assert 'Loi' in rap['texte'] and 'BANC' in rap['texte']
+    finally:
+        R._reglage = vrai
+
+    # (5) Instrument de mesure, pas réglage déguisé : le banc n'écrit RIEN
+    debut = src.index("def banc_essai") if "def banc_essai" in src else src.index("async def banc_essai")
+    corps = src[debut:]
+    assert 'set_setting' not in corps, "le banc ne doit modifier AUCUN réglage"
+    assert '_aio.to_thread' in corps, "les moteurs HTTP sont bloquants : hors de la boucle"
+
+    # (6) Le chemin complet existe, et il est accessible
+    assert '@app.post("/api/rag/banc")' in mn and '/api/rag/banc/moteurs' in mn
+    assert 'id="banc-question"' in html and 'id="banc-texte"' in html
+    assert 'aria-label="Résultats du banc d\'essai"' in html
+    assert '_bancRendre' in app and "createElement('table')" in app, \
+        'un classement se parcourt en tableau, pas en paragraphe'
+    assert "th.scope = 'col'" in app and "td.scope = 'row'" in app, \
+        'sans en-têtes portées, un tableau est illisible au lecteur d’écran'
+    ok("banc d'essai : mesure côte à côte, aucun réglage touché, rapport copiable et tableau accessible")
+
+
+def test_musique_lyria():
+    """Lyria dormait derrière une clé déjà présente.
+
+    Trois exigences : ne rien promettre sans la clé, remonter les paroles
+    SÉPARÉMENT de l'audio (c'est la seule partie lisible au braille), et ne
+    jamais lever d'exception vers l'appelant — une génération musicale ratée
+    n'est pas une panne de NIMM.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    gitignore = open(os.path.join(racine, '.gitignore'), encoding='utf-8').read()
+    import modules.musique as M
+
+    # (1) Sans clé, on le DIT — et on ne tente rien
+    dispo = M.modeles_disponibles({})
+    assert not dispo['cle_presente'] and 'Aucune clé Gemini' in dispo['note']
+    assert M.modeles_disponibles({'gemini': 'k'})['cle_presente']
+    assert 'erreur' in asyncio.run(M.generer('un morceau', api_keys={}))
+    assert 'erreur' in asyncio.run(M.generer('', api_keys={'gemini': 'k'})), \
+        'une consigne vide n’appelle personne'
+
+    # (2) L'ordre des parties n'est PAS garanti : audio d'abord, texte ensuite
+    audio, mime, textes = M._extraire({'candidates': [{'content': {'parts': [
+        {'inlineData': {'data': 'QUJD', 'mimeType': 'audio/mpeg'}},
+        {'text': 'Couplet 1'}, {'text': 'Refrain'}]}}]})
+    assert audio == 'QUJD' and mime == 'audio/mpeg'
+    assert textes == 'Couplet 1\n\nRefrain', textes
+    # …et dans l'autre sens, avec la variante snake_case
+    audio2, _, t2 = M._extraire({'candidates': [{'content': {'parts': [
+        {'text': 'Paroles'}, {'inline_data': {'data': 'WFla', 'mime_type': 'audio/wav'}}]}}]})
+    assert audio2 == 'WFla' and t2 == 'Paroles'
+    assert M._extraire({'bruit': 1}) == ('', '', '')
+
+    # (3) Un refus de sécurité arrive en 200 sans audio : ça se dit
+    refus = M._raison_refus({'candidates': [{'finishReason': 'SAFETY'}]})
+    assert 'refusée' in refus and 'SAFETY' in refus
+    assert 'bloquée' in M._raison_refus({'promptFeedback': {'blockReason': 'OTHER'}})
+    assert M._raison_refus({'candidates': [{'finishReason': 'STOP'}]}) == ''
+
+    # (4) Le décodage ne lève jamais
+    assert M.decoder('QUJD') == b'ABC'
+    assert M.decoder('pas du base64 !!') == b''
+    assert M.decoder('data:audio/mpeg;base64,QUJD') == b'ABC'
+
+    # (5) Le format demandé est corrigé, jamais imposé en douce
+    assert 'wav' in M.MODELES['pro']['formats'] and 'wav' not in M.MODELES['clip']['formats']
+
+    # (6) Chemin complet, confinement du nom de fichier, et audio hors du dépôt
+    assert '/api/musique/generer' in mn and '/api/musique/fichier/' in mn
+    assert '_musique_nom_sur' in mn and 'os.path.basename' in mn, \
+        'un nom venu du client ne traverse jamais un dossier'
+    assert 'data/musiques/' in gitignore, 'les fichiers audio n’ont rien à faire dans git'
+
+    # (7) Interface : bouton conditionné à la clé, paroles copiables, lecteur étiqueté
+    assert 'id="toggle-musique"' in html and 'hidden>' in html
+    assert "_btnMus.hidden = !(keys && keys.gemini)" in app, \
+        'un bouton qui mène à un refus n’a rien à faire dans la barre'
+    assert 'zone.readOnly = true' in app and "createElement('textarea')" in app, \
+        'les paroles doivent être sélectionnables et copiables'
+    assert "audio.setAttribute('aria-label'" in app, 'un lecteur audio sans nom est muet'
+    assert "'u': 'toggle-musique'" in app and "'toggle-musique': 'Alt+Shift+U'" in app
+    ok("musique : Lyria ouvert par la clé Gemini, paroles séparées et copiables, échecs muets")
+
+
+def test_imagerie_reglee():
+    """« Gemini (Imagen) » ne réglait rien : ni format, ni résolution, ni modèle.
+
+    La correction évidente — ajouter le vrai Imagen — aurait été une faute :
+    Imagen cesse de répondre le 17 août 2026. Les réglages passent donc par
+    l'API Interactions. Trois exigences : ne rien envoyer chez le prestataire
+    qui y reste (store=false), corriger une résolution impossible sans mentir
+    dessus, et décrire l'image produite.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    src = open(os.path.join(racine, 'modules', 'imagerie.py'), encoding='utf-8').read()
+    import modules.imagerie as I
+
+    # (1) Sans clé, on le DIT — et on n'appelle personne
+    o = I.options({})
+    assert not o['cle_presente'] and 'Aucune clé Gemini' in o['note']
+    assert I.options({'gemini': 'k'})['cle_presente']
+    assert 'erreur' in asyncio.run(I.generer('un chat', api_keys={}))
+    assert 'erreur' in asyncio.run(I.generer('', api_keys={'gemini': 'k'}))
+
+    # (2) RGPD : rien ne reste chez Google. Même choix que l'agent Vibe.
+    assert "'store': False" in src, "l'API Interactions conserve TOUT par défaut"
+
+    # (3) On n'a PAS branché Imagen, et le code dit pourquoi
+    assert 'imagen-4' not in src and 'imagen-3' not in src, 'API condamnée : pas de code neuf dessus'
+    assert '17 août 2026' in src and '17 août 2026' in mn, \
+        'la raison du choix doit rester lisible là où on serait tenté de revenir dessus'
+    assert 'imagen-' not in mn and ':predict"' not in mn, \
+        "aucun modèle ni endpoint Imagen ne doit être appelé"
+
+    # (4) Lecture de la réponse : l'ordre des blocs n'est PAS garanti
+    rep = {'steps': [
+        {'type': 'model_output', 'content': [
+            {'type': 'text', 'text': 'Voilà.'},
+            {'type': 'image', 'data': 'QUJD', 'mime_type': 'image/png'}]}]}
+    images, texte = I._extraire(rep)
+    assert images and images[0]['b64'] == 'QUJD' and texte == 'Voilà.'
+    # …et dans l'autre sens, avec un raccourci de commodité
+    im2, _ = I._extraire({'output_image': {'data': 'WFla', 'mime_type': 'image/jpeg'}})
+    assert im2[0]['b64'] == 'WFla' and im2[0]['mime'] == 'image/jpeg'
+    assert I._extraire({'bruit': 1}) == ([], '')
+    assert I._extraire('rien') == ([], '')
+
+    # (5) Une résolution impossible est corrigée, mais la réponse porte la VRAIE
+    vraie = I.generer
+    capture = {}
+
+    async def _faux_post(prompt, modele='flash', ratio='1:1', taille='1K',
+                         api_keys=None, images_ref=None):
+        capture['ratio'], capture['taille'] = ratio, taille
+        return {'images': [{'b64': 'QUJD', 'mime': 'image/png'}], 'ratio': ratio,
+                'taille': taille}
+    assert 'lite' in I.MODELES and I.MODELES['lite']['tailles'] == ('1K',), \
+        'le modèle économique ne fait que du 1K'
+    assert '4K' in I.MODELES['flash']['tailles']
+    assert '21:9' in I.RATIOS and '9:16' in I.RATIOS
+
+    # (6) L'image générée est DÉCRITE : sans alt, une image est un fichier muet
+    assert '_vibe_describe_image' in mn and 'alt' in mn
+    assert 'id="studio-image-decrire"' in html
+    assert "vign.alt = im.alt ||" in app, 'jamais d’alt inventé quand la description manque'
+    assert 'zone.readOnly = true' in app, 'la description doit être copiable'
+    assert "'i': 'toggle-studio'" in app and "_btnStudio.hidden = !(keys && keys.gemini)" in app
+    ok("imagerie : format, résolution et modèle réglables, rien conservé chez Google, image décrite")
+
+
+def test_video_veo():
+    """Veo est une opération LONGUE : onze secondes à six minutes.
+
+    Trois exigences, chacune tirée d'une contrainte réelle : corriger AVANT de
+    partir un couple durée/résolution que Google refusera (sinon c'est six
+    minutes d'attente pour rien), rapatrier la vidéo tout de suite (Google
+    l'efface au bout de deux jours), et ne pas confondre un hoquet réseau avec
+    un échec de génération.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    src = open(os.path.join(racine, 'modules', 'video.py'), encoding='utf-8').read()
+    gitignore = open(os.path.join(racine, '.gitignore'), encoding='utf-8').read()
+    import modules.video as V
+
+    # (1) Sans clé, on le DIT
+    o = V.options({})
+    assert not o['cle_presente'] and 'deux jours' in o['avertissement']
+    assert 'erreur' in asyncio.run(V.lancer('une côte', api_keys={}))
+    assert 'erreur' in asyncio.run(V.lancer('', api_keys={'gemini': 'k'}))
+
+    # (2) Règles de Google — fonction PURE, testable sans réseau
+    assert V.regles('8', '720p') == ('8', '720p', '')
+    d, r, note = V.regles('4', '1080p')
+    assert (d, r) == ('8', '1080p') and 'Google' in note, \
+        'corriger avant de partir, mais jamais en silence'
+    d, r, note = V.regles('6', '4k')
+    assert (d, r) == ('8', '4k') and note
+    assert V.regles('9', 'zzz')[:2] == ('8', '720p'), 'valeurs absurdes ramenées au défaut'
+
+    # (3) Europe : Veo 3.x n'accepte que allow_adult, posé d'avance
+    assert "'personGeneration': 'allow_adult'" in src, \
+        'sinon on découvre le refus après six minutes d’attente'
+
+    # (4) Lecture de l'opération terminée, formes tolérées
+    fini = {'done': True, 'response': {'generateVideoResponse': {'generatedSamples': [
+        {'video': {'uri': 'https://exemple/veo.mp4'}}]}}}
+    assert V._uri_video(fini) == 'https://exemple/veo.mp4'
+    assert V._uri_video({'response': {'generatedVideos': [{'video': {'url': 'http://u'}}]}}) == 'http://u'
+    assert V._uri_video({'done': True, 'response': {}}) == ''
+    assert V._uri_video(None) == ''
+
+    # (5) Un hoquet réseau n'est PAS un échec : l'opération continue chez Google
+    assert "'fait': False, 'message'" in src
+    assert 'La génération a échoué' in src, 'une vraie erreur, elle, est dite'
+
+    # (6) Chemin complet : lancement, suivi, rapatriement, reprise après rechargement
+    assert '/api/video/lancer' in mn and '/api/video/etat' in mn
+    assert '/api/video/en-cours' in mn, 'une génération de six minutes survit à un F5'
+    assert 'telecharger' in mn, 'rapatrier tout de suite : Google efface à deux jours'
+    assert '_media_nom_sur' in mn and 'os.path.basename' in mn
+    assert 'data/videos/' in gitignore
+
+    # (7) Interface : annonces espacées, lecteur étiqueté, réglages nommés
+    assert '_ST_INTERVALLE_MS = 30000' in app, \
+        'une annonce toutes les 5 secondes couvrirait tout le reste à la voix'
+    assert "lecteur.setAttribute('aria-label'" in app, 'un lecteur vidéo sans nom est muet'
+    assert '_stReprendre' in app
+    assert 'id="studio-video-resolution"' in html and 'aria-live="polite"' in html
+    ok("vidéo : règles de Google appliquées avant l'attente, rapatriement immédiat, suivi qui survit au rechargement")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -2072,6 +2437,9 @@ if __name__ == '__main__':
                test_audit_structurel,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
-               test_script_blocage_securite_pas_de_retry]:
+               test_script_blocage_securite_pas_de_retry,
+               test_veille_se_signale, test_banc_essai_reordonnanceur,
+               test_musique_lyria,
+               test_imagerie_reglee, test_video_veo]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
