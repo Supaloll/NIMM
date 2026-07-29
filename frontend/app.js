@@ -4645,6 +4645,12 @@ function _majVisibiliteParCle(keys) {
 function _applyProviderConstraints(keys) {
     // Bouton Vibe visible uniquement si une clé Mistral est enregistrée.
     _refreshVibeButtonVisibility(keys);
+    // Même règle pour la musique : la clé Gemini ouvre Lyria. Un bouton qui
+    // mène à un refus n'a rien à faire dans la barre d'outils.
+    var _btnMus = document.getElementById('toggle-musique');
+    if (_btnMus) _btnMus.hidden = !(keys && keys.gemini);
+    var _btnStudio = document.getElementById('toggle-studio');
+    if (_btnStudio) _btnStudio.hidden = !(keys && keys.gemini);
     _majVisibiliteParCle(keys);
     // 1. Désactiver les options sans clé
     document.querySelectorAll('.routing-select option[data-needs-key]').forEach(opt => {
@@ -11525,7 +11531,9 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
         'p': 'toggle-settings',   // Paramètres
         'o': 'toggle-prompt-library',      // Promptothèque
         'r': 'toggle-search-conversations', // Recherches
-        't': 'toggle-coanimm'              // agenT CoaNIMM
+        't': 'toggle-coanimm',             // agenT CoaNIMM
+        'u': 'toggle-musique',             // mUsique (Lyria)
+        'i': 'toggle-studio'               // studIo image et vidéo
     };
     var LABELS = {
         'toggle-history': 'Alt+Shift+F', 'toggle-agenda': 'Alt+Shift+A',
@@ -11533,7 +11541,9 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
         'toggle-enrich': 'Alt+Shift+E', 'toggle-settings': 'Alt+Shift+P',
         'toggle-prompt-library': 'Alt+Shift+O',
         'toggle-search-conversations': 'Alt+Shift+R',
-        'toggle-coanimm': 'Alt+Shift+T'
+        'toggle-coanimm': 'Alt+Shift+T',
+        'toggle-musique': 'Alt+Shift+U',
+        'toggle-studio': 'Alt+Shift+I'
     };
     // Annonce les raccourcis aux lecteurs d'écran.
     Object.keys(LABELS).forEach(function (id) {
@@ -12059,6 +12069,71 @@ init();
     document.getElementById('veille-details')?.addEventListener('toggle', function () {
         if (this.open) _veilleCharger(true);
     });
+
+    // ── Annonce des relevés faits en arrière-plan ───────────────────────────
+    // Le travailleur de fond relève à échéance, panneau fermé, NIMM parfois
+    // ouvert depuis des heures. Sans cette boucle, le résultat n'existait que
+    // dans la console du serveur : invisible à l'afficheur braille. Le serveur
+    // CONSOMME les notifications (POST), donc chaque relevé est annoncé une
+    // fois et une seule — pas de radotage toutes les cinq minutes.
+    var _VEILLE_NOTIF_MS = 300000;
+
+    function _veilleAnnoncer(txt) {
+        // Une seule annonce groupée : _coanimmAnnounce remet la zone à vide
+        // avant d'écrire, donc deux appels d'affilée s'écraseraient.
+        if (typeof _coanimmAnnounce === 'function') { _coanimmAnnounce(txt); return; }
+        var el = document.getElementById('coanimm-status-announce');
+        if (el) { el.textContent = ''; setTimeout(function () { el.textContent = txt; }, 200); }
+    }
+
+    function _veilleRendreNouveautes(notifs) {
+        // Trace consultable et COPIABLE : l'annonce vocale passe, le texte reste.
+        var out = document.getElementById('veille-out');
+        if (!out) return;
+        notifs.forEach(function (n) {
+            if (!(n.nouveautes || []).length) return;
+            var bloc = document.createElement('details');
+            bloc.open = true;
+            bloc.style.cssText = 'margin-top:8px;border:1px solid var(--border);border-radius:4px;padding:4px 8px;';
+            var sum = document.createElement('summary');
+            sum.textContent = 'Relevé automatique — ' + (n.libelle || 'veille')
+                + ' (' + (n.nouveautes || []).length + ' nouveauté'
+                + ((n.nouveautes || []).length > 1 ? 's' : '') + ')';
+            sum.style.cursor = 'pointer';
+            bloc.appendChild(sum);
+            var ul = document.createElement('ul');
+            ul.style.cssText = 'margin:6px 0 0;padding-left:1.2em;font-size:0.85rem;';
+            (n.nouveautes || []).forEach(function (a) {
+                var li = document.createElement('li');
+                li.style.marginBottom = '4px';
+                var lien = document.createElement('a');
+                lien.href = a.url; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
+                lien.textContent = a.titre || a.url;
+                li.appendChild(lien);
+                if (a.date) li.appendChild(document.createTextNode(' — ' + a.date));
+                ul.appendChild(li);
+            });
+            bloc.appendChild(ul);
+            out.insertBefore(bloc, out.firstChild);
+        });
+    }
+
+    async function _veillePollNotifications() {
+        try {
+            var r = await fetch('/api/veille/notifications', { method: 'POST' });
+            if (!r.ok) return;
+            var d = await r.json();
+            var notifs = d.notifications || [];
+            if (!notifs.length) return;
+            _veilleAnnoncer(notifs.map(function (n) { return n.message || ''; })
+                                  .filter(Boolean).join(' '));
+            _veilleRendreNouveautes(notifs);
+            _veilleCharger(false).catch(function () {});
+        } catch (e) { /* silencieux : un serveur muet ne doit pas faire de bruit */ }
+    }
+
+    setInterval(_veillePollNotifications, _VEILLE_NOTIF_MS);
+    setTimeout(_veillePollNotifications, 8000);
 })();
 
 // ══════════════════════════════════════════
@@ -12115,6 +12190,121 @@ init();
 
     document.getElementById('rerank-details')?.addEventListener('toggle', function () {
         if (this.open) _rerankCharger(true);
+    });
+
+    // ── Banc d'essai : la même question dans chaque moteur ──────────────────
+    // Rendu en TABLEAU par moteur plutôt qu'en prose : à l'afficheur braille,
+    // un classement se parcourt ligne à ligne, il ne s'écoute pas en paragraphe.
+    var _bancDernierTexte = '';
+
+    function _bStatus(msg) {
+        var el = document.getElementById('banc-status');
+        if (el) el.textContent = msg;
+    }
+
+    function _bancRendre(d) {
+        var out = document.getElementById('banc-out');
+        if (!out) return;
+        out.innerHTML = '';
+
+        var chapeau = document.createElement('p');
+        chapeau.style.cssText = 'font-size:0.85rem;margin:4px 0 10px;';
+        chapeau.textContent = d.nb_passages + ' passage'
+            + (d.nb_passages > 1 ? 's' : '') + ' candidat'
+            + (d.nb_passages > 1 ? 's' : '') + ' — seuil de pertinence '
+            + Number(d.seuil).toFixed(2) + '.';
+        out.appendChild(chapeau);
+
+        (d.moteurs || []).forEach(function (m) {
+            var bloc = document.createElement('details');
+            bloc.open = !!(m.ok && (m.classement || []).length);
+            bloc.style.cssText = 'margin-top:8px;border:1px solid var(--border);border-radius:4px;padding:6px 10px;';
+            var sum = document.createElement('summary');
+            sum.style.cssText = 'cursor:pointer;font-weight:600;';
+            sum.textContent = m.libelle + ' — '
+                + (m.ok ? Number(m.secondes).toFixed(2) + ' s' : 'indisponible');
+            bloc.appendChild(sum);
+
+            var note = document.createElement('p');
+            note.style.cssText = 'font-size:0.8rem;color:var(--text-muted);margin:6px 0;';
+            note.textContent = m.note || '';
+            bloc.appendChild(note);
+
+            if ((m.classement || []).length) {
+                var tab = document.createElement('table');
+                tab.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.82rem;';
+                var cap = document.createElement('caption');
+                cap.className = 'sr-only';
+                cap.textContent = 'Classement des passages par ' + m.libelle;
+                tab.appendChild(cap);
+                var thead = document.createElement('thead');
+                var trh = document.createElement('tr');
+                ['Rang', 'Score', 'Servi', 'Document'].forEach(function (t) {
+                    var th = document.createElement('th');
+                    th.scope = 'col'; th.textContent = t;
+                    th.style.cssText = 'text-align:left;padding:2px 6px;border-bottom:1px solid var(--border);';
+                    trh.appendChild(th);
+                });
+                thead.appendChild(trh); tab.appendChild(thead);
+                var tbody = document.createElement('tbody');
+                (m.classement || []).forEach(function (l) {
+                    var tr = document.createElement('tr');
+                    var cells = [String(l.rang), String(l.score),
+                                 l.retenu ? 'oui' : 'non',
+                                 l.titre + (l.source ? ' — ' + l.source : '')];
+                    cells.forEach(function (v, i) {
+                        var td = document.createElement(i === 0 ? 'th' : 'td');
+                        if (i === 0) td.scope = 'row';
+                        td.textContent = v;
+                        td.style.cssText = 'text-align:left;padding:2px 6px;border-bottom:1px solid var(--border);';
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+                tab.appendChild(tbody);
+                bloc.appendChild(tab);
+            }
+            out.appendChild(bloc);
+        });
+
+        _bancDernierTexte = d.texte || '';
+        var zone = document.getElementById('banc-texte');
+        var env = document.getElementById('banc-texte-details');
+        if (zone) zone.value = _bancDernierTexte;
+        if (env) env.hidden = !_bancDernierTexte;
+    }
+
+    document.getElementById('banc-run-btn')?.addEventListener('click', async function () {
+        var q = (document.getElementById('banc-question')?.value || '').trim();
+        if (!q) { _bStatus('Écris d\'abord une question à mesurer.'); return; }
+        var k = parseInt(document.getElementById('banc-k')?.value || '10', 10);
+        _bStatus('Banc en cours… chaque moteur est interrogé à son tour, cela peut prendre une minute.');
+        try {
+            var r = await fetch('/api/rag/banc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: q, k: isNaN(k) ? 10 : k, top_n: 5 })
+            });
+            var d = await r.json();
+            if (!r.ok) { _bStatus(d.detail || 'Le banc n\'a pas pu aboutir.'); return; }
+            _bancRendre(d);
+            var ok = (d.moteurs || []).filter(function (m) { return m.ok; }).length;
+            _bStatus('Banc terminé : ' + ok + ' moteur' + (ok > 1 ? 's ont' : ' a')
+                + ' répondu sur ' + (d.moteurs || []).length + '. Résultats ci-dessous.');
+        } catch (e) { _bStatus('Erreur : ' + e.message); }
+    });
+
+    document.getElementById('banc-copy-btn')?.addEventListener('click', async function () {
+        if (!_bancDernierTexte) { _bStatus('Lance d\'abord le banc : il n\'y a rien à copier.'); return; }
+        try {
+            await navigator.clipboard.writeText(_bancDernierTexte);
+            _bStatus('Rapport copié dans le presse-papiers.');
+        } catch (e) {
+            // Repli : sélectionner le texte, l'utilisateur fait Ctrl+C lui-même.
+            var zone = document.getElementById('banc-texte');
+            if (zone) { zone.focus(); zone.select(); _bStatus('Rapport sélectionné : fais Contrôle C pour le copier.'); }
+            else _bStatus('Copie impossible : ' + e.message);
+        }
     });
 })();
 
@@ -12498,5 +12688,515 @@ init();
             _batchSetStatus('Job annulé.');
             _batchSetJobId(null);
         } catch(e) { _batchSetStatus('Erreur : ' + e.message); }
+    });
+})();
+// ══════════════════════════════════════════
+// MUSIQUE (Lyria 3) — génération et bibliothèque
+// ══════════════════════════════════════════
+//
+// Deux exigences ont dessiné ce panneau :
+//   1. le résultat d'une génération musicale n'est pas QUE du son — le modèle
+//      rend aussi les paroles et la structure. C'est la seule partie lisible au
+//      braille : elle est affichée dans une zone de texte copiable, pas noyée ;
+//   2. une génération peut durer plusieurs minutes. Le bouton se désarme et
+//      l'attente est annoncée, sinon rien ne distingue « ça travaille » de
+//      « c'est cassé ».
+(function () {
+    var _musModeles = [];
+
+    function _mStatus(msg) {
+        var el = document.getElementById('musique-status');
+        if (el) el.textContent = msg;
+    }
+
+    function _musMajFormats() {
+        var sel = document.getElementById('musique-modele');
+        var fmt = document.getElementById('musique-format');
+        var aide = document.getElementById('musique-modele-aide');
+        var m = _musModeles.filter(function (x) { return x.nom === (sel && sel.value); })[0];
+        if (!m || !fmt) return;
+        if (aide) aide.textContent = m.description || '';
+        var formats = m.formats || ['mp3'];
+        fmt.innerHTML = '';
+        formats.forEach(function (f) {
+            var o = document.createElement('option');
+            o.value = f; o.textContent = f.toUpperCase();
+            fmt.appendChild(o);
+        });
+        fmt.disabled = formats.length < 2;
+    }
+
+    async function _musChargerModeles() {
+        try {
+            var r = await fetch('/api/musique/modeles');
+            var d = await r.json();
+            _musModeles = d.modeles || [];
+            var note = document.getElementById('musique-note');
+            if (note) note.textContent = d.note || '';
+            var sel = document.getElementById('musique-modele');
+            if (sel) {
+                sel.innerHTML = '';
+                _musModeles.forEach(function (m) {
+                    var o = document.createElement('option');
+                    o.value = m.nom; o.textContent = m.libelle;
+                    sel.appendChild(o);
+                });
+            }
+            _musMajFormats();
+            var btn = document.getElementById('musique-gen-btn');
+            if (btn) btn.disabled = !d.cle_presente;
+        } catch (e) { _mStatus('Modèles indisponibles : ' + e.message); }
+    }
+
+    function _musCarte(m) {
+        var bloc = document.createElement('details');
+        bloc.style.cssText = 'margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:6px 10px;';
+        var sum = document.createElement('summary');
+        sum.style.cssText = 'cursor:pointer;font-weight:600;';
+        sum.textContent = (m.prompt || m.fichier || 'Morceau').slice(0, 90)
+            + (m.cree_le ? ' — ' + m.cree_le.replace('T', ' à ').slice(0, 16) : '');
+        bloc.appendChild(sum);
+
+        var audio = document.createElement('audio');
+        audio.controls = true;
+        audio.preload = 'none';
+        audio.src = m.url;
+        audio.style.cssText = 'width:100%;margin-top:8px;';
+        audio.setAttribute('aria-label', 'Lecteur : ' + (m.prompt || m.fichier || 'morceau'));
+        bloc.appendChild(audio);
+
+        if (m.paroles) {
+            var lab = document.createElement('label');
+            lab.style.cssText = 'display:block;font-size:0.8rem;margin-top:8px;';
+            var idz = 'musique-paroles-' + (m.fichier || '').replace(/[^a-z0-9]/gi, '');
+            lab.setAttribute('for', idz);
+            lab.textContent = 'Paroles et structure';
+            var zone = document.createElement('textarea');
+            zone.id = idz;
+            zone.readOnly = true;
+            zone.rows = 8;
+            zone.value = m.paroles;
+            zone.style.cssText = 'width:100%;box-sizing:border-box;font-size:0.82rem;margin-top:4px;';
+            bloc.appendChild(lab);
+            bloc.appendChild(zone);
+        }
+
+        var barre = document.createElement('div');
+        barre.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
+        var dl = document.createElement('a');
+        dl.href = m.url;
+        dl.download = m.fichier || 'morceau';
+        dl.className = 'btn-secondary';
+        dl.textContent = 'Télécharger';
+        dl.setAttribute('aria-label', 'Télécharger le fichier ' + (m.fichier || ''));
+        barre.appendChild(dl);
+        var sup = document.createElement('button');
+        sup.className = 'btn-secondary';
+        sup.textContent = 'Supprimer';
+        sup.setAttribute('aria-label', 'Supprimer ce morceau');
+        sup.addEventListener('click', async function () {
+            if (!confirm('Supprimer ce morceau ?')) return;
+            try {
+                await fetch('/api/musique/' + encodeURIComponent(m.fichier), { method: 'DELETE' });
+                _mStatus('Morceau supprimé.');
+                _musChargerBiblio();
+            } catch (e) { _mStatus('Erreur : ' + e.message); }
+        });
+        barre.appendChild(sup);
+        bloc.appendChild(barre);
+        return bloc;
+    }
+
+    async function _musChargerBiblio() {
+        var box = document.getElementById('musique-biblio');
+        if (!box) return;
+        try {
+            var r = await fetch('/api/musique');
+            var d = await r.json();
+            box.innerHTML = '';
+            var liste = d.musiques || [];
+            if (!liste.length) {
+                var p = document.createElement('p');
+                p.style.cssText = 'color:var(--text-muted);font-size:0.85rem;';
+                p.textContent = 'Aucun morceau pour le moment.';
+                box.appendChild(p);
+                return;
+            }
+            var titre = document.createElement('h4');
+            titre.textContent = 'Bibliothèque — ' + liste.length + ' morceau'
+                + (liste.length > 1 ? 'x' : '');
+            titre.style.cssText = 'font-size:0.9rem;margin:10px 0 4px;';
+            box.appendChild(titre);
+            liste.forEach(function (m) { box.appendChild(_musCarte(m)); });
+        } catch (e) { _mStatus('Bibliothèque indisponible : ' + e.message); }
+    }
+
+    document.getElementById('musique-modele')?.addEventListener('change', _musMajFormats);
+
+    document.getElementById('musique-gen-btn')?.addEventListener('click', async function () {
+        var prompt = (document.getElementById('musique-prompt')?.value || '').trim();
+        if (!prompt) { _mStatus('Décris d\'abord la musique que tu veux.'); return; }
+        var modele = document.getElementById('musique-modele')?.value || 'clip';
+        var format = document.getElementById('musique-format')?.value || 'mp3';
+        var btn = this;
+        btn.disabled = true;
+        _mStatus('Génération en cours. Un clip demande environ une minute, un '
+            + 'morceau complet plusieurs minutes — laisse la fenêtre ouverte.');
+        try {
+            var r = await fetch('/api/musique/generer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: prompt, modele: modele, format: format })
+            });
+            var d = await r.json();
+            if (!r.ok) { _mStatus(d.detail || 'La génération a échoué.'); return; }
+            _mStatus('Morceau prêt en ' + d.secondes + ' secondes'
+                + (d.paroles ? ', avec paroles.' : '.')
+                + ' Il est en tête de la bibliothèque ci-dessous.');
+            await _musChargerBiblio();
+        } catch (e) { _mStatus('Erreur : ' + e.message); }
+        finally { btn.disabled = false; }
+    });
+
+    document.getElementById('musique-refresh-btn')?.addEventListener('click', function () {
+        _mStatus('Rafraîchissement…');
+        _musChargerBiblio().then(function () { _mStatus('Bibliothèque à jour.'); });
+    });
+
+    document.getElementById('toggle-musique')?.addEventListener('click', function () {
+        document.getElementById('musique-modal')?.classList.remove('hidden');
+        _musChargerModeles();
+        _musChargerBiblio();
+        setTimeout(function () { document.getElementById('musique-prompt')?.focus(); }, 60);
+    });
+    document.getElementById('musique-close')?.addEventListener('click', function () {
+        document.getElementById('musique-modal')?.classList.add('hidden');
+    });
+    document.getElementById('musique-modal')?.addEventListener('click', function (e) {
+        if (e.target === this) this.classList.add('hidden');
+    });
+})();
+
+// ══════════════════════════════════════════
+// STUDIO — image réglée (Nano Banana) et vidéo (Veo)
+// ══════════════════════════════════════════
+//
+// Trois choix de conception, tous dictés par l'usage au lecteur d'écran :
+//   1. l'image générée est TOUJOURS accompagnée d'une description (alt WCAG)
+//      quand la case est cochée : une image sans texte alternatif est un
+//      fichier muet, et c'est le texte qui compte ici, pas la vignette ;
+//   2. la vidéo dure de onze secondes à six minutes. Le suivi annonce
+//      l'avancement à intervalle ESPACÉ (30 s) : une annonce toutes les cinq
+//      secondes couvrirait tout le reste à la synthèse vocale ;
+//   3. une génération lancée survit à un rechargement de page — l'opération
+//      vit chez Google et NIMM garde sa trace sur disque, donc on la reprend.
+(function () {
+    var _stImageModeles = [], _stVideoModeles = [];
+    var _stVideoTimer = null, _stVideoDebut = 0;
+    var _ST_INTERVALLE_MS = 30000;
+
+    function _stImgStatus(m) {
+        var e = document.getElementById('studio-image-status');
+        if (e) e.textContent = m;
+    }
+    function _stVidStatus(m) {
+        var e = document.getElementById('studio-video-status');
+        if (e) e.textContent = m;
+    }
+    function _stRemplir(id, valeurs, libelle) {
+        var sel = document.getElementById(id);
+        if (!sel) return;
+        sel.innerHTML = '';
+        valeurs.forEach(function (v) {
+            var o = document.createElement('option');
+            if (typeof v === 'string') { o.value = v; o.textContent = v; }
+            else { o.value = v.valeur || v.nom; o.textContent = libelle ? libelle(v) : (v.libelle || v.valeur); }
+            sel.appendChild(o);
+        });
+    }
+
+    // ── Image ───────────────────────────────────────────────────────────────
+    function _stImgMajTailles() {
+        var sel = document.getElementById('studio-image-modele');
+        var m = _stImageModeles.filter(function (x) { return x.nom === (sel && sel.value); })[0];
+        if (!m) return;
+        var aide = document.getElementById('studio-image-aide');
+        if (aide) aide.textContent = m.description || '';
+        _stRemplir('studio-image-taille', m.tailles || ['1K']);
+    }
+
+    async function _stChargerImage() {
+        try {
+            var d = await fetch('/api/imagerie/options').then(function (r) { return r.json(); });
+            _stImageModeles = d.modeles || [];
+            var note = document.getElementById('studio-image-note');
+            if (note) note.textContent = d.note || '';
+            _stRemplir('studio-image-modele', _stImageModeles, function (m) { return m.libelle; });
+            _stRemplir('studio-image-ratio', d.ratios || [], function (r) { return r.libelle; });
+            _stImgMajTailles();
+            var btn = document.getElementById('studio-image-btn');
+            if (btn) btn.disabled = !d.cle_presente;
+        } catch (e) { _stImgStatus('Réglages indisponibles : ' + e.message); }
+    }
+
+    document.getElementById('studio-image-modele')?.addEventListener('change', _stImgMajTailles);
+
+    document.getElementById('studio-image-btn')?.addEventListener('click', async function () {
+        var prompt = (document.getElementById('studio-image-prompt')?.value || '').trim();
+        if (!prompt) { _stImgStatus('Décris d\'abord l\'image que tu veux.'); return; }
+        var btn = this;
+        btn.disabled = true;
+        _stImgStatus('Génération en cours…');
+        try {
+            var r = await fetch('/api/imagerie/generer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    prompt: prompt,
+                    modele: document.getElementById('studio-image-modele')?.value || 'flash',
+                    ratio: document.getElementById('studio-image-ratio')?.value || '1:1',
+                    taille: document.getElementById('studio-image-taille')?.value || '1K',
+                    decrire: !!document.getElementById('studio-image-decrire')?.checked
+                })
+            });
+            var d = await r.json();
+            if (!r.ok) { _stImgStatus(d.detail || 'La génération a échoué.'); return; }
+
+            var out = document.getElementById('studio-image-out');
+            if (out) {
+                out.innerHTML = '';
+                (d.images || []).forEach(function (im) {
+                    var bloc = document.createElement('div');
+                    bloc.style.cssText = 'margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;';
+                    var vign = document.createElement('img');
+                    vign.src = im.url;
+                    // L'alt EST le contenu ici : sans description, on ne ment pas
+                    // avec un alt inventé, on dit que la description manque.
+                    vign.alt = im.alt || 'Image générée, sans description disponible';
+                    vign.style.cssText = 'max-width:100%;height:auto;border-radius:4px;';
+                    bloc.appendChild(vign);
+
+                    var lab = document.createElement('label');
+                    var idz = 'studio-alt-' + (im.fichier || '').replace(/[^a-z0-9]/gi, '');
+                    lab.setAttribute('for', idz);
+                    lab.textContent = 'Description de l\'image (texte alternatif)';
+                    lab.style.cssText = 'display:block;font-size:0.8rem;margin-top:8px;';
+                    var zone = document.createElement('textarea');
+                    zone.id = idz; zone.rows = 4; zone.readOnly = true;
+                    zone.value = im.alt || '(aucune description — la case était décochée, '
+                        + 'ou le modèle de vision n\'a pas répondu)';
+                    zone.style.cssText = 'width:100%;box-sizing:border-box;font-size:0.82rem;margin-top:4px;';
+                    bloc.appendChild(lab); bloc.appendChild(zone);
+
+                    var det = document.createElement('p');
+                    det.style.cssText = 'font-size:0.78rem;color:var(--text-muted);margin:6px 0 0;';
+                    det.textContent = 'Format ' + (im.ratio || '?') + ', résolution '
+                        + (im.taille || '?') + ', modèle ' + (im.modele || '?') + '.';
+                    bloc.appendChild(det);
+
+                    var dl = document.createElement('a');
+                    dl.href = im.url; dl.download = im.fichier || 'image.png';
+                    dl.className = 'btn-secondary';
+                    dl.textContent = 'Télécharger';
+                    dl.style.cssText = 'display:inline-block;margin-top:8px;';
+                    bloc.appendChild(dl);
+                    out.appendChild(bloc);
+                });
+            }
+            var avecAlt = (d.images || []).filter(function (i) { return i.alt; }).length;
+            _stImgStatus('Image prête en ' + d.secondes + ' secondes'
+                + (avecAlt ? ', avec sa description ci-dessous.' : '.')
+                + ' Elle est aussi rangée dans la galerie.');
+        } catch (e) { _stImgStatus('Erreur : ' + e.message); }
+        finally { btn.disabled = false; }
+    });
+
+    // ── Vidéo ───────────────────────────────────────────────────────────────
+    function _stVidMajResolutions() {
+        var sel = document.getElementById('studio-video-modele');
+        var m = _stVideoModeles.filter(function (x) { return x.nom === (sel && sel.value); })[0];
+        if (!m) return;
+        var aide = document.getElementById('studio-video-aide');
+        if (aide) aide.textContent = m.description || '';
+        _stRemplir('studio-video-resolution', m.resolutions || ['720p']);
+    }
+
+    async function _stChargerVideo() {
+        try {
+            var d = await fetch('/api/video/options').then(function (r) { return r.json(); });
+            _stVideoModeles = d.modeles || [];
+            var note = document.getElementById('studio-video-note');
+            if (note) note.textContent = (d.note || '') + ' ' + (d.avertissement || '');
+            _stRemplir('studio-video-modele', _stVideoModeles, function (m) { return m.libelle; });
+            _stRemplir('studio-video-ratio', d.ratios || [], function (r) { return r.libelle; });
+            _stRemplir('studio-video-duree', d.durees || ['8']);
+            _stVidMajResolutions();
+            var btn = document.getElementById('studio-video-btn');
+            if (btn) btn.disabled = !d.cle_presente;
+        } catch (e) { _stVidStatus('Réglages indisponibles : ' + e.message); }
+    }
+
+    document.getElementById('studio-video-modele')?.addEventListener('change', _stVidMajResolutions);
+
+    function _stArreterSuivi() {
+        if (_stVideoTimer) { clearInterval(_stVideoTimer); _stVideoTimer = null; }
+        var btn = document.getElementById('studio-video-btn');
+        if (btn) btn.disabled = false;
+    }
+
+    function _stSuivre(operation) {
+        _stArreterSuivi();
+        _stVideoDebut = Date.now();
+        var btn = document.getElementById('studio-video-btn');
+        if (btn) btn.disabled = true;
+
+        async function tour() {
+            try {
+                var r = await fetch('/api/video/etat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ operation: operation })
+                });
+                var d = await r.json();
+                if (!r.ok) { _stVidStatus(d.detail || 'La génération a échoué.'); _stArreterSuivi(); return; }
+                if (!d.fait) {
+                    var min = Math.round((Date.now() - _stVideoDebut) / 60000);
+                    _stVidStatus('Génération en cours' + (min >= 1 ? ' depuis ' + min + ' minute'
+                        + (min > 1 ? 's' : '') : '') + '. Tu peux fermer cette fenêtre : '
+                        + 'la génération continue et se retrouvera dans la bibliothèque.');
+                    return;
+                }
+                _stArreterSuivi();
+                if (d.erreur) { _stVidStatus(d.erreur); return; }
+                _stVidStatus('Vidéo prête, téléchargée sur ta machine. '
+                    + 'Elle est en tête de la bibliothèque ci-dessous.');
+                _stChargerBiblioVideo();
+            } catch (e) {
+                // Le réseau peut hoqueter : la génération, elle, continue chez
+                // Google. On ne coupe pas le suivi pour autant.
+                _stVidStatus('État indisponible pour l\'instant, nouvelle tentative dans 30 secondes.');
+            }
+        }
+        _stVideoTimer = setInterval(tour, _ST_INTERVALLE_MS);
+        setTimeout(tour, 8000);
+    }
+
+    document.getElementById('studio-video-btn')?.addEventListener('click', async function () {
+        var prompt = (document.getElementById('studio-video-prompt')?.value || '').trim();
+        if (!prompt) { _stVidStatus('Décris d\'abord la vidéo que tu veux.'); return; }
+        _stVidStatus('Lancement…');
+        try {
+            var r = await fetch('/api/video/lancer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    prompt: prompt,
+                    modele: document.getElementById('studio-video-modele')?.value || 'veo31',
+                    ratio: document.getElementById('studio-video-ratio')?.value || '16:9',
+                    duree: document.getElementById('studio-video-duree')?.value || '8',
+                    resolution: document.getElementById('studio-video-resolution')?.value || '720p'
+                })
+            });
+            var d = await r.json();
+            if (!r.ok) { _stVidStatus(d.detail || 'Le lancement a échoué.'); return; }
+            _stVidStatus('Génération lancée' + (d.note ? '. ' + d.note : '')
+                + ' Compte de onze secondes à six minutes.');
+            _stSuivre(d.operation);
+        } catch (e) { _stVidStatus('Erreur : ' + e.message); }
+    });
+
+    async function _stReprendre() {
+        // Une génération lancée avant un rechargement de page vit toujours
+        // chez Google : on la reprend plutôt que de la perdre de vue.
+        try {
+            var d = await fetch('/api/video/en-cours').then(function (r) { return r.json(); });
+            var liste = d.en_cours || [];
+            if (!liste.length || _stVideoTimer) return;
+            _stVidStatus('Une génération lancée précédemment est reprise : « '
+                + (liste[0].prompt || '').slice(0, 60) + ' ».');
+            _stSuivre(liste[0].operation);
+        } catch (e) { /* silencieux */ }
+    }
+
+    async function _stChargerBiblioVideo() {
+        var box = document.getElementById('studio-video-biblio');
+        if (!box) return;
+        try {
+            var d = await fetch('/api/video').then(function (r) { return r.json(); });
+            box.innerHTML = '';
+            var liste = d.videos || [];
+            if (!liste.length) {
+                var p = document.createElement('p');
+                p.style.cssText = 'color:var(--text-muted);font-size:0.85rem;';
+                p.textContent = 'Aucune vidéo pour le moment.';
+                box.appendChild(p);
+                return;
+            }
+            liste.forEach(function (v) {
+                var bloc = document.createElement('details');
+                bloc.style.cssText = 'margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:6px 10px;';
+                var sum = document.createElement('summary');
+                sum.style.cssText = 'cursor:pointer;font-weight:600;';
+                sum.textContent = (v.prompt || v.fichier || 'Vidéo').slice(0, 80)
+                    + (v.cree_le ? ' — ' + v.cree_le.replace('T', ' à ').slice(0, 16) : '');
+                bloc.appendChild(sum);
+
+                var lecteur = document.createElement('video');
+                lecteur.controls = true;
+                lecteur.preload = 'none';
+                lecteur.src = v.url;
+                lecteur.style.cssText = 'width:100%;margin-top:8px;border-radius:4px;';
+                lecteur.setAttribute('aria-label', 'Lecteur vidéo : ' + (v.prompt || v.fichier || ''));
+                bloc.appendChild(lecteur);
+
+                var det = document.createElement('p');
+                det.style.cssText = 'font-size:0.78rem;color:var(--text-muted);margin:6px 0 0;';
+                det.textContent = 'Format ' + (v.ratio || '?') + ', ' + (v.duree || '?')
+                    + ' secondes, ' + (v.resolution || '?') + ', modèle ' + (v.modele || '?') + '.';
+                bloc.appendChild(det);
+
+                var barre = document.createElement('div');
+                barre.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
+                var dl = document.createElement('a');
+                dl.href = v.url; dl.download = v.fichier || 'video.mp4';
+                dl.className = 'btn-secondary'; dl.textContent = 'Télécharger';
+                dl.setAttribute('aria-label', 'Télécharger la vidéo ' + (v.fichier || ''));
+                barre.appendChild(dl);
+                var sup = document.createElement('button');
+                sup.className = 'btn-secondary'; sup.textContent = 'Supprimer';
+                sup.setAttribute('aria-label', 'Supprimer cette vidéo');
+                sup.addEventListener('click', async function () {
+                    if (!confirm('Supprimer cette vidéo ?')) return;
+                    try {
+                        await fetch('/api/video/' + encodeURIComponent(v.fichier), { method: 'DELETE' });
+                        _stVidStatus('Vidéo supprimée.');
+                        _stChargerBiblioVideo();
+                    } catch (e) { _stVidStatus('Erreur : ' + e.message); }
+                });
+                barre.appendChild(sup);
+                bloc.appendChild(barre);
+                box.appendChild(bloc);
+            });
+        } catch (e) { _stVidStatus('Bibliothèque indisponible : ' + e.message); }
+    }
+
+    document.getElementById('studio-video-refresh')?.addEventListener('click', function () {
+        _stVidStatus('Rafraîchissement…');
+        _stChargerBiblioVideo().then(function () { _stVidStatus('Bibliothèque à jour.'); });
+    });
+
+    document.getElementById('toggle-studio')?.addEventListener('click', function () {
+        document.getElementById('studio-modal')?.classList.remove('hidden');
+        _stChargerImage();
+        _stChargerVideo();
+        _stChargerBiblioVideo();
+        _stReprendre();
+        setTimeout(function () { document.getElementById('studio-image-prompt')?.focus(); }, 60);
+    });
+    document.getElementById('studio-close')?.addEventListener('click', function () {
+        document.getElementById('studio-modal')?.classList.add('hidden');
+    });
+    document.getElementById('studio-modal')?.addEventListener('click', function (e) {
+        if (e.target === this) this.classList.add('hidden');
     });
 })();

@@ -40,7 +40,7 @@ SERVICES = [
      'exemple': 'AIza…', 'console': 'https://aistudio.google.com/apikey',
      'role': "Conversation, description de vidéo et de son, documents épinglés, "
              "traitement par lots. Cette clé ouvre aussi la musique (Lyria), "
-             "l'image (Imagen) et la vidéo (Veo), encore inexploitées par NIMM."},
+             "l'image (Nano Banana, réglable) et la vidéo (Veo)."},
     {'id': 'openai', 'nom': 'OpenAI', 'famille': 'conversation',
      'exemple': 'sk-…', 'console': 'https://platform.openai.com/api-keys',
      'role': "Conversation, modèles de raisonnement de la série o."},
