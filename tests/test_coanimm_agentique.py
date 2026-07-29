@@ -1931,6 +1931,116 @@ def test_exa_dans_le_chat():
     ok("Exa dans la conversation : mode de recherche à part entière, repli expliqué")
 
 
+def _affectes(noeud):
+    """Noms affectés dans une fonction — sert à repérer le piège exact du
+    2026-07-27 : un nom accumulé dans UNE fonction et lu dans une AUTRE."""
+    return {n.id for n in ast.walk(noeud)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+
+
+def test_audit_structurel():
+    """Trois défauts qui ne se voient QUE par une analyse globale.
+
+    Ils ont tous les trois été trouvés en auditant, pas en relisant :
+    py_compile les laisse passer, et ils ne cassent rien avant l'exécution.
+    """
+    import pathlib
+    racine = pathlib.Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # (1) NOM UTILISÉ SANS ÊTRE DÉFINI dans sa propre fonction.
+    # _raisonnement_acc était accumulé dans une AUTRE fonction : tout flux
+    # OpenAI-compatible (DeepSeek, OpenAI, OpenRouter, Mistral) levait un
+    # NameError à la toute fin, après affichage — donc très discret.
+    fautes = []
+    for f in list(racine.glob('core/*.py')) + list(racine.glob('modules/*.py')) + [racine / 'main.py']:
+        arbre = ast.parse(f.read_text(encoding='utf-8'))
+        # Fonctions de PREMIER NIVEAU seulement : une fonction imbriquée lit
+        # légitimement les variables de celle qui l'entoure, et c'est au premier
+        # niveau que le piège s'est refermé.
+        for fn in arbre.body:
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            locaux, globaux = set(), set()
+            for x in ast.walk(fn):
+                if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store):
+                    locaux.add(x.id)
+                elif isinstance(x, (ast.Global, ast.Nonlocal)):
+                    globaux.update(x.names)
+                elif isinstance(x, (ast.Import, ast.ImportFrom)):
+                    for al in x.names:
+                        locaux.add((al.asname or al.name).split('.')[0])
+                elif isinstance(x, ast.ExceptHandler) and x.name:
+                    locaux.add(x.name)          # except … as _e
+            locaux.update(a.arg for a in fn.args.args + fn.args.kwonlyargs)
+            if fn.args.vararg:
+                locaux.add(fn.args.vararg.arg)
+            if fn.args.kwarg:
+                locaux.add(fn.args.kwarg.arg)
+            # On ne teste que les noms « privés de fonction » (préfixe _ et non
+            # définis au niveau module) : c'est là que le piège se referme.
+            module_niv = {n.id for x in arbre.body if isinstance(x, ast.Assign)
+                          for n in x.targets if isinstance(n, ast.Name)}
+            module_niv |= {getattr(x, 'name', '') for x in arbre.body}
+            # Un alias d'import posé N'IMPORTE OÙ dans le fichier est légitime :
+            # NIMM importe volontiers en cours de fonction, parfois dans un bloc
+            # conditionnel que ce parcours ne rattache pas à la bonne portée.
+            module_niv |= {(al.asname or al.name).split('.')[0]
+                           for x in ast.walk(arbre)
+                           if isinstance(x, (ast.Import, ast.ImportFrom)) for al in x.names}
+            imbriquees = [g for g in ast.walk(fn)
+                          if isinstance(g, (ast.FunctionDef, ast.AsyncFunctionDef))
+                          and g is not fn]
+            for g in imbriquees:
+                locaux |= _affectes(g)
+                locaux.add(g.name)
+            for x in ast.walk(fn):
+                if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load) \
+                   and x.id.startswith('_') and not x.id.startswith('__') \
+                   and x.id not in locaux and x.id not in globaux \
+                   and x.id not in module_niv \
+                   and any(x.id in _affectes(g) for g in arbre.body
+                           if isinstance(g, (ast.FunctionDef, ast.AsyncFunctionDef))
+                           and g is not fn):
+                    fautes.append(f"{f.name}:{x.lineno} {fn.name}() lit {x.id}")
+    assert not fautes, "noms utilisés sans être définis :\n  " + "\n  ".join(fautes[:10])
+
+    # (2) ROUTE DÉFINIE DEUX FOIS : la première gagne, la seconde est du code
+    # mort — et si elle utilise une autre clé de réglage, le bouton semble
+    # marcher tout en écrivant ailleurs. C'était le cas de stt-turbo.
+    import collections
+    routes = collections.Counter()
+    arbre = ast.parse((racine / 'main.py').read_text(encoding='utf-8'))
+    for n in ast.walk(arbre):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for d in n.decorator_list:
+                if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) \
+                   and d.func.attr in ('get', 'post', 'put', 'patch', 'delete') \
+                   and d.args and isinstance(d.args[0], ast.Constant):
+                    routes[d.func.attr.upper() + ' ' + d.args[0].value] += 1
+    doubles = [k for k, v in routes.items() if v > 1]
+    assert not doubles, "routes définies deux fois : " + ', '.join(doubles)
+    assert len(routes) > 250, 'garde-fou : le décompte des routes doit rester plausible'
+
+    # (3) ARITÉ des appels au journal de fonctionnement — un appel à trois
+    # arguments avait rendu la route d'épinglage inutilisable (erreur 500).
+    mauvais = []
+    for f in racine.rglob('*.py'):
+        if '__pycache__' in str(f) or f.name.startswith('test_'):
+            continue
+        try:
+            a = ast.parse(f.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        for n in ast.walk(a):
+            if isinstance(n, ast.Call) \
+               and (getattr(n.func, 'attr', None) or getattr(n.func, 'id', None)) == 'add_diagnostic' \
+               and len(n.args) + len(n.keywords) != 2:
+                mauvais.append(f"{f.name}:{n.lineno}")
+    assert not mauvais, "add_diagnostic prend 2 arguments : " + ', '.join(mauvais)
+
+    ok("audit structurel : aucun nom indéfini, aucune route en double, journal bien appelé")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -1959,6 +2069,7 @@ if __name__ == '__main__':
                test_veille,
                test_catalogue_services, test_exa_avance,
                test_exa_dans_le_chat,
+               test_audit_structurel,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
                test_script_blocage_securite_pas_de_retry]:

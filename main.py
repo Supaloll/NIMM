@@ -3891,17 +3891,6 @@ async def save_stt_dict(req: dict = Body(...)):
     set_setting('stt_dict', _j.dumps(entries, ensure_ascii=False))
     return {"status": "ok"}
 
-@app.get("/api/settings/stt-turbo")
-async def get_stt_turbo():
-    return {"enabled": get_setting('stt_turbo_enabled', 'false').lower() == 'true'}
-
-@app.post("/api/settings/stt-turbo")
-async def set_stt_turbo(req: SettingValue):
-    if req.value not in ('true', 'false'):
-        raise HTTPException(400, "Valeur invalide (true/false)")
-    set_setting('stt_turbo_enabled', req.value)
-    return {"status": "ok"}
-
 @app.get("/api/settings/stt")
 async def get_stt_settings():
     return {

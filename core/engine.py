@@ -1855,6 +1855,11 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
     _usage_tokens = None  # {'tokens_in': N, 'tokens_out': M} si l'API retourne l'usage réel
 
     _finish_reason = None
+    # La chaîne de pensée (deepseek-reasoner et similaires) était accumulée
+    # dans une AUTRE fonction : ce nom était donc indéfini ici, et toute
+    # réponse diffusée en OpenAI-compatible levait un NameError à la toute
+    # fin — après l'affichage, ce qui la rendait discrète.
+    _raisonnement_acc = ''
     async with httpx.AsyncClient(timeout=120) as client:
         async with client.stream(
             'POST',
@@ -1893,6 +1898,10 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                         if _fr:
                             _finish_reason = _fr
                     token = data['choices'][0]['delta'].get('content', '') if data.get('choices') else ''
+                    _delta = data['choices'][0]['delta'] if data.get('choices') else {}
+                    _rais = _delta.get('reasoning_content') or _delta.get('reasoning') or ''
+                    if _rais:
+                        _raisonnement_acc += _rais
                     # Certaines APIs incluent usage dans le dernier chunk avec choices
                     if data.get('usage') and data.get('choices'):
                         u = data['usage']
