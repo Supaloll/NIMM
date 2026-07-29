@@ -3231,6 +3231,54 @@ function _renderCitations(msgDiv, citations) {
     }
 }
 
+// ── Texte alternatif honnête d'une image produite par NIMM ────────────────
+// Un alt qui répète la consigne MENT : il dit ce qu'on a demandé, pas ce qui a
+// été produit. Après une retouche c'est pire encore — la consigne est alors une
+// instruction (« mets-le en noir et blanc »), pas une description.
+// Règle tenue ici : soit une vraie description, soit on écrit qu'il n'y en a
+// pas. Jamais la consigne déguisée.
+// Hors du chemin critique : l'image est déjà affichée quand on appelle ceci.
+async function _decrireImageGeneree(bubble, b64, url, consigne) {
+    const imgEl = bubble && bubble.querySelector('img');
+    if (!imgEl) return '';
+    let desc = '', raison = '';
+    try {
+        const rd = await fetch('/api/image/decrire', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ b64: b64 || '', url: url || '' })
+        });
+        const dd = await rd.json();
+        desc = (dd.description || '').trim();
+        raison = dd.raison || '';
+    } catch (e) { raison = e.message; }
+
+    if (desc) {
+        imgEl.alt = desc;
+        const det = document.createElement('details');
+        det.style.cssText = 'margin-top:6px;';
+        const sum = document.createElement('summary');
+        sum.style.cssText = 'cursor:pointer;font-size:0.8rem;color:var(--text-muted);';
+        sum.textContent = "Description de l'image";
+        const zone = document.createElement('textarea');
+        zone.readOnly = true;
+        zone.rows = 4;
+        zone.value = desc;
+        zone.setAttribute('aria-label', "Description de l'image générée");
+        zone.style.cssText = 'width:100%;box-sizing:border-box;font-size:0.82rem;margin-top:4px;';
+        det.appendChild(sum); det.appendChild(zone);
+        bubble.appendChild(det);
+    } else {
+        imgEl.alt = 'Image générée à partir de la consigne « ' + (consigne || '')
+            + ' ». Description automatique indisponible'
+            + (raison ? ' : ' + raison : '.');
+    }
+    if (typeof _srAnnounce === 'function') {
+        _srAnnounce(desc ? 'Image décrite.' : 'Image générée, sans description disponible.');
+    }
+    return desc;
+}
+
 function _srAnnounce(text) {
     const el = document.getElementById('sr-stream-status');
     if (!el) return;
@@ -3742,7 +3790,14 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                         const imgBubble = document.createElement('div');
                         imgBubble.className = 'message-bubble';
                         const imgB64 = img.b64 || '';
-                        imgBubble.innerHTML = `<img src="${src}" alt="${_esc(img.prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${_esc(displayPrompt)}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+                        // Image rechargée depuis l'historique : la description n'est pas conservée
+                        // avec le message. On ne la redemande PAS d'office — ce serait un appel
+                        // de vision par image à chaque ouverture du fil — mais on ne fait pas
+                        // passer la consigne pour une description : on dit ce qu'elle est, et
+                        // le bouton « Décrire » la produit à la demande.
+                        const _altHist = 'Image générée. Consigne d\'origine : '
+                            + (img.prompt || '(inconnue)') + '. Pas de description enregistrée.';
+                        imgBubble.innerHTML = `<img src="${src}" alt="${_esc(_altHist)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${_esc(displayPrompt)}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-describe-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Décrire cette image">🔎 Décrire</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
                         imgBubble.querySelector('.img-download-btn').addEventListener('click', async () => {
                             try {
                                 const resp = await fetch(src);
@@ -3759,6 +3814,13 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                         });
                         imgBubble.querySelector('.img-edit-btn').addEventListener('click', () => {
                             openImageEditModal(imgB64, img.prompt || '');
+                        });
+                        imgBubble.querySelector('.img-describe-btn')?.addEventListener('click', async function () {
+                            this.disabled = true;
+                            this.textContent = '🔎 Description…';
+                            await _decrireImageGeneree(imgBubble, imgB64, imgB64 ? '' : src,
+                                                       img.prompt || '');
+                            this.remove();
                         });
                         imgDiv.appendChild(imgEmoji);
                         imgDiv.appendChild(imgBubble);
@@ -4320,7 +4382,11 @@ async function sendMessage() {
                 ? `<span style="font-size:0.8rem;color:var(--text-muted);">${revisedPrompt}</span>`
                 : `<span style="font-size:0.8rem;color:var(--text-muted);">${_esc(prompt)}</span>`;
             const editB64 = data.b64 || '';
-            bubble.innerHTML = `<img src="${src}" alt="${_esc(prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">${promptLabel}<br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+            // L'alt ne reprend PLUS la consigne : dire ce qu'on a demandé à la
+            // place de ce qui a été produit, c'est un texte alternatif qui ment
+            // dès que le modèle dérive. On pose un alt provisoire honnête, puis
+            // on le remplace par la vraie description dès qu'elle arrive.
+            bubble.innerHTML = `<img src="${src}" alt="Image générée, description en cours…" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">${promptLabel}<br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
             bubble.querySelector('.img-download-btn').addEventListener('click', async () => {
                 try {
                     const resp = await fetch(src);
@@ -4341,6 +4407,9 @@ async function sendMessage() {
             bubble.querySelector('.img-edit-btn').addEventListener('click', () => {
                 openImageEditModal(editB64, prompt);
             });
+
+            // Description accessible, hors du chemin critique (voir _decrireImageGeneree).
+            _decrireImageGeneree(bubble, data.b64 || '', data.url || '', prompt);
             div.appendChild(emojiEl);
             div.appendChild(bubble);
             document.getElementById('messages').appendChild(div);
@@ -4649,7 +4718,7 @@ function _applyProviderConstraints(keys) {
     // mène à un refus n'a rien à faire dans la barre d'outils.
     var _btnMus = document.getElementById('toggle-musique');
     if (_btnMus) _btnMus.hidden = !(keys && keys.gemini);
-    var _btnStudio = document.getElementById('toggle-studio');
+    var _btnStudio = document.getElementById('plus-studio');
     if (_btnStudio) _btnStudio.hidden = !(keys && keys.gemini);
     _majVisibiliteParCle(keys);
     // 1. Désactiver les options sans clé
@@ -5806,7 +5875,10 @@ document.getElementById('image-edit-ok')?.addEventListener('click', async () => 
         emoji.textContent = '🎨';
         const bubble   = document.createElement('div');
         bubble.className = 'message-bubble';
-        bubble.innerHTML = `<img src="${src}" alt="${_esc(prompt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${_esc(prompt)}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+        // Après une retouche, la consigne est une INSTRUCTION (« mets-le en noir
+        // et blanc ») : la mettre en alt serait encore moins utilisable qu'une
+        // consigne de création. Alt provisoire, puis vraie description.
+        bubble.innerHTML = `<img src="${src}" alt="Image retouchée, description en cours…" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;"><span style="font-size:0.8rem;color:var(--text-muted);">${_esc(prompt)}</span><br><div style="display:flex;gap:8px;margin-top:8px;"><button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button><button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
         bubble.querySelector('.img-download-btn').addEventListener('click', async () => {
             try {
                 const resp = await fetch(src);
@@ -5824,6 +5896,7 @@ document.getElementById('image-edit-ok')?.addEventListener('click', async () => 
         bubble.querySelector('.img-edit-btn').addEventListener('click', () => {
             openImageEditModal(data.b64, prompt);
         });
+        _decrireImageGeneree(bubble, data.b64 || '', '', prompt);
         imgDiv.appendChild(emoji);
         imgDiv.appendChild(bubble);
         document.getElementById('messages').appendChild(imgDiv);
@@ -6495,11 +6568,20 @@ async function _galerieLoad() {
         images.forEach(img => {
             const card = document.createElement('div');
             card.style.cssText = 'background:var(--bg-input);border:1px solid var(--border);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;';
-            const label = img.filename.replace(/^nimm_\d{8}_\d{6}_\d+\.png$/, '').replace(/\.png$/, '') || img.filename.replace(/\.png$/, '');
-            const displayName = img.filename.replace(/\.png$/, '');
+            // Les images ne sont plus toutes des .png depuis que le format suit
+            // celui rendu par le modèle : on retire l'extension, quelle qu'elle soit.
+            const displayName = img.filename.replace(/\.(png|jpg|jpeg|webp)$/i, '');
+            // Texte alternatif : la description enregistrée si elle existe. Sinon
+            // on DIT qu'il n'y en a pas — mettre la consigne à la place ferait
+            // passer une intention pour une description.
+            const altTexte = (img.alt || '').trim()
+                ? img.alt
+                : (img.prompt
+                    ? 'Image sans description enregistrée. Consigne d\'origine : ' + img.prompt
+                    : 'Image sans description enregistrée : ' + displayName);
             card.innerHTML = `
                 <img src="/api/images/file/${encodeURIComponent(img.filename)}"
-                     alt="${_esc(img.prompt || img.filename)}"
+                     alt="${_esc(altTexte)}"
                      loading="lazy"
                      style="width:100%;aspect-ratio:1;object-fit:cover;display:block;cursor:pointer;"
                      title="${_esc(img.prompt || '')}"
@@ -11532,8 +11614,7 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
         'o': 'toggle-prompt-library',      // Promptothèque
         'r': 'toggle-search-conversations', // Recherches
         't': 'toggle-coanimm',             // agenT CoaNIMM
-        'u': 'toggle-musique',             // mUsique (Lyria)
-        'i': 'toggle-studio'               // studIo image et vidéo
+        'u': 'toggle-musique'              // mUsique (Lyria)
     };
     var LABELS = {
         'toggle-history': 'Alt+Shift+F', 'toggle-agenda': 'Alt+Shift+A',
@@ -11542,9 +11623,11 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
         'toggle-prompt-library': 'Alt+Shift+O',
         'toggle-search-conversations': 'Alt+Shift+R',
         'toggle-coanimm': 'Alt+Shift+T',
-        'toggle-musique': 'Alt+Shift+U',
-        'toggle-studio': 'Alt+Shift+I'
+        'toggle-musique': 'Alt+Shift+U'
     };
+    // Le studio n'a plus de bouton dans la barre : son raccourci est annoncé
+    // sur l'entrée du menu « + » qui l'ouvre.
+    document.getElementById('plus-studio')?.setAttribute('aria-keyshortcuts', 'Alt+Shift+I');
     // Annonce les raccourcis aux lecteurs d'écran.
     Object.keys(LABELS).forEach(function (id) {
         var el = document.getElementById(id);
@@ -11573,6 +11656,15 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
             } else {
                 document.getElementById('user-input')?.focus();
             }
+            return;
+        }
+        if (k === 'i') {   // studIo image et vidéo
+            var _entree = document.getElementById('plus-studio');
+            // Caché = pas de clé Gemini : ouvrir mènerait à un panneau inutilisable.
+            if (!_entree || _entree.hidden) return;
+            e.preventDefault();
+            if (typeof window._ouvrirStudio === 'function') window._ouvrirStudio();
+            setTimeout(function () { focusModal(document.getElementById('studio-modal')); }, 90);
             return;
         }
         var id = SHORTCUTS[k];
@@ -13185,14 +13277,21 @@ init();
         _stChargerBiblioVideo().then(function () { _stVidStatus('Bibliothèque à jour.'); });
     });
 
-    document.getElementById('toggle-studio')?.addEventListener('click', function () {
+    // Le studio s'ouvre depuis le menu « + » — là où se prennent déjà les
+    // décisions « je crée quelque chose » — et non plus depuis la barre du haut,
+    // qui comptait trois portes pour deux idées. Exposé aussi en global pour que
+    // le raccourci clavier n'ait pas à connaître le menu.
+    function _ouvrirStudio() {
+        document.getElementById('plus-menu')?.classList.add('hidden');
         document.getElementById('studio-modal')?.classList.remove('hidden');
         _stChargerImage();
         _stChargerVideo();
         _stChargerBiblioVideo();
         _stReprendre();
         setTimeout(function () { document.getElementById('studio-image-prompt')?.focus(); }, 60);
-    });
+    }
+    window._ouvrirStudio = _ouvrirStudio;
+    document.getElementById('plus-studio')?.addEventListener('click', _ouvrirStudio);
     document.getElementById('studio-close')?.addEventListener('click', function () {
         document.getElementById('studio-modal')?.classList.add('hidden');
     });

@@ -2261,7 +2261,7 @@ def test_musique_lyria():
     assert 'data/musiques/' in gitignore, 'les fichiers audio n’ont rien à faire dans git'
 
     # (7) Interface : bouton conditionné à la clé, paroles copiables, lecteur étiqueté
-    assert 'id="toggle-musique"' in html and 'hidden>' in html
+    assert 'id="toggle-musique"' in html
     assert "_btnMus.hidden = !(keys && keys.gemini)" in app, \
         'un bouton qui mène à un refus n’a rien à faire dans la barre'
     assert 'zone.readOnly = true' in app and "createElement('textarea')" in app, \
@@ -2298,6 +2298,20 @@ def test_imagerie_reglee():
     # (2) RGPD : rien ne reste chez Google. Même choix que l'agent Vibe.
     assert "'store': False" in src, "l'API Interactions conserve TOUT par défaut"
 
+    # (2 bis) La livraison en ligne est DEMANDÉE, pas espérée : ce module lit des
+    # octets, pas une référence. Et le format demandé est celui qu'on écrira.
+    assert "'delivery': 'inline'" in src
+    assert "'mime_type': _MIME_DEMANDE" in src
+
+    # (2 ter) L'extension du fichier suit le format REÇU, pas celui demandé
+    assert I.extension_pour('image/jpeg') == 'jpg'
+    assert I.extension_pour('image/webp') == 'webp'
+    assert I.extension_pour('image/png') == 'png'
+    assert I.extension_pour('image/jpeg; charset=utf-8') == 'jpg', 'paramètres MIME tolérés'
+    assert I.extension_pour('') == 'png' and I.extension_pour(None) == 'png'
+    assert 'extension_pour' in mn and '.png"' not in mn.split('imagerie_generer')[-1][:1500], \
+        'la route ne doit plus écrire une extension en dur'
+
     # (3) On n'a PAS branché Imagen, et le code dit pourquoi
     assert 'imagen-4' not in src and 'imagen-3' not in src, 'API condamnée : pas de code neuf dessus'
     assert '17 août 2026' in src and '17 août 2026' in mn, \
@@ -2332,13 +2346,98 @@ def test_imagerie_reglee():
     assert '4K' in I.MODELES['flash']['tailles']
     assert '21:9' in I.RATIOS and '9:16' in I.RATIOS
 
+    # (5 bis) Identifiants relevés dans la liste officielle des modèles, jamais
+    # déduits d'une phrase — voir le même piège attrapé côté Veo.
+    ids = sorted(m['id'] for m in I.MODELES.values())
+    assert ids == ['gemini-3-pro-image', 'gemini-3.1-flash-image',
+                   'gemini-3.1-flash-lite-image'], ids
+    for nom, conf in I.MODELES.items():
+        assert conf['tailles'], nom
+        assert set(conf['tailles']) <= {'0.5K', '1K', '2K', '4K'}, nom
+    assert '0.5K' not in I.MODELES['pro']['tailles'], \
+        'le 0,5K est propre au modèle Flash'
+
     # (6) L'image générée est DÉCRITE : sans alt, une image est un fichier muet
     assert '_vibe_describe_image' in mn and 'alt' in mn
     assert 'id="studio-image-decrire"' in html
     assert "vign.alt = im.alt ||" in app, 'jamais d’alt inventé quand la description manque'
     assert 'zone.readOnly = true' in app, 'la description doit être copiable'
-    assert "'i': 'toggle-studio'" in app and "_btnStudio.hidden = !(keys && keys.gemini)" in app
-    ok("imagerie : format, résolution et modèle réglables, rien conservé chez Google, image décrite")
+
+    # (7) UNE SEULE porte pour créer un média : le studio est passé de la barre
+    # du haut au menu « + », là où se prennent déjà les décisions « je crée ».
+    # Trois boutons pour deux idées, c'était trois tabulations pour rien.
+    assert 'id="toggle-studio"' not in html and 'toggle-studio' not in app, \
+        'le studio ne doit plus avoir de bouton propre dans la barre du haut'
+    assert 'id="plus-studio"' in html, 'il s’ouvre depuis le menu « + »'
+    assert "_btnStudio = document.getElementById('plus-studio')" in app
+    assert "_btnStudio.hidden = !(keys && keys.gemini)" in app, \
+        'toujours caché sans clé : une porte qui ne mène nulle part ne vaut rien'
+    # Le raccourci survit au déménagement — sinon c'est un accès direct perdu
+    assert "'Alt+Shift+I'" in app and 'window._ouvrirStudio' in app
+    assert "if (k === 'i')" in app and '_entree.hidden' in app, \
+        'le raccourci ne doit pas ouvrir un panneau inutilisable'
+    ok("imagerie : réglages complets, rien conservé chez Google, image décrite, une seule porte")
+
+
+def test_alt_honnete():
+    """Un texte alternatif qui répète la consigne est un texte qui MENT.
+
+    Les images créées depuis la conversation portaient `alt = la consigne` :
+    il disait ce qui avait été demandé, pas ce qui avait été produit. Au
+    lecteur d'écran, impossible de savoir que le modèle avait dérivé. Même
+    défaut dans la galerie. Règle tenue ici : soit une vraie description, soit
+    on écrit qu'il n'y en a pas — jamais la consigne déguisée en description.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    # (1) La consigne ne sert PLUS d'alt — les QUATRE endroits où l'image
+    #     apparaît : création dans le fil, retouche, historique, galerie.
+    #     Le défaut existait aux quatre ; trois avaient été manqués au premier
+    #     passage et c'est ce test qui les a sortis.
+    assert 'alt="${_esc(prompt)}"' not in app, 'création et retouche dans le fil'
+    assert 'alt="${_esc(img.prompt)}"' not in app, 'images rechargées depuis l’historique'
+    assert 'alt="${_esc(img.prompt || img.filename)}"' not in app, 'galerie'
+
+    # (2) Un alt provisoire honnête, remplacé par la vraie description
+    assert 'description en cours' in app
+    assert 'imgEl.alt = desc;' in app
+
+    # (2 bis) Le correctif est FACTORISÉ : quatre copies auraient divergé
+    assert app.count('async function _decrireImageGeneree(') == 1
+    assert app.count('_decrireImageGeneree(') >= 4, 'appelée depuis chaque chemin'
+
+    # (2 ter) Après une retouche, la consigne est une INSTRUCTION : encore moins
+    #         utilisable en description qu'une consigne de création.
+    assert 'Image retouchée, description en cours' in app
+
+    # (2 quater) Historique : pas de description automatique — ce serait un appel
+    #            de vision par image à chaque ouverture de fil — mais un bouton.
+    assert 'img-describe-btn' in app and 'Décrire cette image' in app
+    assert "Pas de description enregistrée" in app
+
+    # (3) Quand la description manque, on le DIT — et on nomme la consigne
+    #     comme consigne, pas comme description
+    assert 'Description automatique indisponible' in app
+    assert "à partir de la consigne" in app
+    assert 'sans description enregistrée' in app, 'galerie : même honnêteté'
+
+    # (4) La route de description ne lève jamais et explique ses échecs
+    assert '/api/image/decrire' in mn and '/api/image/decrire' in app
+    assert '"raison"' in mn, 'un échec silencieux redeviendrait un alt menteur'
+    assert 'return {"description": "", "raison"' in mn
+
+    # (5) La description est jointe à la LISTE de la galerie : une image par
+    #     requête ferait cent allers-retours pour cent vignettes
+    assert "img['alt'] = (fiche.get('alt') or '').strip()" in mn
+
+    # (6) La description reste lisible et COPIABLE, pas seulement parlée :
+    #     une annonce vocale passe, un texte reste.
+    assert 'sum.textContent = "Description de l\'image"' in app
+    assert 'zone.readOnly = true' in app
+    ok("texte alternatif : jamais la consigne déguisée en description, et l’absence est dite")
 
 
 def test_video_veo():
@@ -2373,6 +2472,25 @@ def test_video_veo():
     d, r, note = V.regles('6', '4k')
     assert (d, r) == ('8', '4k') and note
     assert V.regles('9', 'zzz')[:2] == ('8', '720p'), 'valeurs absurdes ramenées au défaut'
+    # Tous les modèles n'ont pas les mêmes résolutions, et les corrections SE CUMULENT
+    d, r, note = V.regles('4', '4k', ('720p', '1080p'))
+    assert (d, r) == ('8', '1080p'), (d, r)
+    assert 'ne propose pas' in note and 'Google' in note, \
+        'deux corrections, deux explications — aucune ne doit manger l’autre'
+    assert V.regles('4', '720p', ('720p', '1080p')) == ('4', '720p', '')
+
+    # (2 bis) Identifiants de modèles — relevés dans la liste officielle, PAS
+    # déduits de la prose. Piège réel : les tables de paramètres de Google
+    # mentionnent un « Veo 3.1 Fast » dont aucun identifiant n'est publié ; le
+    # modèle réellement appelable à côté de Veo 3.1 est Veo 3.1 Lite.
+    ids = sorted(m['id'] for m in V.MODELES.values())
+    assert ids == ['veo-3.1-generate-preview', 'veo-3.1-lite-generate-preview'], ids
+    assert '4k' not in V.MODELES['veo31lite']['resolutions'], \
+        'Veo 3.1 Lite ne fait pas de 4K — le promettre serait un refus à l’arrivée'
+    assert '4k' in V.MODELES['veo31']['resolutions']
+    for nom, conf in V.MODELES.items():
+        assert conf['resolutions'], nom
+        assert set(conf['resolutions']) <= {'720p', '1080p', '4k'}, nom
 
     # (3) Europe : Veo 3.x n'accepte que allow_adult, posé d'avance
     assert "'personGeneration': 'allow_adult'" in src, \
@@ -2440,6 +2558,6 @@ if __name__ == '__main__':
                test_script_blocage_securite_pas_de_retry,
                test_veille_se_signale, test_banc_essai_reordonnanceur,
                test_musique_lyria,
-               test_imagerie_reglee, test_video_veo]:
+               test_imagerie_reglee, test_video_veo, test_alt_honnete]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

@@ -49,7 +49,6 @@
         <div id="top-right">
             <button id="toggle-galerie" title="Galerie d'images" aria-label="Galerie d'images"><span aria-hidden="true">🖼️</span></button>
             <button id="toggle-musique" title="Musique (Lyria)" aria-label="Musique, génération et bibliothèque" hidden><span aria-hidden="true">🎵</span></button>
-            <button id="toggle-studio" title="Studio image et vidéo" aria-label="Studio image et vidéo" hidden><span aria-hidden="true">🎬</span></button>
             <button id="toggle-agenda" title="Agenda" aria-label="Agenda">
                 <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="2" y="3" width="12" height="11" rx="1.5"/>
@@ -133,10 +132,11 @@
                 <span id="draft-indicator" hidden aria-live="polite" style="font-size:0.72rem;color:var(--text-muted);padding:0 4px 2px 4px;align-self:flex-end;"></span>
                 <div id="input-actions">
                     <div id="plus-menu-wrap">
-                        <button id="upload-btn" title="Ajouter" aria-label="Ajouter un fichier ou créer une image">+</button>
+                        <button id="upload-btn" title="Ajouter" aria-label="Ajouter un fichier, créer une image ou une vidéo">+</button>
                         <div id="plus-menu" class="hidden" role="menu" aria-label="Actions fichier">
                             <button id="plus-attach" class="plus-menu-item" role="menuitem" aria-label="Joindre un fichier">📎 Joindre un fichier</button>
                             <button id="plus-imagegen" class="plus-menu-item" role="menuitem" aria-label="Créer une image">🖼️ Créer une image</button>
+                            <button id="plus-studio" class="plus-menu-item" role="menuitem" aria-label="Ouvrir le studio image et vidéo" hidden>🎬 Studio image et vidéo</button>
                             <button id="plus-vibe-doc" class="plus-menu-item" role="menuitem" aria-label="Analyser un document avec Vibe" hidden>📄 Document (Vibe)</button>
                             <input type="file" id="vibe-doc-input" accept=".pdf,.txt,.md,.csv,.py,.json,.docx,image/*" style="display:none" aria-hidden="true">
                         </div>
@@ -2199,7 +2199,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260729-studio"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260729-studio-plus"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

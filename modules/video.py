@@ -26,6 +26,11 @@ _BASE = 'https://generativelanguage.googleapis.com/v1beta'
 _DELAI = 120.0
 _DELAI_TELECHARGEMENT = 600.0
 
+# Identifiants relevés dans la liste officielle des modèles (ai.google.dev,
+# page « Models », section « Generative media models »). À ne PAS déduire de la
+# prose : les tables de paramètres parlent d'un « Veo 3.1 Fast » dont aucun
+# identifiant n'est publié — le modèle réellement appelable à côté de Veo 3.1
+# est Veo 3.1 Lite, et lui ne fait pas de 4K.
 MODELES = {
     'veo31': {
         'id': 'veo-3.1-generate-preview',
@@ -34,11 +39,12 @@ MODELES = {
                         "Jusqu'en 4K, mais alors 8 secondes obligatoires."),
         'resolutions': ('720p', '1080p', '4k'),
     },
-    'veo31fast': {
-        'id': 'veo-3.1-fast-generate-preview',
-        'libelle': 'Veo 3.1 Fast — rapide',
-        'description': "Même principe, rendu plus rapide et moins coûteux.",
-        'resolutions': ('720p', '1080p', '4k'),
+    'veo31lite': {
+        'id': 'veo-3.1-lite-generate-preview',
+        'libelle': 'Veo 3.1 Lite — économique',
+        'description': ("Le moins coûteux, pour produire en volume. "
+                        "Pas de 4K : 720p ou 1080p."),
+        'resolutions': ('720p', '1080p'),
     },
 }
 
@@ -70,23 +76,38 @@ def options(api_keys=None):
     }
 
 
-def regles(duree, resolution):
+def regles(duree, resolution, resolutions_modele=None):
     """Corrige un couple durée/résolution impossible, et DIT ce qui a changé.
 
-    Fonction PURE, donc testable sans réseau. Google impose 8 secondes en 1080p
-    et en 4K ; envoyer 4 secondes en 4K, c'est six minutes d'attente pour un
-    refus. Autant corriger avant de partir — mais jamais en silence.
+    Fonction PURE, donc testable sans réseau. Deux règles, tirées de la
+    documentation de Google :
+      - tous les modèles n'ont pas les mêmes résolutions (Veo 3.1 Lite ne fait
+        pas de 4K) ;
+      - 1080p et 4K exigent 8 secondes.
+    Envoyer 4 secondes en 4K, c'est six minutes d'attente pour un refus. Autant
+    corriger avant de partir — mais jamais en silence : chaque correction
+    revient dans la note, et les notes se cumulent.
     """
+    notes = []
     duree = str(duree or '8')
     resolution = (resolution or '720p').lower()
     if resolution not in ('720p', '1080p', '4k'):
         resolution = '720p'
     if duree not in DUREES:
         duree = '8'
+
+    dispo = tuple(resolutions_modele or ('720p', '1080p', '4k'))
+    if resolution not in dispo:
+        demandee, resolution = resolution, dispo[-1]
+        notes.append(f"Résolution ramenée à {resolution} : ce modèle ne propose "
+                     f"pas le {demandee}.")
+
     if resolution in ('1080p', '4k') and duree != '8':
-        return '8', resolution, (f"Durée portée à 8 secondes : Google n'accepte que "
-                                 f"cette durée en {resolution}.")
-    return duree, resolution, ''
+        duree = '8'
+        notes.append(f"Durée portée à 8 secondes : Google n'accepte que cette "
+                     f"durée en {resolution}.")
+
+    return duree, resolution, ' '.join(notes)
 
 
 async def lancer(prompt, modele='veo31', ratio='16:9', duree='8',
@@ -104,9 +125,7 @@ async def lancer(prompt, modele='veo31', ratio='16:9', duree='8',
 
     if ratio not in RATIOS:
         ratio = '16:9'
-    duree, resolution, note = regles(duree, resolution)
-    if resolution not in conf['resolutions']:
-        resolution = conf['resolutions'][0]
+    duree, resolution, note = regles(duree, resolution, conf['resolutions'])
 
     parametres = {
         'aspectRatio': ratio,

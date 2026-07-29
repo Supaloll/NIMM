@@ -6845,8 +6845,20 @@ async def images_save(req: ImageSaveRequest):
 
 @app.get("/api/images")
 async def images_list():
-    """Retourne toutes les images de la galerie."""
-    return get_images()
+    """Toutes les images de la galerie, AVEC leur description quand elle existe.
+
+    La description est jointe ici plutôt que demandée image par image : une
+    galerie de cent vignettes ferait cent allers-retours, et une galerie sans
+    texte alternatif n'est qu'une grille de cases vides au lecteur d'écran.
+    Les images d'avant les fiches n'en ont pas — c'est dit, pas maquillé.
+    """
+    images = get_images()
+    for img in images:
+        fiche = _fiche_lire(_IMAGES_DIR, img.get('filename', ''))
+        img['alt'] = (fiche.get('alt') or '').strip()
+        img['ratio'] = fiche.get('ratio', '')
+        img['taille'] = fiche.get('taille', '')
+    return images
 
 
 @app.get("/api/images/file/{filename}")
@@ -7055,7 +7067,7 @@ async def imagerie_generer(req: ImagerieRequest):
     générée est un fichier muet. Elle est produite par le routage vision de
     NIMM et rangée dans la fiche du fichier.
     """
-    from modules.imagerie import generer
+    from modules.imagerie import generer, extension_pour
     from core.database import get_api_keys, save_image
     api_keys = get_api_keys()
     res = await generer((req.prompt or "").strip(), req.modele or 'flash',
@@ -7073,7 +7085,9 @@ async def imagerie_generer(req: ImagerieRequest):
         except Exception:
             continue
         ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:20]
-        nom = f"nimm_{ts}.png"
+        # L'extension suit le format RÉELLEMENT rendu : un JPEG rangé sous .png
+        # trompe autant l'utilisateur que le logiciel qui l'ouvrira ensuite.
+        nom = f"nimm_{ts}.{extension_pour(img.get('mime'))}"
         with open(os.path.join(_IMAGES_DIR, nom), 'wb') as f:
             f.write(octets)
         alt = ''
@@ -7101,6 +7115,57 @@ async def imagerie_generer(req: ImagerieRequest):
         raise HTTPException(500, "Aucune image n'a pu être enregistrée.")
     return {"images": sorties, "texte": res.get('texte', ''),
             "secondes": res.get('secondes', 0), "libelle": res.get('libelle', '')}
+
+class DecrireImageRequest(BaseModel):
+    b64: str = ''
+    url: str = ''
+    mime: Optional[str] = 'image/png'
+
+@app.post("/api/image/decrire")
+async def image_decrire(req: DecrireImageRequest):
+    """Décrit une image déjà produite — texte alternatif accessible (WCAG).
+
+    POURQUOI CETTE ROUTE EXISTE
+    Les images créées depuis la conversation portaient jusqu'ici `alt = la
+    consigne`. C'est un texte alternatif MENSONGER : il dit ce qui a été
+    demandé, pas ce qui a été produit. Quand on lit l'image au lecteur
+    d'écran, on ne peut donc pas savoir que le modèle a dérivé.
+
+    Ne lève jamais : sans description, l'appelant doit pouvoir le DIRE plutôt
+    que de retomber sur la consigne.
+    """
+    import base64 as _b64m
+    from core.database import get_api_keys
+    api_keys = get_api_keys()
+    donnees = req.b64 or ''
+    if ',' in donnees[:100]:
+        donnees = donnees.split(',', 1)[1]
+    octets = b''
+    if donnees:
+        try:
+            octets = _b64m.b64decode(donnees)
+        except Exception:
+            octets = b''
+    elif (req.url or '').strip():
+        try:
+            async with _httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.get(req.url)
+                r.raise_for_status()
+                octets = r.content
+        except Exception as e:
+            return {"description": "", "raison": f"Image illisible : {e}"}
+    if not octets:
+        return {"description": "", "raison": "Aucune image exploitable."}
+    try:
+        from core.hub import _vibe_describe_image, _load_provider_routing
+        desc = await _vibe_describe_image(
+            octets, req.mime or 'image/png',
+            {'provider_routing': _load_provider_routing(), 'api_keys': api_keys})
+    except Exception as e:
+        return {"description": "", "raison": f"Description impossible : {e}"}
+    desc = (desc or '').strip()
+    return {"description": desc,
+            "raison": '' if desc else "Le modèle de vision n'a rien renvoyé."}
 
 @app.get("/api/imagerie/fiche/{nom}")
 async def imagerie_fiche(nom: str):
