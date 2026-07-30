@@ -2380,6 +2380,97 @@ def test_imagerie_reglee():
     ok("imagerie : réglages complets, rien conservé chez Google, image décrite, une seule porte")
 
 
+def test_fournisseurs_cables_partout():
+    """Un fournisseur à moitié branché répond en direct et se tait en flux.
+
+    L'adresse de base et le modèle de repli étaient recopiés à TROIS endroits
+    d'engine.py — appel direct, flux, flux avec outils. Trois copies, c'est la
+    garantie qu'un ajout n'en touche que deux, et le symptôme est discret : le
+    fournisseur marche quand on le teste, et reste muet en usage réel.
+    Source unique désormais, et ce test vérifie que chaque fournisseur déclaré
+    est atteignable de bout en bout.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    db = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    import core.services as SV
+
+    # engine.py importe httpx, absent de certains environnements de test : on lit
+    # donc la table dans l'ARBRE SYNTAXIQUE plutôt que d'importer le module.
+    arbre = ast.parse(eng)
+    table = None
+    for n_ in ast.walk(arbre):
+        if isinstance(n_, ast.Assign) and any(
+                getattr(t, 'id', '') == 'FOURNISSEURS_OPENAI_COMPAT' for t in n_.targets):
+            table = ast.literal_eval(n_.value)
+    assert table, 'table des fournisseurs compatibles OpenAI introuvable'
+    assert {'deepseek', 'openai', 'openrouter', 'mistral', 'groq', 'cerebras'} <= set(table)
+
+    def _valeur(nom_var):
+        for x in ast.walk(arbre):
+            if isinstance(x, ast.Assign) and any(
+                    getattr(t, 'id', '') == nom_var for t in x.targets):
+                return ast.literal_eval(x.value)
+        return {}
+    modeles_defaut = _valeur('_PROVIDER_DEFAULT_MODEL')
+
+    # (1) Chaque entrée est complète et plausible
+    for nom, conf in table.items():
+        assert conf['base'].startswith('https://'), nom
+        assert conf['modele'], nom
+        assert isinstance(conf.get('outils'), bool), \
+            '%s : dire si le fournisseur sait appeler des outils, ne pas le supposer' % nom
+
+    # (2) UNE seule source pour le CHAT : plus de dictionnaire d'adresses recopié.
+    #     On ne compte pas les occurrences d'une adresse — les points d'accès
+    #     annexes (liste des modèles, agents, solde, complétion de code) la
+    #     réutilisent légitimement. Ce qu'on traque, c'est la structure dupliquée.
+    for reste in ("urls[provider]", "models[provider]",
+                  "urls = {\n        'deepseek'", "models = {\n        'deepseek'"):
+        assert reste not in eng, 'reste de l’ancienne table locale : ' + reste
+    assert eng.count('_base_openai_compat(') >= 6, \
+        'les appels doivent tirer leur adresse de la table, pas d’un littéral'
+
+    # (3) Le flux et le flux-avec-outils se servent de la table, pas d'une liste figée
+    assert 'elif provider in FOURNISSEURS_OPENAI_COMPAT:' in eng
+    assert "_SUPPORTED = {p for p, c in FOURNISSEURS_OPENAI_COMPAT.items() if c.get('outils')}" in eng, \
+        "les fournisseurs sans outils doivent retomber sur le flux simple, pas envoyer une requête ignorée"
+
+    # (4) Les deux nouveaux sont câblés de bout en bout
+    for nom in ('groq', 'cerebras'):
+        assert nom in modeles_defaut, '%s : modèle par défaut' % nom
+        assert nom in SV.ids(), '%s : absent du catalogue des services (pas de champ de clé)' % nom
+        assert "'%s':" % nom in db or "('%s'," % nom in db, '%s : tarif/portefeuille' % nom
+        assert nom.upper() + '_API_KEY' in eng, '%s : clé d’environnement (engine)' % nom
+        assert nom.upper() + '_API_KEY' in hub, '%s : clé d’environnement (hub)' % nom
+        assert "'%s':       '%s'," % (nom, nom) in hub or "'%s':   '%s'," % (nom, nom) in hub, \
+            '%s : correspondance clé→fournisseur dans hub' % nom
+        assert 'value="%s"' % nom in html, '%s : absent des sélecteurs de fournisseur' % nom
+
+    # (5) Le catalogue de modèles est interrogé en direct pour les deux : leurs
+    #     modèles à poids ouverts changent souvent, rien ne doit être figé.
+    assert "if provider in ('groq', 'cerebras'):" in eng and "'/models'" in eng
+
+    # (6) Repli automatique : les deux entrent dans l'ordre de secours, mais
+    #     APRÈS les modèles propriétaires — ils sont rapides, pas plus fins.
+    ordre = eng[eng.index("ordre = ['mistral'"):]
+    ordre = ordre[:ordre.index(']')]
+    for nom in ('groq', 'cerebras'):
+        assert nom in ordre, '%s : absent du repli automatique' % nom
+    assert ordre.index('anthropic') < ordre.index('groq')
+
+    # (7) Modèles conseillés : le minimum vérifié, le catalogue vivant fait le reste
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    bloc = app[app.index('const MODELS_BY_PROVIDER'):]
+    bloc = bloc[:bloc.index('\n};')]
+    for nom in ('groq', 'cerebras'):
+        assert nom + ':' in bloc, '%s : aucun modèle conseillé' % nom
+    ok("fournisseurs : source unique d'adresses, Groq et Cerebras câblés de bout en bout")
+
+
 def test_accessibilite_des_medias():
     """Toute image, tout lecteur audio ou vidéo doit avoir un nom.
 
@@ -2797,6 +2888,7 @@ if __name__ == '__main__':
                test_musique_lyria,
                test_imagerie_reglee, test_video_veo, test_alt_honnete,
                test_contrat_interface_serveur,
-               test_accessibilite_des_medias, test_modeles_conseilles]:
+               test_accessibilite_des_medias, test_modeles_conseilles,
+               test_fournisseurs_cables_partout]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
