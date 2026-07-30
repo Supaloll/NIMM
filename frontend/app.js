@@ -5156,6 +5156,13 @@ const MODELS_BY_PROVIDER = {
         { value: 'gemini-3.5-flash',          label: '💰 Gemini 3.5 Flash — solide, éprouvé' },
         { value: 'gemini-3.1-pro-preview',    label: '💰💰💰 Gemini 3.1 Pro — le plus puissant' },
     ],
+    groq: [
+        { value: 'llama-3.3-70b-versatile', label: '⚡ Llama 3.3 70B — rapide, polyvalent' },
+    ],
+    cerebras: [
+        { value: 'llama-3.3-70b',           label: '⚡ Llama 3.3 70B — rapide, polyvalent' },
+        { value: 'llama3.1-8b',             label: '⚡ Llama 3.1 8B — le plus rapide' },
+    ],
     mistral: [
         { value: 'mistral-small-latest',        label: '💰 Mistral Small — léger, économique' },
         { value: 'mistral-medium-latest',       label: '💰💰 Mistral Medium — équilibré' },

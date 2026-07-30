@@ -167,9 +167,49 @@ def classer_erreur_fournisseur(exc, provider: str = '') -> dict:
             'message': f"Erreur inattendue de {nom} : {str(exc)[:200]}"}
 
 
+# ══════════════════════════════════════════
+# FOURNISSEURS COMPATIBLES OpenAI
+# ══════════════════════════════════════════
+#
+# POURQUOI CETTE TABLE
+# L'adresse de base et le modèle de repli de ces fournisseurs étaient recopiés
+# à TROIS endroits : l'appel direct, le flux, et le flux avec outils. Trois
+# copies, c'est la garantie qu'un ajout n'en touche que deux — un fournisseur
+# qui répond en direct mais reste muet en flux, sans erreur nulle part.
+# Source unique désormais : ajouter un fournisseur, c'est ajouter une ligne ici.
+#
+# `outils` dit si le fournisseur sait exécuter des appels d'outils. Groq et
+# Cerebras servent des modèles à poids ouverts dont le support varie d'un modèle
+# à l'autre : on ne le promet donc pas, et NIMM retombe proprement sur un flux
+# sans outils plutôt que d'envoyer une requête qui serait ignorée.
+FOURNISSEURS_OPENAI_COMPAT = {
+    'deepseek':   {'base': 'https://api.deepseek.com/v1',     'modele': 'deepseek-chat',
+                   'outils': True},
+    'openai':     {'base': 'https://api.openai.com/v1',       'modele': 'gpt-4o-mini',
+                   'outils': True},
+    'openrouter': {'base': 'https://openrouter.ai/api/v1',    'modele': 'openai/gpt-4o-mini',
+                   'outils': True},
+    'mistral':    {'base': 'https://api.mistral.ai/v1',       'modele': 'mistral-small-latest',
+                   'outils': True},
+    # Inférence à très faible latence. Le temps avant le PREMIER mot compte
+    # double quand la réponse est écoutée plutôt que lue.
+    'groq':       {'base': 'https://api.groq.com/openai/v1',  'modele': 'llama-3.3-70b-versatile',
+                   'outils': False},
+    'cerebras':   {'base': 'https://api.cerebras.ai/v1',      'modele': 'llama-3.3-70b',
+                   'outils': False},
+}
+
+def _base_openai_compat(provider: str) -> str:
+    return FOURNISSEURS_OPENAI_COMPAT.get(provider, {}).get('base', '')
+
+def _modele_openai_compat(provider: str) -> str:
+    return FOURNISSEURS_OPENAI_COMPAT.get(provider, {}).get('modele', '')
+
+
 def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
     """Premier fournisseur configuré autre que celui qui vient d'échouer, ou ''."""
-    ordre = ['mistral', 'anthropic', 'openai', 'gemini', 'deepseek', 'openrouter']
+    ordre = ['mistral', 'anthropic', 'openai', 'gemini', 'deepseek', 'openrouter',
+             'groq', 'cerebras']
     for p in ordre:
         if p == (provider_courant or '').lower():
             continue
@@ -273,6 +313,8 @@ def get_api_key(provider: str, db_keys: dict = None) -> Optional[str]:
         'openrouter': 'OPENROUTER_API_KEY',
         'mistral':    'MISTRAL_API_KEY',
         'tavily':     'TAVILY_API_KEY',
+        'groq':       'GROQ_API_KEY',
+        'cerebras':   'CEREBRAS_API_KEY',
     }
     return os.getenv(env_map.get(provider, ''))
 
@@ -289,6 +331,8 @@ _PROVIDER_DEFAULT_MODEL = {
     'mistral':    'mistral-small-latest',
     'gemini':     'gemini-3.5-flash',
     'ollama':     'llama3.1:8b',
+    'groq':       'llama-3.3-70b-versatile',
+    'cerebras':   'llama-3.3-70b',
 }
 
 # Préfixe de nom de modèle → fournisseur propriétaire (détection d'incohérence)
@@ -976,6 +1020,12 @@ def _models_endpoint(provider: str, api_key: str):
         return ('https://api.deepseek.com/models',
                 {'Authorization': f'Bearer {api_key}'},
                 lambda d: [(i, i) for i in _ids(d)])
+    if provider in ('groq', 'cerebras'):
+        # Catalogue interrogé en direct : ces deux-là servent des modèles à
+        # poids ouverts qui changent souvent. Rien n'est figé dans le code.
+        return (_base_openai_compat(provider) + '/models',
+                {'Authorization': f'Bearer {api_key}'},
+                lambda d: [(i, i) for i in _ids(d)])
     if provider == 'mistral':
         return ('https://api.mistral.ai/v1/models',
                 {'Authorization': f'Bearer {api_key}'},
@@ -1060,15 +1110,20 @@ async def call_llm(
         return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images,
                                      tools=tools, output_schema=output_schema, thinking_budget=thinking_budget)
     elif provider == 'deepseek':
-        return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', 'https://api.deepseek.com/v1', images=images, output_schema=output_schema)
+        return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', _base_openai_compat('deepseek'), images=images, output_schema=output_schema)
     elif provider == 'gemini':
         return await _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys, tools=tools)
     elif provider == 'openai':
-        return await _call_openai_compat(messages, model or 'gpt-4o', system_prompt, max_tokens, temperature, api_keys, 'openai', 'https://api.openai.com/v1', images=images, output_schema=output_schema)
+        return await _call_openai_compat(messages, model or 'gpt-4o', system_prompt, max_tokens, temperature, api_keys, 'openai', _base_openai_compat('openai'), images=images, output_schema=output_schema)
     elif provider == 'openrouter':
-        return await _call_openai_compat(messages, model or 'mistralai/mistral-7b-instruct', system_prompt, max_tokens, temperature, api_keys, 'openrouter', 'https://openrouter.ai/api/v1', images=images, output_schema=output_schema)
+        return await _call_openai_compat(messages, model or 'mistralai/mistral-7b-instruct', system_prompt, max_tokens, temperature, api_keys, 'openrouter', _base_openai_compat('openrouter'), images=images, output_schema=output_schema)
     elif provider == 'mistral':
-        return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', 'https://api.mistral.ai/v1', images=images, tools=tools, output_schema=output_schema)
+        return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', _base_openai_compat('mistral'), images=images, tools=tools, output_schema=output_schema)
+    elif provider in ('groq', 'cerebras'):
+        return await _call_openai_compat(messages, model or _modele_openai_compat(provider),
+                                         system_prompt, max_tokens, temperature, api_keys,
+                                         provider, _base_openai_compat(provider),
+                                         images=images, output_schema=output_schema)
     elif provider == 'ollama':
         return await _call_ollama(messages, model or 'llama3', system_prompt, max_tokens, temperature)
     else:
@@ -2061,22 +2116,11 @@ async def call_llm_stream(
                 else:
                     _accumulated.append(token)
                     yield token
-        elif provider in ('deepseek', 'openai', 'openrouter', 'mistral'):
-            urls = {
-                'deepseek':   'https://api.deepseek.com/v1',
-                'openai':     'https://api.openai.com/v1',
-                'openrouter': 'https://openrouter.ai/api/v1',
-                'mistral':    'https://api.mistral.ai/v1',
-            }
-            models = {
-                'deepseek':   'deepseek-chat',
-                'openai':     'gpt-4o-mini',
-                'openrouter': 'openai/gpt-4o-mini',
-                'mistral':    'mistral-small-latest',
-            }
+        elif provider in FOURNISSEURS_OPENAI_COMPAT:
             async for token in _call_openai_compat_stream(
-                messages, model or models[provider], system_prompt,
-                max_tokens, temperature, api_keys, provider, urls[provider], tools=tools
+                messages, model or _modele_openai_compat(provider), system_prompt,
+                max_tokens, temperature, api_keys, provider,
+                _base_openai_compat(provider), tools=tools
             ):
                 if isinstance(token, dict):
                     if token.get('__usage__'):
@@ -2153,7 +2197,7 @@ async def call_llm_stream_with_tools(
             yield ev
         return
 
-    _SUPPORTED = {'deepseek', 'openai', 'openrouter', 'mistral'}
+    _SUPPORTED = {p for p, c in FOURNISSEURS_OPENAI_COMPAT.items() if c.get('outils')}
     if provider not in _SUPPORTED:
         # Fallback : stream normal sans tools (providers sans tool-calling)
         async for token in call_llm_stream(
@@ -2169,26 +2213,14 @@ async def call_llm_stream_with_tools(
                 yield {"type": "token", "text": token}
         return
 
-    # ── Providers OpenAI-compat ──
-    urls = {
-        'deepseek':   'https://api.deepseek.com/v1',
-        'openai':     'https://api.openai.com/v1',
-        'openrouter': 'https://openrouter.ai/api/v1',
-        'mistral':    'https://api.mistral.ai/v1',
-    }
-    models = {
-        'deepseek':   'deepseek-chat',
-        'openai':     'gpt-4o-mini',
-        'openrouter': 'openai/gpt-4o-mini',
-        'mistral':    'mistral-small-latest',
-    }
-
+    # ── Fournisseurs compatibles OpenAI : adresses et modèles de repli dans
+    #    FOURNISSEURS_OPENAI_COMPAT, source unique (voir en tête de module).
     api_key  = get_api_key(provider, api_keys)
     if not api_key:
         raise ValueError(f"Clé API {provider} manquante.")
 
-    base_url = urls[provider]
-    _model   = model or models[provider]
+    base_url = _base_openai_compat(provider)
+    _model   = model or _modele_openai_compat(provider)
 
     oai_messages = []
     if system_prompt:

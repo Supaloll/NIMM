@@ -311,6 +311,8 @@ def _load_api_keys() -> dict:
     _env_map = {
         'anthropic':    'ANTHROPIC_API_KEY',
         'deepseek':     'DEEPSEEK_API_KEY',
+        'groq':         'GROQ_API_KEY',
+        'cerebras':     'CEREBRAS_API_KEY',
         'gemini':       'GEMINI_API_KEY',
         'openai':       'OPENAI_API_KEY',
         'openrouter':   'OPENROUTER_API_KEY',
@@ -3885,6 +3887,8 @@ async def process_message(
         'openai':     'openai',
         'gemini':     'gemini',
         'openrouter': 'openrouter',
+        'groq':       'groq',
+        'cerebras':   'cerebras',
     }
     if not provider:
         _msg = "T'as cru que tu pouvais chatter gratuitement ? Tout se paye mon ami. 😄\n\nVa te prendre une clé API — DeepSeek, Anthropic, OpenAI, tu as le choix — et reviens quand elle sera configurée. C'est dans les réglages ⚙️, section **Clés API**."
@@ -4221,6 +4225,8 @@ async def process_message_stream(
         'openai':     'openai',
         'gemini':     'gemini',
         'openrouter': 'openrouter',
+        'groq':       'groq',
+        'cerebras':   'cerebras',
     }
     if not provider:
         _msg = "⚙️ Aucun provider configuré. Ouvre les réglages (⚙️), choisis un provider et entre ta clé API."
