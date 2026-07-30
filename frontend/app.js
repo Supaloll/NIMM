@@ -1148,7 +1148,7 @@ const isAdmin = me.admin;
                     </label>
                 </div>
                 <div id="vb-audio-preview" style="display:none;margin-top:4px">
-                    <audio id="vb-preview-player" controls style="width:100%;height:32px"></audio>
+                    <audio id="vb-preview-player" controls style="width:100%;height:32px" aria-label="Aperçu de la voix"></audio>
                 </div>
                 <button id="vb-create-btn" onclick="_vbCreateVoice()" disabled
                     style="padding:6px 14px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:0.82rem;margin-top:4px;opacity:0.5"
@@ -5134,19 +5134,26 @@ document.getElementById('gemini-tts-style')?.addEventListener('change', async (e
 // AUTO-SAVE — chaque contrôle se sauvegarde au changement
 // ══════════════════════════════════════════
 
-// ── Modeles disponibles par provider (ordre : moins -> plus cher) ──
+// ── Modèles CONSEILLÉS par fournisseur (ordre : moins -> plus cher) ──
+// Ce n'est PAS le catalogue : le vrai catalogue est interrogé chez le fournisseur
+// et fusionné dans le sélecteur (voir _populateModelSelect). Cette liste ne sert
+// qu'à mettre en avant quelques modèles avec un libellé parlant — un catalogue
+// figé vieillirait à chaque sortie, celui-ci ne fait que des recommandations.
+// Conseils revus le 30/07/2026. Un modèle absent d'ici reste accessible sous
+// « Autres modèles disponibles ».
 const MODELS_BY_PROVIDER = {
     anthropic: [
         { value: 'claude-haiku-4-5-20251001',  label: '💰 Claude Haiku — rapide, economique' },
-        { value: 'claude-sonnet-4-6',           label: '💰💰 Claude Sonnet — equilibre' },
-        { value: 'claude-opus-4-6',             label: '💰💰💰 Claude Opus — le plus puissant' },
+        { value: 'claude-sonnet-5',             label: '💰💰 Claude Sonnet — equilibre' },
+        { value: 'claude-opus-5',               label: '💰💰💰 Claude Opus — le plus puissant' },
     ],
     deepseek: [
         { value: 'deepseek-chat',      label: '💰 DeepSeek Chat — usage general' },
         { value: 'deepseek-reasoner',  label: '💰💰 DeepSeek Reasoner — raisonnement avance' },
     ],
     gemini: [
-        { value: 'gemini-3.5-flash',          label: '💰 Gemini 3.5 Flash — rapide, economique' },
+        { value: 'gemini-3.6-flash',          label: '💰 Gemini 3.6 Flash — rapide, economique' },
+        { value: 'gemini-3.5-flash',          label: '💰 Gemini 3.5 Flash — solide, éprouvé' },
         { value: 'gemini-3.1-pro-preview',    label: '💰💰💰 Gemini 3.1 Pro — le plus puissant' },
     ],
     mistral: [
@@ -6256,9 +6263,14 @@ async function _vbPreview(voiceId, btn) {
         // Utiliser le player déjà dans le DOM + le rendre visible
         let player = document.getElementById('vb-preview-player');
         if (!player) {
+            // Repli : reproduire les MÊMES attributs que le lecteur du panneau.
+            // Sans « controls », l'aperçu démarre et ne peut plus être arrêté.
             player = document.createElement('audio');
             player.id = 'vb-preview-player';
-            document.body.appendChild(player);
+            player.controls = true;
+            player.setAttribute('aria-label', 'Aperçu de la voix');
+            player.style.cssText = 'width:100%;height:32px';
+            (document.getElementById('vb-audio-preview') || document.body).appendChild(player);
         }
         const previewDiv = document.getElementById('vb-audio-preview');
         if (previewDiv) previewDiv.style.display = 'block';
@@ -12365,6 +12377,38 @@ init();
         if (zone) zone.value = _bancDernierTexte;
         if (env) env.hidden = !_bancDernierTexte;
     }
+
+    // Quels moteurs répondront, AVANT de lancer une mesure de plusieurs dizaines
+    // de secondes. Les indisponibles sont listés avec leur raison : « Voyage :
+    // aucune clé » est une information, une ligne absente n'en est pas une.
+    async function _bancMoteurs() {
+        var box = document.getElementById('banc-moteurs');
+        if (!box) return;
+        try {
+            var d = await fetch('/api/rag/banc/moteurs').then(function (r) { return r.json(); });
+            box.innerHTML = '';
+            var liste = d.moteurs || [];
+            var prets = liste.filter(function (m) { return m.disponible; }).length;
+            var titre = document.createElement('p');
+            titre.style.cssText = 'margin:0 0 4px;';
+            titre.textContent = prets + ' moteur' + (prets > 1 ? 's' : '')
+                + ' interrogeable' + (prets > 1 ? 's' : '') + ' sur ' + liste.length + ' :';
+            box.appendChild(titre);
+            var ul = document.createElement('ul');
+            ul.style.cssText = 'margin:0;padding-left:1.2em;';
+            liste.forEach(function (m) {
+                var li = document.createElement('li');
+                li.textContent = (m.disponible ? '✔ ' : '· ') + m.libelle + ' — ' + m.raison;
+                if (!m.disponible) li.style.color = 'var(--text-muted)';
+                ul.appendChild(li);
+            });
+            box.appendChild(ul);
+        } catch (e) { /* silencieux : le banc reste lançable */ }
+    }
+
+    document.getElementById('banc-details')?.addEventListener('toggle', function () {
+        if (this.open) _bancMoteurs();
+    });
 
     document.getElementById('banc-run-btn')?.addEventListener('click', async function () {
         var q = (document.getElementById('banc-question')?.value || '').trim();

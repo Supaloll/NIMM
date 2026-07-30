@@ -515,7 +515,17 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '', api_key: 
 
 
 def list_voices() -> list:
-    """Retourne toutes les voix disponibles (Kokoro + Piper + Edge)."""
+    """Toutes les voix proposées dans le sélecteur, tous moteurs confondus.
+
+    SIX familles, et non trois : Kokoro et Piper (locaux), Edge, Gemini,
+    Voxtral (voix clonées chez Mistral) et Mistral Speech (voix preset).
+    Le libellé porte le moteur et une note, pour que le choix reste lisible
+    dans une liste déroulante longue.
+
+    Cette liste énumérait effectivement trois moteurs à l'origine ; le
+    docstring n'avait pas suivi, et il a suffi à faire croire à un manque
+    inexistant lors d'un audit. Le tenir à jour n'est donc pas cosmétique.
+    """
     result = []
 
     # ── Kokoro ── (⭐⭐⭐ — local, multilingue)
