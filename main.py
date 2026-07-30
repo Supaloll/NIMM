@@ -7167,11 +7167,6 @@ async def image_decrire(req: DecrireImageRequest):
     return {"description": desc,
             "raison": '' if desc else "Le modèle de vision n'a rien renvoyé."}
 
-@app.get("/api/imagerie/fiche/{nom}")
-async def imagerie_fiche(nom: str):
-    """Fiche d'une image : consigne, description accessible, réglages."""
-    return _fiche_lire(_IMAGES_DIR, _media_nom_sur(nom))
-
 class VideoLancerRequest(BaseModel):
     prompt: str
     modele: Optional[str] = 'veo31'
