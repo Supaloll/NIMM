@@ -211,6 +211,12 @@ data/.nimm_api_keyfile
 # Espaces de travail CoaNIMM (générés par fil, données utilisateur)
 data/coanimm_workspace/
 
+# Morceaux générés par Lyria : gros fichiers audio, aucune raison d'être versionnés
+data/musiques/
+
+# Vidéos générées par Veo : très gros fichiers, hors dépôt
+data/videos/
+
 # Modèles lourds — Kokoro TTS
 kokoro-v1.0.onnx
 voices-v1.0.bin

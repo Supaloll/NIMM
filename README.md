@@ -185,7 +185,7 @@ Elle est **chiffrée au repos** sur ta machine (jamais stockée en clair). C'est
 | OpenAI (GPT) | ☁️ Cloud | ✅ | Alternative solide |
 | Mistral | ☁️ Cloud | ✅ | Option européenne — Magistral (raisonnement), Codestral (code), Pixtral (vision), Voxtral (audio), OCR, TTS, Batch |
 | OpenRouter | ☁️ Cloud | ✅ | Accès à des dizaines de modèles |
-| Google Gemini | ☁️ Cloud | ✅ | ✅ Imagen | Recommandé — 1 500 images/jour gratuites |
+| Google Gemini | ☁️ Cloud | ✅ | ✅ Nano Banana | Recommandé — format, résolution et modèle réglables ; ouvre aussi Lyria (musique) et Veo (vidéo) |
 | Ollama | 🏠 Local | — | Gratuit, nécessite un PC puissant |
 
 ---
