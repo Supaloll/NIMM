@@ -130,7 +130,7 @@ _CAP_HELPER_CALLS = {
     'nimm_ask_llm': 'recherche', 'nimm_translate': 'recherche', 'nimm_expurgate': 'recherche', 'nimm_expurgate_doc': 'recherche', 'nimm_codestral_fim': 'recherche', 'nimm_ocr_document': 'recherche', 'nimm_read_pdf_visual': 'recherche', 'nimm_ask_documents': 'recherche', 'nimm_describe_video': 'recherche', 'nimm_describe_audio': 'recherche', 'nimm_pin_document': 'recherche',
     'nimm_ask_pinned': 'recherche', 'nimm_list_pinned': 'recherche',
     'nimm_unpin_document': 'recherche',
-    'nimm_veille': 'recherche', 'nimm_suivre_sujet': 'recherche',
+    'nimm_veille': 'recherche', 'nimm_lire_page': 'recherche', 'nimm_suivre_sujet': 'recherche',
     'nimm_attach_document': 'lecture', 'nimm_detach_document': 'lecture', 'nimm_mistral_speak': 'recherche',
     'nimm_describe_image': 'recherche', 'nimm_simplify': 'recherche', 'nimm_anonymize': 'recherche',
     'nimm_audio_overview': 'recherche',

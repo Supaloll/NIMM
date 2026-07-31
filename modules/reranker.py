@@ -105,7 +105,22 @@ def _post(url, corps, entetes=None, delai=None):
         return None
 
 
-def _rerank_local(question, textes):
+def _modele_pour(moteur, modele=None):
+    """Nom de modèle à employer pour ce moteur.
+
+    Le réglage `rag_rerank_modele` est UNIQUE alors qu'il y a plusieurs moteurs :
+    tel quel, il ne vaut que pour le moteur choisi. Le banc d'essai, lui,
+    interroge tous les moteurs d'affilée — il doit donc pouvoir imposer le
+    modèle par défaut de chacun, sinon on enverrait « rerank-v3.5 » à Jina et on
+    conclurait à tort que Jina ne répond pas.
+    """
+    if modele is not None:
+        return (modele or '').strip() or _MOTEURS_CLOUD.get(moteur, ('', 'reranker'))[1]
+    return (_reglage('rag_rerank_modele', '') or ''
+            ).strip() or _MOTEURS_CLOUD.get(moteur, ('', 'reranker'))[1]
+
+
+def _rerank_local(question, textes, modele=None):
     """Serveur llama.cpp lancé avec --reranking (endpoint /v1/rerank)."""
     base = (_reglage('rag_rerank_url', '') or '').strip().rstrip('/')
     if not base:
@@ -113,38 +128,38 @@ def _rerank_local(question, textes):
     if not base.endswith('/rerank'):
         base = base + '/v1/rerank'
     data = _post(base, {'query': question, 'documents': textes,
-                        'model': _reglage('rag_rerank_modele', '') or 'reranker'})
+                        'model': _modele_pour('local', modele)})
     return _lire_resultats(data)
 
 
-def _rerank_cohere(question, textes, api_keys):
+def _rerank_cohere(question, textes, api_keys, modele=None):
     cle = (api_keys.get('cohere') or '').strip()
     if not cle:
         return None
     data = _post('https://api.cohere.com/v2/rerank',
-                 {'model': _reglage('rag_rerank_modele', '') or _MOTEURS_CLOUD['cohere'][1],
+                 {'model': _modele_pour('cohere', modele),
                   'query': question, 'documents': textes, 'top_n': len(textes)},
                  {'Authorization': f'Bearer {cle}', 'Content-Type': 'application/json'})
     return _lire_resultats(data)
 
 
-def _rerank_voyage(question, textes, api_keys):
+def _rerank_voyage(question, textes, api_keys, modele=None):
     cle = (api_keys.get('voyage') or '').strip()
     if not cle:
         return None
     data = _post('https://api.voyageai.com/v1/rerank',
-                 {'model': _reglage('rag_rerank_modele', '') or _MOTEURS_CLOUD['voyage'][1],
+                 {'model': _modele_pour('voyage', modele),
                   'query': question, 'documents': textes},
                  {'Authorization': f'Bearer {cle}', 'Content-Type': 'application/json'})
     return _lire_resultats(data)
 
 
-def _rerank_jina(question, textes, api_keys):
+def _rerank_jina(question, textes, api_keys, modele=None):
     cle = (api_keys.get('jina') or '').strip()
     if not cle:
         return None
     data = _post('https://api.jina.ai/v1/rerank',
-                 {'model': _reglage('rag_rerank_modele', '') or _MOTEURS_CLOUD['jina'][1],
+                 {'model': _modele_pour('jina', modele),
                   'query': question, 'documents': textes, 'top_n': len(textes)},
                  {'Authorization': f'Bearer {cle}', 'Content-Type': 'application/json'})
     return _lire_resultats(data)
@@ -318,3 +333,221 @@ def reordonner(question, passages, api_keys=None, top_n=3):
               + (f", {len(ecartes)} écarté(s) sous le seuil {seuil:.2f}" if ecartes else "")
               + ".")
     return retenus[:top_n], moteur, resume
+
+
+# ═══════════════════════════ BANC D'ESSAI ═══════════════════════════
+#
+# POURQUOI
+# Choisir un réordonnanceur au jugé, c'est régler à l'oreille un instrument
+# qu'on n'entend pas : le seul retour disponible aujourd'hui est « la réponse
+# m'a semblé meilleure ». Le banc pose la MÊME question aux mêmes passages avec
+# chaque moteur configuré, et rend les trois choses qui décident vraiment :
+# quels passages remontent, avec quel score, et en combien de temps.
+#
+# PRUDENCE
+# Le banc ne modifie AUCUN réglage. Il n'écrit rien, ne remplace rien : il
+# mesure. Un moteur qui tombe est rapporté comme tel, pas masqué.
+
+MOTEURS_BANC = ('semantique', 'local', 'cohere', 'voyage', 'jina', 'llm')
+
+LIBELLES_MOTEURS = {
+    'semantique': "Sans réordonnanceur (ordre de la recherche par sens)",
+    'local':      "Local llama.cpp",
+    'cohere':     "Cohere",
+    'voyage':     "Voyage",
+    'jina':       "Jina",
+    'llm':        "Modèle de conversation (juge)",
+}
+
+
+def moteurs_testables(api_keys=None):
+    """Ce que le banc peut interroger, et pourquoi le reste est hors course.
+
+    On rend TOUS les moteurs, y compris les indisponibles, avec leur raison :
+    « Voyage : aucune clé enregistrée » est une information utile, l'absence
+    silencieuse d'une ligne ne l'est pas.
+    """
+    api_keys = api_keys or {}
+    sortie = []
+    for nom in MOTEURS_BANC:
+        if nom == 'semantique':
+            sortie.append({'nom': nom, 'libelle': LIBELLES_MOTEURS[nom],
+                           'disponible': True, 'raison': "Référence de comparaison."})
+        elif nom == 'local':
+            url = (_reglage('rag_rerank_url', '') or '').strip()
+            sortie.append({'nom': nom, 'libelle': LIBELLES_MOTEURS[nom],
+                           'disponible': bool(url),
+                           'raison': ("Serveur local : rien ne quitte ta machine."
+                                      if url else
+                                      "Aucune adresse de serveur llama.cpp renseignée.")})
+        elif nom == 'llm':
+            sortie.append({'nom': nom, 'libelle': LIBELLES_MOTEURS[nom],
+                           'disponible': True,
+                           'raison': "Aucune clé dédiée, mais compte une seconde ou plus."})
+        else:
+            cle = _MOTEURS_CLOUD[nom][0]
+            presente = bool((api_keys.get(cle) or '').strip())
+            sortie.append({'nom': nom, 'libelle': LIBELLES_MOTEURS[nom],
+                           'disponible': presente,
+                           'raison': (f"Clé « {cle} » enregistrée." if presente else
+                                      f"Aucune clé « {cle} » enregistrée.")})
+    return sortie
+
+
+def _classement_depuis_scores(scores, passages, seuil):
+    """Transforme [(indice, score)] en un classement lisible et ordonné."""
+    lignes = []
+    for rang, (idx, sc) in enumerate(sorted(scores, key=lambda x: x[1], reverse=True), 1):
+        if idx < 0 or idx >= len(passages):
+            continue
+        p = passages[idx]
+        lignes.append({
+            'rang': rang,
+            'passage': idx,
+            'score': round(float(sc), 3),
+            'retenu': float(sc) >= seuil,
+            'titre': (p.get('titre') or 'Document')[:200],
+            'source': (p.get('source') or '')[:300],
+        })
+    return lignes
+
+
+async def banc_essai(question, api_keys=None, k=10, top_n=5, moteurs=None):
+    """Compare les réordonnanceurs sur une même question. Ne change aucun réglage.
+
+    Rend un dict prêt à afficher ET un rapport en texte brut (`texte`), pour
+    qu'un résultat de mesure puisse être copié, collé, relu au braille ou gardé
+    dans un fichier — un tableau qui n'existe qu'à l'écran ne se compare pas
+    d'une semaine à l'autre.
+    """
+    import time as _time
+    import asyncio as _aio
+
+    api_keys = api_keys or {}
+    question = (question or '').strip()
+    seuil = seuil_pertinence()
+    if not question:
+        return {'erreur': "Pose une question : le banc a besoin d'une demande à mesurer."}
+
+    try:
+        from modules.enrichissement import search_documents
+        _k = max(1, min(_MAX_PASSAGES, int(k or 10)))
+        # La recherche calcule un plongement : bloquante, elle part dans un fil.
+        passages = await _aio.to_thread(search_documents, question, _k)
+    except Exception as e:
+        return {'erreur': f"Base de connaissances inaccessible : {e}"}
+    if not passages:
+        return {'erreur': "La recherche par sens ne remonte aucun passage pour cette "
+                          "question : il n'y a rien à réordonner. Vérifie que des "
+                          "documents sont bien ingérés."}
+
+    textes = [(p.get('passage') or '')[:_TAILLE_PASSAGE] for p in passages]
+    dispo = {m['nom']: m for m in moteurs_testables(api_keys)}
+    demandes = [m for m in (moteurs or MOTEURS_BANC) if m in dispo]
+
+    resultats = []
+    for nom in demandes:
+        info = dispo[nom]
+        if not info['disponible']:
+            resultats.append({'moteur': nom, 'libelle': info['libelle'], 'ok': False,
+                              'secondes': 0.0, 'note': info['raison'], 'classement': []})
+            continue
+
+        debut = _time.perf_counter()
+        scores, note = None, ''
+        try:
+            if nom == 'semantique':
+                # Référence : l'ordre rendu par la recherche par sens, sans retouche.
+                # Le score sémantique n'est PAS sur la même échelle que celui d'un
+                # réordonnanceur — on le rend tel quel, sans le comparer au seuil.
+                scores = [(i, float(p.get('score') or 0.0)) for i, p in enumerate(passages)]
+            elif nom == 'llm':
+                scores = await _rerank_llm(question, textes, api_keys)
+            else:
+                # Les moteurs HTTP sont synchrones : les appeler ici bloquerait la
+                # boucle, donc toute la conversation, pendant que le banc mesure.
+                _fn = {'local': lambda: _rerank_local(question, textes),
+                       'cohere': lambda: _rerank_cohere(question, textes, api_keys),
+                       'voyage': lambda: _rerank_voyage(question, textes, api_keys),
+                       'jina': lambda: _rerank_jina(question, textes, api_keys)}.get(nom)
+                scores = await _aio.to_thread(_fn) if _fn else None
+        except Exception as e:
+            scores, note = None, f"Erreur : {e}"
+        secondes = round(_time.perf_counter() - debut, 2)
+
+        if not scores:
+            resultats.append({
+                'moteur': nom, 'libelle': info['libelle'], 'ok': False,
+                'secondes': secondes,
+                'note': note or "Pas de réponse exploitable de ce moteur.",
+                'classement': []})
+            continue
+
+        # Le classement sémantique garde son ordre d'origine : ses scores ne se
+        # jugent pas au seuil des réordonnanceurs.
+        if nom == 'semantique':
+            lignes = []
+            for rang, (idx, sc) in enumerate(scores, 1):
+                p = passages[idx]
+                lignes.append({'rang': rang, 'passage': idx, 'score': round(float(sc), 3),
+                               'retenu': rang <= 3, 'titre': (p.get('titre') or 'Document')[:200],
+                               'source': (p.get('source') or '')[:300]})
+        else:
+            lignes = _classement_depuis_scores(scores, passages, seuil)
+
+        retenus = sum(1 for l in lignes if l['retenu'])
+        resultats.append({
+            'moteur': nom, 'libelle': info['libelle'], 'ok': True,
+            'secondes': secondes,
+            'note': (f"{retenus} passage(s) au-dessus du seuil {seuil:.2f} "
+                     f"sur {len(lignes)}." if nom != 'semantique' else
+                     "Ordre d'origine ; les trois premiers sont ceux que NIMM "
+                     "servirait sans réordonnanceur."),
+            'classement': lignes[:max(1, int(top_n or 5))]})
+
+    rapport = {
+        'question': question,
+        'seuil': seuil,
+        'nb_passages': len(passages),
+        'passages': [{'i': i,
+                      'titre': (p.get('titre') or 'Document')[:200],
+                      'source': (p.get('source') or '')[:300],
+                      'extrait': (p.get('passage') or '')[:400]}
+                     for i, p in enumerate(passages)],
+        'moteurs': resultats,
+    }
+    rapport['texte'] = rapport_texte(rapport)
+    return rapport
+
+
+def rapport_texte(rapport):
+    """Rapport en texte brut : lisible en braille, copiable, comparable dans le temps."""
+    if not isinstance(rapport, dict) or rapport.get('erreur'):
+        return (rapport or {}).get('erreur', '')
+    l = []
+    l.append(f"BANC D'ESSAI DU RÉORDONNANCEUR")
+    l.append(f"Question : {rapport.get('question', '')}")
+    l.append(f"Passages candidats : {rapport.get('nb_passages', 0)} — "
+             f"seuil de pertinence : {rapport.get('seuil', 0):.2f}")
+    l.append('')
+    for m in rapport.get('moteurs', []):
+        l.append(f"── {m.get('libelle', m.get('moteur', ''))} — "
+                 + (f"{m.get('secondes', 0):.2f} s" if m.get('ok') else "indisponible"))
+        l.append(f"   {m.get('note', '')}")
+        for ligne in m.get('classement', []):
+            marque = '✔' if ligne.get('retenu') else '·'
+            l.append(f"   {marque} {ligne.get('rang')}. [{ligne.get('score')}] "
+                     f"{ligne.get('titre', '')}"
+                     + (f" — {ligne.get('source')}" if ligne.get('source') else ''))
+        l.append('')
+    ok = [m for m in rapport.get('moteurs', []) if m.get('ok') and m.get('moteur') != 'semantique']
+    if ok:
+        rapide = min(ok, key=lambda m: m.get('secondes', 99))
+        l.append(f"Le plus rapide des réordonnanceurs : {rapide.get('libelle')} "
+                 f"({rapide.get('secondes'):.2f} s). La pertinence, elle, se juge "
+                 f"en lisant les titres ci-dessus : aucun chiffre ne dira à ta "
+                 f"place si le bon document est remonté.")
+    else:
+        l.append("Aucun réordonnanceur n'a répondu : seule la recherche par sens "
+                 "est mesurée ci-dessus.")
+    return '\n'.join(l)

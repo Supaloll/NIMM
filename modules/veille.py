@@ -97,42 +97,96 @@ def _lire_resultats(data):
     return [r for r in sortie if r['url']]
 
 
-def _bloc_contenus(nb_caracteres=2000, resume=False):
+# Les catégories d'Exa filtrent à la SOURCE. « Article de recherche » sur une
+# veille scientifique évite des dizaines de billets de blog ; « PDF » ramène des
+# documents lisibles hors ligne. Libellés français, valeurs imposées par l'API.
+CATEGORIES = {
+    '': 'Tout',
+    'research paper': 'Articles de recherche',
+    'news': 'Actualités',
+    'pdf': 'Documents PDF',
+    'company': 'Sites d\u2019entreprises ou d\u2019organisations',
+    'github': 'Dépôts de code',
+    'personal site': 'Sites personnels et blogs',
+    'financial report': 'Rapports financiers',
+}
+
+
+def _bloc_contenus(nb_caracteres=2000, question_resume=''):
+    """Ce qu'on demande à Exa de rapporter pour chaque résultat.
+
+    Le résumé est le point important pour une écoute à la synthèse vocale :
+    plutôt que 2000 caractères de page brute, Exa rend trois phrases répondant
+    à LA question posée. On écoute une réponse, pas un site.
+    """
     c = {'text': {'maxCharacters': nb_caracteres}}
-    if resume:
-        c['summary'] = {'query': 'De quoi parle ce document, en trois phrases ?'}
+    if (question_resume or '').strip():
+        c['summary'] = {'query': question_resume.strip()[:400]}
     return c
 
 
 def exa_search(requete, nb=8, depuis_jours=None, domaines_exclus=None,
-               categorie='', api_keys=None):
-    """Recherche par le sens. Rend (résultats, erreur)."""
+               categorie='', api_keys=None, resume=True, domaines_inclus=None):
+    """Recherche par le sens. Rend (résultats, erreur).
+
+    `resume` fait rédiger par Exa, pour chaque résultat, trois phrases répondant
+    à la requête : c'est ce qu'on veut écouter, plutôt qu'un début de page.
+    """
     if not (requete or '').strip():
         return [], "Requête vide."
     corps = {'query': requete.strip(), 'numResults': max(1, min(25, int(nb))),
-             'type': 'auto', 'contents': _bloc_contenus()}
+             'type': 'auto',
+             'contents': _bloc_contenus(question_resume=requete if resume else '')}
     if depuis_jours:
         corps['startPublishedDate'] = (
             datetime.now() - timedelta(days=int(depuis_jours))).strftime('%Y-%m-%dT00:00:00.000Z')
     if domaines_exclus:
         corps['excludeDomains'] = list(domaines_exclus)
-    if categorie:
+    if domaines_inclus:
+        corps['includeDomains'] = list(domaines_inclus)
+    if categorie and categorie in CATEGORIES:
         corps['category'] = categorie
     data, err = _appel_exa('search', corps, api_keys)
     return (_lire_resultats(data), '') if not err else ([], err)
 
 
-def exa_similar(url, nb=8, depuis_jours=None, api_keys=None):
+def exa_similar(url, nb=8, depuis_jours=None, api_keys=None, categorie=''):
     """Documents proches d'une page donnée — « encore comme celui-ci »."""
     if not (url or '').strip():
         return [], "Aucune adresse fournie."
     corps = {'url': url.strip(), 'numResults': max(1, min(25, int(nb))),
              'contents': _bloc_contenus()}
+    if categorie and categorie in CATEGORIES:
+        corps['category'] = categorie
     if depuis_jours:
         corps['startPublishedDate'] = (
             datetime.now() - timedelta(days=int(depuis_jours))).strftime('%Y-%m-%dT00:00:00.000Z')
     data, err = _appel_exa('findSimilar', corps, api_keys)
     return (_lire_resultats(data), '') if not err else ([], err)
+
+
+def exa_lire(urls, nb_caracteres=8000, api_keys=None):
+    """Rend le TEXTE PROPRE d'une ou plusieurs pages web.
+
+    Un article lu par un lecteur d'écran depuis un navigateur, c'est aussi les
+    menus, les bandeaux de consentement et les encarts publicitaires. Exa rend
+    le contenu débarrassé de tout cela — donc directement écoutable, et
+    directement versable dans la base de connaissances.
+    """
+    if isinstance(urls, str):
+        urls = [urls]
+    urls = [u.strip() for u in (urls or []) if (u or '').strip()]
+    if not urls:
+        return [], "Aucune adresse fournie."
+    data, err = _appel_exa('contents', {'urls': urls[:10],
+                                        'text': {'maxCharacters': int(nb_caracteres)}},
+                           api_keys)
+    if err:
+        return [], err
+    resultats = _lire_resultats(data)
+    if not resultats:
+        return [], "Exa n'a rien pu extraire de cette adresse."
+    return resultats, ''
 
 
 # ────────────────────────── sujets de veille ──────────────────────────
@@ -160,7 +214,8 @@ def list_sujets():
     return v if isinstance(v, list) else []
 
 
-def add_sujet(libelle, requete, periode='hebdomadaire', url_reference='', nb=8):
+def add_sujet(libelle, requete, periode='hebdomadaire', url_reference='', nb=8,
+              categorie=''):
     """Ajoute un sujet suivi. `url_reference` remplace la requête si fournie :
     on cherche alors ce qui RESSEMBLE à cette page."""
     import uuid
@@ -172,6 +227,7 @@ def add_sujet(libelle, requete, periode='hebdomadaire', url_reference='', nb=8):
         'url_reference': (url_reference or '').strip()[:500],
         'periode': periode if periode in PERIODES else 'hebdomadaire',
         'nb': max(1, min(25, int(nb or 8))),
+        'categorie': categorie if categorie in CATEGORIES else '',
         'actif': True,
         'cree_le': datetime.now().isoformat(timespec='seconds'),
         'dernier_run': '',
@@ -183,12 +239,19 @@ def add_sujet(libelle, requete, periode='hebdomadaire', url_reference='', nb=8):
     return sujet
 
 
+_CHAMPS_INSCRIPTIBLES = ('dernier_run', 'dernier_statut', 'nb_trouves',
+                         'notifie', 'dernieres_nouveautes', 'dernier_signal')
+
+
 def update_sujet(sujet_id, **champs):
+    """Met à jour un sujet. La liste blanche compte : les sujets créés avant
+    l'ajout du signalement n'ont pas encore les champs `notifie` et compagnie,
+    et un simple `k in s` les rejetterait en silence."""
     sujets = list_sujets()
     for s in sujets:
         if s.get('id') == sujet_id:
             for k, v in champs.items():
-                if k in s or k in ('dernier_run', 'dernier_statut', 'nb_trouves'):
+                if k in s or k in _CHAMPS_INSCRIPTIBLES:
                     s[k] = v
             _ecrire('veille_sujets', sujets)
             return s
@@ -242,12 +305,13 @@ def relever_sujet(sujet, api_keys=None, ingerer=True):
     # On ratisse un peu plus large que la période : un article publié la veille
     # du dernier relevé n'aurait sinon jamais été vu.
     fenetre = jours * 2
+    cat = sujet.get('categorie', '') or ''
     if (sujet.get('url_reference') or '').strip():
         resultats, err = exa_similar(sujet['url_reference'], sujet.get('nb', 8),
-                                     fenetre, api_keys)
+                                     fenetre, api_keys, categorie=cat)
     else:
         resultats, err = exa_search(sujet.get('requete', ''), sujet.get('nb', 8),
-                                    fenetre, api_keys=api_keys)
+                                    fenetre, api_keys=api_keys, categorie=cat)
     if err:
         return [], f"Veille « {sujet.get('libelle', '?')} » : {err}"
 
@@ -275,16 +339,57 @@ def relever_sujet(sujet, api_keys=None, ingerer=True):
                       f"nouveauté(s) — {titres}{suite}.")
 
 
-def relever_les_dus(api_keys=None, maintenant=None):
-    """Passe tous les sujets échus. Appelé par le travailleur de fond."""
+def _merite_signalement(nouveaux, message, sujet):
+    """Ce relevé mérite-t-il de déranger ? Fonction PURE, donc testable.
+
+    Trois cas, et une seule règle de fond : ne signaler que ce qui APPREND
+    quelque chose. Une annonce toutes les heures qui répète « rien de nouveau »
+    finit par être ignorée — et le jour où elle dit quelque chose, on ne l'écoute
+    plus. C'est le défaut qu'on corrige ici.
+
+      - des nouveautés          → toujours signalé ;
+      - rien de nouveau         → jamais signalé (c'est le fonctionnement normal) ;
+      - une panne (clé absente, réseau, Exa qui refuse) → signalée UNE fois,
+        puis tue tant que la panne reste la même. Sinon « aucune clé Exa »
+        reviendrait à chaque heure.
+    """
+    if nouveaux:
+        return True
+    texte = (message or '')
+    if 'rien de nouveau' in texte.lower():
+        return False
+    return texte.strip() != (sujet.get('dernier_signal') or '').strip()
+
+
+def relever_les_dus(api_keys=None, maintenant=None, ingerer=True):
+    """Passe tous les sujets échus. Appelé par le travailleur de fond.
+
+    Pose au passage le drapeau de signalement : le relevé se fait en arrière-plan,
+    il faut donc laisser une trace que l'interface viendra lire et annoncer.
+
+    `ingerer=False` mesure la boucle sans toucher à la base de connaissances —
+    c'est ce qui rend cette fonction testable sans embarquer tout le RAG.
+    """
     messages = []
     for sujet in list_sujets():
         if not veille_due(sujet, maintenant):
             continue
-        nouveaux, message = relever_sujet(sujet, api_keys)
-        update_sujet(sujet['id'],
-                     dernier_run=(maintenant or datetime.now()).isoformat(timespec='seconds'),
-                     dernier_statut=message, nb_trouves=len(nouveaux))
+        nouveaux, message = relever_sujet(sujet, api_keys, ingerer=ingerer)
+        champs = {
+            'dernier_run': (maintenant or datetime.now()).isoformat(timespec='seconds'),
+            'dernier_statut': message,
+            'nb_trouves': len(nouveaux),
+        }
+        if _merite_signalement(nouveaux, message, sujet):
+            champs['notifie'] = False
+            champs['dernier_signal'] = message
+            champs['dernieres_nouveautes'] = [
+                {'titre': (r.get('titre') or '')[:200],
+                 'url': (r.get('url') or '')[:500],
+                 'date': (r.get('date') or '')[:10]}
+                for r in nouveaux[:10]
+            ]
+        update_sujet(sujet['id'], **champs)
         messages.append(message)
         try:
             from core.database import add_diagnostic
@@ -292,3 +397,26 @@ def relever_les_dus(api_keys=None, maintenant=None):
         except Exception:
             pass
     return messages
+
+
+def notifications_en_attente():
+    """Relevés terminés en arrière-plan et pas encore annoncés.
+
+    LECTURE UNIQUE : appeler cette fonction consomme les notifications
+    (`notifie` repasse à vrai). Même contrat que les ricochets planifiés —
+    l'interface annonce une fois, pas à chaque battement d'horloge.
+    """
+    en_attente = []
+    for sujet in list_sujets():
+        if sujet.get('notifie') is not False:
+            continue
+        en_attente.append({
+            'id': sujet.get('id', ''),
+            'libelle': sujet.get('libelle', ''),
+            'message': sujet.get('dernier_statut', ''),
+            'quand': sujet.get('dernier_run', ''),
+            'nb': int(sujet.get('nb_trouves') or 0),
+            'nouveautes': sujet.get('dernieres_nouveautes') or [],
+        })
+        update_sujet(sujet.get('id', ''), notifie=True)
+    return en_attente

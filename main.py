@@ -3891,17 +3891,6 @@ async def save_stt_dict(req: dict = Body(...)):
     set_setting('stt_dict', _j.dumps(entries, ensure_ascii=False))
     return {"status": "ok"}
 
-@app.get("/api/settings/stt-turbo")
-async def get_stt_turbo():
-    return {"enabled": get_setting('stt_turbo_enabled', 'false').lower() == 'true'}
-
-@app.post("/api/settings/stt-turbo")
-async def set_stt_turbo(req: SettingValue):
-    if req.value not in ('true', 'false'):
-        raise HTTPException(400, "Valeur invalide (true/false)")
-    set_setting('stt_turbo_enabled', req.value)
-    return {"status": "ok"}
-
 @app.get("/api/settings/stt")
 async def get_stt_settings():
     return {
@@ -3923,16 +3912,18 @@ class VeilleSujetReq(BaseModel):
     url_reference: Optional[str] = None
     periode: str = "hebdomadaire"
     nb: int = 8
+    categorie: str = ""
     actif: Optional[bool] = None
 
 @app.get("/api/veille/sujets")
 async def veille_lister():
     """Sujets suivis, avec leur dernier relevé."""
-    from modules.veille import list_sujets, veille_due, PERIODES
+    from modules.veille import list_sujets, veille_due, PERIODES, CATEGORIES
     sujets = list_sujets()
     for s in sujets:
         s["du"] = veille_due(s)
-    return {"sujets": sujets, "periodes": list(PERIODES.keys())}
+    return {"sujets": sujets, "periodes": list(PERIODES.keys()),
+            "categories": [{"valeur": k, "libelle": v} for k, v in CATEGORIES.items()]}
 
 @app.post("/api/veille/sujets")
 async def veille_ajouter(req: VeilleSujetReq):
@@ -3942,7 +3933,7 @@ async def veille_ajouter(req: VeilleSujetReq):
     if not (req.requete or "").strip() and not (req.url_reference or "").strip():
         raise HTTPException(400, "Indique une requête ou une adresse de référence.")
     return add_sujet(req.libelle or "", req.requete or "", req.periode,
-                     req.url_reference or "", req.nb)
+                     req.url_reference or "", req.nb, req.categorie or "")
 
 @app.patch("/api/veille/sujets/{sujet_id}")
 async def veille_modifier(sujet_id: str, req: VeilleSujetReq):
@@ -3976,15 +3967,30 @@ async def veille_relever(sujet_id: str):
     cles = get_api_keys()
     nouveaux, message = await _aio.get_event_loop().run_in_executor(
         None, _ft.partial(relever_sujet, sujet, cles))
+    # notifie=True : le relevé manuel est déjà sous les yeux de l'utilisateur,
+    # il ne doit pas ressortir ensuite en annonce automatique.
     update_sujet(sujet_id, dernier_run=datetime.now().isoformat(timespec="seconds"),
-                 dernier_statut=message, nb_trouves=len(nouveaux))
+                 dernier_statut=message, nb_trouves=len(nouveaux), notifie=True)
     return {"nouveautes": nouveaux, "message": message}
+
+@app.post("/api/veille/notifications")
+async def veille_notifications():
+    """Relevés faits en arrière-plan et pas encore annoncés.
+
+    POST parce que la lecture CONSOMME : l'interface annonce chaque relevé une
+    seule fois, comme pour les ricochets planifiés. Sans ça, la veille
+    travaillait dans le silence — le journal et la console ne se lisent pas
+    à l'afficheur braille au fil de l'eau.
+    """
+    from modules.veille import notifications_en_attente
+    return {"notifications": notifications_en_attente()}
 
 class ExaReq(BaseModel):
     requete: Optional[str] = None
     url: Optional[str] = None
     nb: int = 8
     depuis_jours: Optional[int] = None
+    categorie: str = ""
 
 @app.post("/api/exa/search")
 async def exa_chercher(req: ExaReq):
@@ -3995,12 +4001,51 @@ async def exa_chercher(req: ExaReq):
     from core.database import get_api_keys
     cles = get_api_keys()
     if (req.url or "").strip():
-        fn = _ft.partial(exa_similar, req.url, req.nb, req.depuis_jours, cles)
+        fn = _ft.partial(exa_similar, req.url, req.nb, req.depuis_jours, cles,
+                         req.categorie or "")
     else:
         fn = _ft.partial(exa_search, req.requete or "", req.nb, req.depuis_jours,
-                         None, "", cles)
+                         None, req.categorie or "", cles)
     resultats, erreur = await _aio.get_event_loop().run_in_executor(None, fn)
     return {"resultats": resultats, "erreur": erreur}
+
+class ExaLireReq(BaseModel):
+    urls: List[str] = []
+    nb_caracteres: int = 8000
+    ingerer: bool = False
+
+@app.post("/api/exa/lire")
+async def exa_lire_pages(req: ExaLireReq):
+    """Texte PROPRE d'une page web : sans menus, bandeaux ni publicités.
+
+    Lu au lecteur d'écran, un article vu à travers un navigateur, c'est aussi
+    tout le décor du site. Ici on n'a que le contenu — écoutable tel quel, et
+    versable dans la base de connaissances si on le demande."""
+    import asyncio as _aio, functools as _ft
+    from modules.veille import exa_lire
+    from core.database import get_api_keys
+    resultats, erreur = await _aio.get_event_loop().run_in_executor(
+        None, _ft.partial(exa_lire, req.urls, req.nb_caracteres, get_api_keys()))
+    if req.ingerer and resultats:
+        from modules.enrichissement import ingest_text
+        for r in resultats:
+            if r.get("extrait"):
+                try:
+                    ingest_text(r["titre"], r["extrait"], source=r["url"])
+                except Exception:
+                    pass
+    return {"resultats": resultats, "erreur": erreur, "ingere": bool(req.ingerer)}
+
+@app.get("/api/settings/services")
+async def settings_services():
+    """Catalogue des services externes, groupé par famille, avec l'état de
+    configuration — jamais les clés elles-mêmes.
+
+    Source unique qui alimente le formulaire des clés : ajouter un service se
+    fait dans core/services.py, et l'interface suit."""
+    from core.services import par_famille
+    from core.database import get_api_keys
+    return {"familles": par_famille(get_api_keys())}
 
 @app.get("/api/settings/rerank")
 async def get_rerank_settings():
@@ -4037,6 +4082,36 @@ async def set_rerank_settings(req: dict):
     moteur, note = moteur_disponible(get_api_keys())
     return {"status": "ok", "moteur_effectif": moteur, "explication": note,
             "seuil": seuil_pertinence()}
+
+class BancRerankReq(BaseModel):
+    question: str
+    k: Optional[int] = 10
+    top_n: Optional[int] = 5
+    moteurs: Optional[List[str]] = None
+
+@app.get("/api/rag/banc/moteurs")
+async def banc_rerank_moteurs():
+    """Ce que le banc d'essai peut interroger, et pourquoi le reste est hors course."""
+    from modules.reranker import moteurs_testables
+    from core.database import get_api_keys
+    return {"moteurs": moteurs_testables(get_api_keys())}
+
+@app.post("/api/rag/banc")
+async def banc_rerank(req: BancRerankReq):
+    """Banc d'essai : la MÊME question passée dans chaque réordonnanceur.
+
+    Ne modifie AUCUN réglage — c'est un instrument de mesure, pas un
+    réglage déguisé. Le résultat contient aussi un rapport en texte brut,
+    copiable et comparable d'une semaine à l'autre.
+    """
+    from modules.reranker import banc_essai
+    from core.database import get_api_keys
+    res = await banc_essai((req.question or "").strip(), get_api_keys(),
+                           k=req.k or 10, top_n=req.top_n or 5,
+                           moteurs=req.moteurs or None)
+    if res.get("erreur"):
+        raise HTTPException(400, res["erreur"])
+    return res
 
 @app.get("/api/settings/presence")
 async def get_presence():
@@ -6770,8 +6845,20 @@ async def images_save(req: ImageSaveRequest):
 
 @app.get("/api/images")
 async def images_list():
-    """Retourne toutes les images de la galerie."""
-    return get_images()
+    """Toutes les images de la galerie, AVEC leur description quand elle existe.
+
+    La description est jointe ici plutôt que demandée image par image : une
+    galerie de cent vignettes ferait cent allers-retours, et une galerie sans
+    texte alternatif n'est qu'une grille de cases vides au lecteur d'écran.
+    Les images d'avant les fiches n'en ont pas — c'est dit, pas maquillé.
+    """
+    images = get_images()
+    for img in images:
+        fiche = _fiche_lire(_IMAGES_DIR, img.get('filename', ''))
+        img['alt'] = (fiche.get('alt') or '').strip()
+        img['ratio'] = fiche.get('ratio', '')
+        img['taille'] = fiche.get('taille', '')
+    return images
 
 
 @app.get("/api/images/file/{filename}")
@@ -6801,4 +6888,419 @@ async def images_delete(img_id: int):
     filepath = os.path.join(_IMAGES_DIR, filename)
     if os.path.isfile(filepath):
         os.remove(filepath)
+    return {"status": "ok"}
+
+
+# ══════════════════════════════════════════
+# MUSIQUE (Lyria 3, clé Gemini)
+# ══════════════════════════════════════════
+#
+# Pas de table en base : un fichier audio + un fichier « .json » à côté, qui
+# porte la consigne et les paroles. Zéro migration, et une bibliothèque qui
+# reste lisible même si NIMM n'est pas lancé.
+
+_MUSIQUES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'musiques')
+os.makedirs(_MUSIQUES_DIR, exist_ok=True)
+
+class MusiqueRequest(BaseModel):
+    prompt: str
+    modele: Optional[str] = 'clip'
+    format: Optional[str] = 'mp3'
+
+def _musique_nom_sur(nom: str) -> str:
+    """Un nom de fichier venant du client ne traverse jamais un dossier."""
+    nom = os.path.basename((nom or '').strip())
+    if not nom or nom.startswith('.') or '/' in nom or '\\' in nom:
+        raise HTTPException(400, "Nom de fichier invalide.")
+    return nom
+
+@app.get("/api/musique/modeles")
+async def musique_modeles():
+    """Modèles Lyria disponibles, et si la clé Gemini est bien là."""
+    from modules.musique import modeles_disponibles
+    from core.database import get_api_keys
+    return modeles_disponibles(get_api_keys())
+
+@app.post("/api/musique/generer")
+async def musique_generer(req: MusiqueRequest):
+    """Génère un morceau et l'écrit sur disque avec ses paroles.
+
+    Les paroles sont renvoyées SÉPARÉMENT de l'audio : c'est la seule partie du
+    résultat qui se lit au braille, elle ne doit pas rester enfouie dans le son.
+    """
+    import json as _json
+    from modules.musique import generer, decoder
+    from core.database import get_api_keys
+    res = await generer((req.prompt or "").strip(), req.modele or 'clip',
+                        req.format or 'mp3', get_api_keys())
+    if res.get('erreur'):
+        raise HTTPException(400, res['erreur'])
+    octets = decoder(res.get('audio_b64', ''))
+    if not octets:
+        raise HTTPException(500, "L'audio reçu n'a pas pu être décodé.")
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    nom = f"nimm_{ts}.{res['extension']}"
+    with open(os.path.join(_MUSIQUES_DIR, nom), 'wb') as f:
+        f.write(octets)
+    fiche = {'fichier': nom, 'prompt': res.get('prompt', ''),
+             'paroles': res.get('paroles', ''), 'modele': res.get('modele', ''),
+             'libelle': res.get('libelle', ''), 'secondes': res.get('secondes', 0),
+             'octets': len(octets),
+             'cree_le': datetime.now().isoformat(timespec='seconds')}
+    try:
+        with open(os.path.join(_MUSIQUES_DIR, nom + '.json'), 'w', encoding='utf-8') as f:
+            _json.dump(fiche, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[MUSIQUE] Fiche non écrite : {e}")
+    fiche['url'] = f"/api/musique/fichier/{nom}"
+    return fiche
+
+@app.get("/api/musique")
+async def musique_liste():
+    """Bibliothèque musicale, la plus récente d'abord."""
+    import json as _json
+    sortie = []
+    try:
+        for nom in sorted(os.listdir(_MUSIQUES_DIR), reverse=True):
+            if nom.endswith('.json'):
+                continue
+            fiche = {'fichier': nom, 'prompt': '', 'paroles': '', 'modele': '',
+                     'cree_le': ''}
+            chemin_fiche = os.path.join(_MUSIQUES_DIR, nom + '.json')
+            if os.path.isfile(chemin_fiche):
+                try:
+                    with open(chemin_fiche, encoding='utf-8') as f:
+                        fiche.update(_json.load(f))
+                except Exception:
+                    pass       # une fiche abîmée ne doit pas cacher le morceau
+            fiche['url'] = f"/api/musique/fichier/{nom}"
+            sortie.append(fiche)
+    except Exception as e:
+        print(f"[MUSIQUE] Liste impossible : {e}")
+    return {"musiques": sortie}
+
+@app.get("/api/musique/fichier/{nom}")
+async def musique_fichier(nom: str):
+    """Sert un morceau depuis data/musiques/."""
+    nom = _musique_nom_sur(nom)
+    chemin = os.path.join(_MUSIQUES_DIR, nom)
+    if not os.path.isfile(chemin):
+        raise HTTPException(404, "Morceau introuvable.")
+    mime = 'audio/wav' if nom.lower().endswith('.wav') else 'audio/mpeg'
+    return FileResponse(chemin, media_type=mime, filename=nom)
+
+@app.delete("/api/musique/{nom}")
+async def musique_supprimer(nom: str):
+    """Supprime un morceau et sa fiche."""
+    nom = _musique_nom_sur(nom)
+    trouve = False
+    for chemin in (os.path.join(_MUSIQUES_DIR, nom),
+                   os.path.join(_MUSIQUES_DIR, nom + '.json')):
+        if os.path.isfile(chemin):
+            os.remove(chemin)
+            trouve = True
+    if not trouve:
+        raise HTTPException(404, "Morceau introuvable.")
+    return {"status": "ok"}
+
+
+# ══════════════════════════════════════════
+# IMAGERIE (Nano Banana avec réglages) et VIDÉO (Veo)
+# ══════════════════════════════════════════
+#
+# Note pour plus tard : on n'a PAS ajouté Imagen. Il est déprécié et cesse de
+# répondre le 17 août 2026 ; Google renvoie lui-même vers Nano Banana. Les
+# réglages qu'on attendait d'Imagen (format, résolution, modèle) sont ici, via
+# l'API Interactions.
+
+_VIDEOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'videos')
+os.makedirs(_VIDEOS_DIR, exist_ok=True)
+
+def _media_nom_sur(nom: str) -> str:
+    """Un nom de fichier venant du client ne traverse jamais un dossier."""
+    nom = os.path.basename((nom or '').strip())
+    if not nom or nom.startswith('.') or '/' in nom or '\\' in nom:
+        raise HTTPException(400, "Nom de fichier invalide.")
+    return nom
+
+def _fiche_ecrire(dossier: str, nom: str, fiche: dict) -> None:
+    """Fiche « .json » à côté du média : zéro migration de base, et un dossier
+    qui reste lisible même si NIMM n'est pas lancé."""
+    import json as _json
+    try:
+        with open(os.path.join(dossier, nom + '.json'), 'w', encoding='utf-8') as f:
+            _json.dump(fiche, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[MEDIA] Fiche non écrite : {e}")
+
+def _fiche_lire(dossier: str, nom: str) -> dict:
+    import json as _json
+    chemin = os.path.join(dossier, nom + '.json')
+    if not os.path.isfile(chemin):
+        return {}
+    try:
+        with open(chemin, encoding='utf-8') as f:
+            return _json.load(f)
+    except Exception:
+        return {}       # une fiche abîmée ne doit pas cacher le média
+
+class ImagerieRequest(BaseModel):
+    prompt: str
+    modele: Optional[str] = 'flash'
+    ratio:  Optional[str] = '1:1'
+    taille: Optional[str] = '1K'
+    thread_id: Optional[str] = ''
+    decrire: Optional[bool] = True
+
+@app.get("/api/imagerie/options")
+async def imagerie_options():
+    """Modèles, formats et résolutions réglables."""
+    from modules.imagerie import options
+    from core.database import get_api_keys
+    return options(get_api_keys())
+
+@app.post("/api/imagerie/generer")
+async def imagerie_generer(req: ImagerieRequest):
+    """Génère une image avec format et résolution choisis, et la DÉCRIT.
+
+    La description (alt WCAG) n'est pas un supplément : sans elle, une image
+    générée est un fichier muet. Elle est produite par le routage vision de
+    NIMM et rangée dans la fiche du fichier.
+    """
+    from modules.imagerie import generer, extension_pour
+    from core.database import get_api_keys, save_image
+    api_keys = get_api_keys()
+    res = await generer((req.prompt or "").strip(), req.modele or 'flash',
+                        req.ratio or '1:1', req.taille or '1K', api_keys)
+    if res.get('erreur'):
+        raise HTTPException(400, res['erreur'])
+
+    sorties = []
+    for img in res.get('images', []):
+        donnees = img.get('b64') or ''
+        if ',' in donnees[:100]:
+            donnees = donnees.split(',', 1)[1]
+        try:
+            octets = _base64.b64decode(donnees)
+        except Exception:
+            continue
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:20]
+        # L'extension suit le format RÉELLEMENT rendu : un JPEG rangé sous .png
+        # trompe autant l'utilisateur que le logiciel qui l'ouvrira ensuite.
+        nom = f"nimm_{ts}.{extension_pour(img.get('mime'))}"
+        with open(os.path.join(_IMAGES_DIR, nom), 'wb') as f:
+            f.write(octets)
+        alt = ''
+        if req.decrire:
+            try:
+                from core.hub import _vibe_describe_image, _load_provider_routing
+                alt = await _vibe_describe_image(
+                    octets, img.get('mime') or 'image/png',
+                    {'provider_routing': _load_provider_routing(), 'api_keys': api_keys})
+            except Exception as e:
+                print(f"[IMAGERIE] Description impossible : {e}")
+        fiche = {'fichier': nom, 'prompt': res.get('prompt', ''), 'alt': alt,
+                 'modele': res.get('modele', ''), 'ratio': res.get('ratio', ''),
+                 'taille': res.get('taille', ''),
+                 'cree_le': datetime.now().isoformat(timespec='seconds')}
+        _fiche_ecrire(_IMAGES_DIR, nom, fiche)
+        try:
+            fiche['id'] = save_image(nom, res.get('prompt', ''), req.thread_id or '')
+        except Exception as e:
+            print(f"[IMAGERIE] Galerie non mise à jour : {e}")
+        fiche['url'] = f"/api/images/file/{nom}"
+        sorties.append(fiche)
+
+    if not sorties:
+        raise HTTPException(500, "Aucune image n'a pu être enregistrée.")
+    return {"images": sorties, "texte": res.get('texte', ''),
+            "secondes": res.get('secondes', 0), "libelle": res.get('libelle', '')}
+
+class DecrireImageRequest(BaseModel):
+    b64: str = ''
+    url: str = ''
+    mime: Optional[str] = 'image/png'
+
+@app.post("/api/image/decrire")
+async def image_decrire(req: DecrireImageRequest):
+    """Décrit une image déjà produite — texte alternatif accessible (WCAG).
+
+    POURQUOI CETTE ROUTE EXISTE
+    Les images créées depuis la conversation portaient jusqu'ici `alt = la
+    consigne`. C'est un texte alternatif MENSONGER : il dit ce qui a été
+    demandé, pas ce qui a été produit. Quand on lit l'image au lecteur
+    d'écran, on ne peut donc pas savoir que le modèle a dérivé.
+
+    Ne lève jamais : sans description, l'appelant doit pouvoir le DIRE plutôt
+    que de retomber sur la consigne.
+    """
+    import base64 as _b64m
+    from core.database import get_api_keys
+    api_keys = get_api_keys()
+    donnees = req.b64 or ''
+    if ',' in donnees[:100]:
+        donnees = donnees.split(',', 1)[1]
+    octets = b''
+    if donnees:
+        try:
+            octets = _b64m.b64decode(donnees)
+        except Exception:
+            octets = b''
+    elif (req.url or '').strip():
+        try:
+            async with _httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.get(req.url)
+                r.raise_for_status()
+                octets = r.content
+        except Exception as e:
+            return {"description": "", "raison": f"Image illisible : {e}"}
+    if not octets:
+        return {"description": "", "raison": "Aucune image exploitable."}
+    try:
+        from core.hub import _vibe_describe_image, _load_provider_routing
+        desc = await _vibe_describe_image(
+            octets, req.mime or 'image/png',
+            {'provider_routing': _load_provider_routing(), 'api_keys': api_keys})
+    except Exception as e:
+        return {"description": "", "raison": f"Description impossible : {e}"}
+    desc = (desc or '').strip()
+    return {"description": desc,
+            "raison": '' if desc else "Le modèle de vision n'a rien renvoyé."}
+
+@app.get("/api/imagerie/fiche/{nom}")
+async def imagerie_fiche(nom: str):
+    """Fiche d'une image : consigne, description accessible, réglages."""
+    return _fiche_lire(_IMAGES_DIR, _media_nom_sur(nom))
+
+class VideoLancerRequest(BaseModel):
+    prompt: str
+    modele: Optional[str] = 'veo31'
+    ratio:  Optional[str] = '16:9'
+    duree:  Optional[str] = '8'
+    resolution: Optional[str] = '720p'
+    negatif: Optional[str] = ''
+
+class VideoEtatRequest(BaseModel):
+    operation: str
+
+@app.get("/api/video/options")
+async def video_options():
+    """Modèles Veo, formats, durées, et les règles de Google en clair."""
+    from modules.video import options
+    from core.database import get_api_keys
+    return options(get_api_keys())
+
+@app.post("/api/video/lancer")
+async def video_lancer(req: VideoLancerRequest):
+    """Démarre une génération vidéo et rend tout de suite l'identifiant à suivre.
+
+    Le travail en cours est écrit sur disque : une génération dure jusqu'à six
+    minutes, un rechargement de page ne doit pas la faire disparaître.
+    """
+    from modules.video import lancer
+    from core.database import get_api_keys
+    res = await lancer((req.prompt or "").strip(), req.modele or 'veo31',
+                       req.ratio or '16:9', req.duree or '8',
+                       req.resolution or '720p', get_api_keys(),
+                       negatif=req.negatif or '')
+    if res.get('erreur'):
+        raise HTTPException(400, res['erreur'])
+    res['lance_le'] = datetime.now().isoformat(timespec='seconds')
+    _fiche_ecrire(_VIDEOS_DIR, '_en_cours_' + res['operation'].replace('/', '_'), res)
+    return res
+
+@app.post("/api/video/etat")
+async def video_etat(req: VideoEtatRequest):
+    """Suit une génération et, dès qu'elle est prête, RAPATRIE la vidéo.
+
+    Le téléchargement immédiat n'est pas un confort : Google efface la vidéo de
+    ses serveurs au bout de deux jours.
+    """
+    from modules.video import etat, telecharger
+    from core.database import get_api_keys
+    api_keys = get_api_keys()
+    st = await etat(req.operation or "", api_keys)
+    if not st.get('fait'):
+        return {"fait": False, "message": st.get('message', 'Génération en cours.'),
+                "erreur": st.get('erreur', '')}
+    marqueur = '_en_cours_' + (req.operation or '').replace('/', '_')
+    if st.get('erreur'):
+        for c in (os.path.join(_VIDEOS_DIR, marqueur + '.json'),):
+            if os.path.isfile(c):
+                os.remove(c)
+        raise HTTPException(400, st['erreur'])
+
+    octets, err = await telecharger(st.get('uri', ''), api_keys)
+    if err:
+        return {"fait": True, "erreur": err}
+    depart = _fiche_lire(_VIDEOS_DIR, marqueur)
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    nom = f"nimm_{ts}.mp4"
+    with open(os.path.join(_VIDEOS_DIR, nom), 'wb') as f:
+        f.write(octets)
+    fiche = {'fichier': nom, 'prompt': depart.get('prompt', ''),
+             'modele': depart.get('modele', ''), 'ratio': depart.get('ratio', ''),
+             'duree': depart.get('duree', ''), 'resolution': depart.get('resolution', ''),
+             'octets': len(octets),
+             'cree_le': datetime.now().isoformat(timespec='seconds')}
+    _fiche_ecrire(_VIDEOS_DIR, nom, fiche)
+    chemin_marqueur = os.path.join(_VIDEOS_DIR, marqueur + '.json')
+    if os.path.isfile(chemin_marqueur):
+        os.remove(chemin_marqueur)
+    fiche['url'] = f"/api/video/fichier/{nom}"
+    return {"fait": True, "video": fiche}
+
+@app.get("/api/video/en-cours")
+async def video_en_cours():
+    """Générations lancées et pas encore rapatriées — pour reprendre après un
+    rechargement de page ou un redémarrage de NIMM."""
+    sortie = []
+    try:
+        for nom in sorted(os.listdir(_VIDEOS_DIR)):
+            if not (nom.startswith('_en_cours_') and nom.endswith('.json')):
+                continue
+            fiche = _fiche_lire(_VIDEOS_DIR, nom[:-5])
+            if fiche.get('operation'):
+                sortie.append(fiche)
+    except Exception as e:
+        print(f"[VIDEO] Liste des travaux en cours impossible : {e}")
+    return {"en_cours": sortie}
+
+@app.get("/api/video")
+async def video_liste():
+    """Bibliothèque vidéo, la plus récente d'abord."""
+    sortie = []
+    try:
+        for nom in sorted(os.listdir(_VIDEOS_DIR), reverse=True):
+            if nom.endswith('.json') or nom.startswith('_en_cours_'):
+                continue
+            fiche = {'fichier': nom, 'prompt': '', 'modele': '', 'cree_le': ''}
+            fiche.update(_fiche_lire(_VIDEOS_DIR, nom))
+            fiche['url'] = f"/api/video/fichier/{nom}"
+            sortie.append(fiche)
+    except Exception as e:
+        print(f"[VIDEO] Liste impossible : {e}")
+    return {"videos": sortie}
+
+@app.get("/api/video/fichier/{nom}")
+async def video_fichier(nom: str):
+    """Sert une vidéo depuis data/videos/."""
+    nom = _media_nom_sur(nom)
+    chemin = os.path.join(_VIDEOS_DIR, nom)
+    if not os.path.isfile(chemin):
+        raise HTTPException(404, "Vidéo introuvable.")
+    return FileResponse(chemin, media_type='video/mp4', filename=nom)
+
+@app.delete("/api/video/{nom}")
+async def video_supprimer(nom: str):
+    """Supprime une vidéo et sa fiche."""
+    nom = _media_nom_sur(nom)
+    trouve = False
+    for chemin in (os.path.join(_VIDEOS_DIR, nom),
+                   os.path.join(_VIDEOS_DIR, nom + '.json')):
+        if os.path.isfile(chemin):
+            os.remove(chemin)
+            trouve = True
+    if not trouve:
+        raise HTTPException(404, "Vidéo introuvable.")
     return {"status": "ok"}

@@ -1771,6 +1771,759 @@ def test_veille():
     ok("veille : échéance pure, déjà-vu respecté, panne muette, relevé hors du chemin chaud")
 
 
+def test_catalogue_services():
+    """La liste des services était écrite EN DUR à trois endroits du frontend.
+
+    Conséquence concrète : en branchant Exa, Cohere, Voyage et Jina, leurs clés
+    n'avaient AUCUN champ où être saisies — le code existait, la fonction était
+    inatteignable. Un catalogue serveur unique règle le problème et interdit
+    qu'il revienne.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    import core.services as SV
+
+    ids = SV.ids()
+    assert len(ids) == len(set(ids)), 'identifiants uniques'
+    # Les services branchés récemment doivent être saisissables
+    for attendu in ('exa', 'cohere', 'voyage', 'jina'):
+        assert attendu in ids, attendu + " n'a nulle part où recevoir sa clé"
+    # Et les anciens ne doivent pas avoir disparu au passage
+    for ancien in ('anthropic', 'mistral', 'gemini', 'openai', 'openrouter',
+                   'deepseek', 'brave', 'tavily', 'stability_ai'):
+        assert ancien in ids, ancien + ' a disparu du catalogue'
+
+    groupes = SV.par_famille({'exa': 'kkk', 'anthropic': '   '})
+    assert sum(len(g['services']) for g in groupes) == len(ids), 'aucun service perdu'
+    plat = {x['id']: x for g in groupes for x in g['services']}
+    assert plat['exa']['configure'] is True
+    assert plat['anthropic']['configure'] is False, 'une clé de blancs ne compte pas'
+    assert all(s.get('role') for s in SV.SERVICES), 'chaque service dit à quoi il sert'
+    # Le catalogue ne doit JAMAIS laisser fuiter une clé vers le frontend
+    assert 'kkk' not in json.dumps(groupes, ensure_ascii=False), \
+        'le formulaire n’a pas besoin des secrets, seulement de l’état'
+    assert SV.html_id('stability_ai') == 'stability-ai', 'convention d’identifiant HTML'
+
+    # Une famille mal orthographiée ne doit pas faire disparaître un service
+    faux = dict(SV.SERVICES[0]); faux['id'] = 'zzz'; faux['famille'] = 'inconnue'
+    SV.SERVICES.append(faux); SV._PAR_ID['zzz'] = faux
+    try:
+        g2 = SV.par_famille({})
+        assert 'zzz' in {x['id'] for gr in g2 for x in gr['services']}
+    finally:
+        SV.SERVICES.pop(); SV._PAR_ID.pop('zzz', None)
+
+    assert '/api/settings/services' in mn
+    assert 'id="api-keys-auto"' in html, 'point d’accroche du formulaire engendré'
+    assert 'api-key-anthropic' not in html, 'plus aucune saisie en dur'
+    assert app.count("_svcIds()") >= 3, 'les trois listes en dur sont remplacées'
+    assert "'anthropic', 'deepseek'" in app, 'un repli subsiste si la route échoue'
+    assert 'aria-describedby' in app, 'le rôle du service est lu au focus'
+    assert '_svcEchappe' in app, 'le catalogue est injecté en HTML : il faut échapper'
+    ok("catalogue des services : source unique, clés saisissables, secrets non exposés")
+
+
+def test_exa_avance():
+    """Exa au-delà de la recherche simple : filtrer, résumer, lire proprement."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    coa = open(os.path.join(racine, 'modules', 'coanimm.py'), encoding='utf-8').read()
+    import modules.veille as V
+
+    # Résumé ciblé : on veut écouter une réponse, pas le début d'un site
+    bloc = V._bloc_contenus(question_resume='Quelles obligations pour les libraires ?')
+    assert bloc['summary']['query'].startswith('Quelles obligations')
+    assert 'summary' not in V._bloc_contenus(), 'pas de résumé si on n’en demande pas'
+
+    # Catégories : valeurs imposées par Exa, libellés français
+    assert 'research paper' in V.CATEGORIES and 'pdf' in V.CATEGORIES
+    assert V.CATEGORIES[''] == 'Tout'
+
+    envois = {}
+    vrai = V._appel_exa
+    V._appel_exa = lambda chemin, corps, k=None: (envois.update({'c': chemin, 'b': corps}),
+                                                  ({'results': []}, ''))[1]
+    try:
+        V.exa_search('accessibilité des livres', nb=5, depuis_jours=7,
+                     categorie='research paper', domaines_exclus=['spam.fr'])
+        b = envois['b']
+        assert envois['c'] == 'search'
+        assert b['category'] == 'research paper'
+        assert b['excludeDomains'] == ['spam.fr']
+        assert b['numResults'] == 5 and b['type'] == 'auto'
+        assert b['contents']['summary']['query'] == 'accessibilité des livres', \
+            'le résumé doit répondre À LA question posée'
+        assert b['startPublishedDate'].endswith('T00:00:00.000Z')
+
+        # Une catégorie inventée ne doit pas être transmise : Exa renverrait 400
+        V.exa_search('x', categorie='n’importe quoi')
+        assert 'category' not in envois['b'], 'catégorie inconnue → non transmise'
+
+        # Sans résumé, on garde le texte brut
+        V.exa_search('x', resume=False)
+        assert 'summary' not in envois['b']['contents']
+
+        # Lecture propre d'une page
+        V.exa_lire('http://a.fr')
+        assert envois['c'] == 'contents' and envois['b']['urls'] == ['http://a.fr']
+        assert V.exa_lire([])[1], 'adresse vide → message, pas de plantage'
+        assert V.exa_lire('http://a.fr')[1] == "Exa n'a rien pu extraire de cette adresse."
+    finally:
+        V._appel_exa = vrai
+
+    # La catégorie voyage jusqu'au sujet de veille
+    import inspect
+    assert 'categorie' in inspect.signature(V.add_sujet).parameters
+    assert 'categorie=cat' in inspect.getsource(V.relever_sujet), \
+        'un sujet filtré doit le rester à chaque relevé'
+
+    assert '/api/exa/lire' in mn and '"categories"' in mn
+    assert 'nimm_lire_page' in coa
+    ok("Exa avancé : catégories filtrées, résumé ciblé, lecture propre d’une page")
+
+
+def test_exa_dans_le_chat():
+    """Exa était bâti mais inatteignable depuis une conversation.
+
+    Un outil qui n'existe que dans un panneau de réglages n'est pas vraiment
+    branché : quand on demande « cherche-moi ça » en discutant, c'est Brave qui
+    répondait. Exa devient un mode de recherche à part entière, appelé à part —
+    donc valable avec n'importe quel modèle, contrairement à l'ancrage Google.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    arbre = ast.parse(hub)
+
+    # Routage : Exa reconnu, et repli EXPLIQUÉ si la clé manque
+    seg = ''
+    for n in ast.walk(arbre):
+        if getattr(n, 'name', '') == '_choisir_recherche_web':
+            seg = ast.get_source_segment(hub, n) or ''
+    assert "choisi == 'exa'" in seg, 'Exa doit être un mode de routage'
+    assert "clé Exa absente" in seg, 'un repli silencieux serait un mensonge'
+    # Contrairement à l'ancrage Google, Exa ne dépend PAS du modèle actif
+    i_exa = seg.find("choisi == 'exa'")
+    assert "provider == 'exa'" not in seg[i_exa:], \
+        "Exa est un appel séparé : il ne doit exiger aucun modèle particulier"
+
+    # Fonction de recherche : résumé ciblé et citations réutilisant le format existant
+    fn = ''
+    for n in ast.walk(arbre):
+        if getattr(n, 'name', '') == '_search_via_exa':
+            fn = ast.get_source_segment(hub, n) or ''
+    assert fn, '_search_via_exa introuvable'
+    assert 'run_in_executor' in fn, 'exa_search est bloquant : hors du fil principal'
+    assert '[NIMM_CITATIONS]' in fn, 'réutiliser le format de citations déjà affiché'
+    assert 'raise RuntimeError' in fn, 'une panne doit déclencher le repli Brave/Tavily'
+
+    # Branché dans les DEUX chemins de conversation
+    assert hub.count("'mistral', 'anthropic', 'exa'") == 2, \
+        'le chemin avec outils ET le chemin en streaming'
+    assert hub.count("'exa': _search_via_exa") == 2
+
+    assert 'value="exa" data-needs-key="exa"' in html, 'option grisée sans clé Exa'
+    assert 'tous modèles' in html, "dire que ça marche avec n'importe quel modèle"
+    ok("Exa dans la conversation : mode de recherche à part entière, repli expliqué")
+
+
+def _affectes(noeud):
+    """Noms affectés dans une fonction — sert à repérer le piège exact du
+    2026-07-27 : un nom accumulé dans UNE fonction et lu dans une AUTRE."""
+    return {n.id for n in ast.walk(noeud)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+
+
+def test_audit_structurel():
+    """Trois défauts qui ne se voient QUE par une analyse globale.
+
+    Ils ont tous les trois été trouvés en auditant, pas en relisant :
+    py_compile les laisse passer, et ils ne cassent rien avant l'exécution.
+    """
+    import pathlib
+    racine = pathlib.Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # (1) NOM UTILISÉ SANS ÊTRE DÉFINI dans sa propre fonction.
+    # _raisonnement_acc était accumulé dans une AUTRE fonction : tout flux
+    # OpenAI-compatible (DeepSeek, OpenAI, OpenRouter, Mistral) levait un
+    # NameError à la toute fin, après affichage — donc très discret.
+    fautes = []
+    for f in list(racine.glob('core/*.py')) + list(racine.glob('modules/*.py')) + [racine / 'main.py']:
+        arbre = ast.parse(f.read_text(encoding='utf-8'))
+        # Fonctions de PREMIER NIVEAU seulement : une fonction imbriquée lit
+        # légitimement les variables de celle qui l'entoure, et c'est au premier
+        # niveau que le piège s'est refermé.
+        for fn in arbre.body:
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            locaux, globaux = set(), set()
+            for x in ast.walk(fn):
+                if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store):
+                    locaux.add(x.id)
+                elif isinstance(x, (ast.Global, ast.Nonlocal)):
+                    globaux.update(x.names)
+                elif isinstance(x, (ast.Import, ast.ImportFrom)):
+                    for al in x.names:
+                        locaux.add((al.asname or al.name).split('.')[0])
+                elif isinstance(x, ast.ExceptHandler) and x.name:
+                    locaux.add(x.name)          # except … as _e
+            locaux.update(a.arg for a in fn.args.args + fn.args.kwonlyargs)
+            if fn.args.vararg:
+                locaux.add(fn.args.vararg.arg)
+            if fn.args.kwarg:
+                locaux.add(fn.args.kwarg.arg)
+            # On ne teste que les noms « privés de fonction » (préfixe _ et non
+            # définis au niveau module) : c'est là que le piège se referme.
+            module_niv = {n.id for x in arbre.body if isinstance(x, ast.Assign)
+                          for n in x.targets if isinstance(n, ast.Name)}
+            module_niv |= {getattr(x, 'name', '') for x in arbre.body}
+            # Un alias d'import posé N'IMPORTE OÙ dans le fichier est légitime :
+            # NIMM importe volontiers en cours de fonction, parfois dans un bloc
+            # conditionnel que ce parcours ne rattache pas à la bonne portée.
+            module_niv |= {(al.asname or al.name).split('.')[0]
+                           for x in ast.walk(arbre)
+                           if isinstance(x, (ast.Import, ast.ImportFrom)) for al in x.names}
+            imbriquees = [g for g in ast.walk(fn)
+                          if isinstance(g, (ast.FunctionDef, ast.AsyncFunctionDef))
+                          and g is not fn]
+            for g in imbriquees:
+                locaux |= _affectes(g)
+                locaux.add(g.name)
+            for x in ast.walk(fn):
+                if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load) \
+                   and x.id.startswith('_') and not x.id.startswith('__') \
+                   and x.id not in locaux and x.id not in globaux \
+                   and x.id not in module_niv \
+                   and any(x.id in _affectes(g) for g in arbre.body
+                           if isinstance(g, (ast.FunctionDef, ast.AsyncFunctionDef))
+                           and g is not fn):
+                    fautes.append(f"{f.name}:{x.lineno} {fn.name}() lit {x.id}")
+    assert not fautes, "noms utilisés sans être définis :\n  " + "\n  ".join(fautes[:10])
+
+    # (2) ROUTE DÉFINIE DEUX FOIS : la première gagne, la seconde est du code
+    # mort — et si elle utilise une autre clé de réglage, le bouton semble
+    # marcher tout en écrivant ailleurs. C'était le cas de stt-turbo.
+    import collections
+    routes = collections.Counter()
+    arbre = ast.parse((racine / 'main.py').read_text(encoding='utf-8'))
+    for n in ast.walk(arbre):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for d in n.decorator_list:
+                if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) \
+                   and d.func.attr in ('get', 'post', 'put', 'patch', 'delete') \
+                   and d.args and isinstance(d.args[0], ast.Constant):
+                    routes[d.func.attr.upper() + ' ' + d.args[0].value] += 1
+    doubles = [k for k, v in routes.items() if v > 1]
+    assert not doubles, "routes définies deux fois : " + ', '.join(doubles)
+    assert len(routes) > 250, 'garde-fou : le décompte des routes doit rester plausible'
+
+    # (3) ARITÉ des appels au journal de fonctionnement — un appel à trois
+    # arguments avait rendu la route d'épinglage inutilisable (erreur 500).
+    mauvais = []
+    for f in racine.rglob('*.py'):
+        if '__pycache__' in str(f) or f.name.startswith('test_'):
+            continue
+        try:
+            a = ast.parse(f.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        for n in ast.walk(a):
+            if isinstance(n, ast.Call) \
+               and (getattr(n.func, 'attr', None) or getattr(n.func, 'id', None)) == 'add_diagnostic' \
+               and len(n.args) + len(n.keywords) != 2:
+                mauvais.append(f"{f.name}:{n.lineno}")
+    assert not mauvais, "add_diagnostic prend 2 arguments : " + ', '.join(mauvais)
+
+    ok("audit structurel : aucun nom indéfini, aucune route en double, journal bien appelé")
+
+
+def test_veille_se_signale():
+    """La veille relevait en arrière-plan… et se taisait.
+
+    Le travailleur de fond existait bien, mais son résultat n'allait que dans la
+    console du serveur et un diagnostic : rien de tout cela ne se lit à
+    l'afficheur braille pendant qu'on travaille. Trois exigences : signaler ce
+    qui APPREND quelque chose, ne PAS radoter, et consommer la notification une
+    seule fois.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    import modules.veille as V
+
+    # (1) Règle de signalement — fonction PURE, testable sans horloge ni réseau
+    art = [{'titre': 'A', 'url': 'http://a'}]
+    assert V._merite_signalement(art, 'Veille « X » : 1 nouveauté', {}), \
+        'des nouveautés se signalent toujours'
+    assert not V._merite_signalement([], 'Veille « X » : rien de nouveau (3 vus).', {}), \
+        'le fonctionnement normal ne dérange pas'
+    panne = 'Veille « X » : Aucune clé Exa enregistrée.'
+    assert V._merite_signalement([], panne, {}), 'une panne inédite se signale'
+    assert not V._merite_signalement([], panne, {'dernier_signal': panne}), \
+        'la MÊME panne ne se signale pas toutes les heures'
+    assert V._merite_signalement([], 'Veille « X » : Exa refuse la clé.',
+                                 {'dernier_signal': panne}), \
+        'une panne DIFFÉRENTE, elle, mérite d’être dite'
+
+    # (2) Magasin simulé : le drapeau est posé, puis consommé UNE fois
+    store, vlire, vecrire = {}, V._lire, V._ecrire
+    V._lire = lambda c, d: json.loads(store.get(c, d))
+    V._ecrire = lambda c, v: store.__setitem__(c, json.dumps(v))
+    vsearch = V.exa_search
+    try:
+        store['veille_sujets'] = json.dumps([
+            {'id': 's1', 'libelle': 'Accessibilité', 'requete': 'q',
+             'periode': 'hebdomadaire', 'nb': 8, 'actif': True, 'dernier_run': ''}])
+        V.exa_search = lambda *a, **k: (
+            [{'titre': 'A', 'url': 'http://a', 'date': '2026-07-28', 'auteur': '',
+              'extrait': 'xa', 'score': 1}], '')
+        V.relever_les_dus(ingerer=False)
+
+        sujet = V.list_sujets()[0]
+        assert sujet.get('notifie') is False, \
+            'un sujet créé AVANT le signalement doit quand même recevoir le drapeau'
+        assert sujet.get('dernieres_nouveautes'), 'les articles trouvés sont conservés'
+
+        attente = V.notifications_en_attente()
+        assert len(attente) == 1 and attente[0]['libelle'] == 'Accessibilité'
+        assert attente[0]['nouveautes'][0]['url'] == 'http://a'
+        assert V.notifications_en_attente() == [], \
+            'LECTURE UNIQUE : la deuxième lecture ne doit plus rien rendre'
+    finally:
+        V._lire, V._ecrire, V.exa_search = vlire, vecrire, vsearch
+        import importlib
+        importlib.reload(V)
+
+    # (3) Le chemin complet existe : route consommatrice + annonce côté interface
+    assert '@app.post("/api/veille/notifications")' in mn, 'POST : la lecture consomme'
+    assert 'notifications_en_attente' in mn
+    assert 'nb_trouves=len(nouveaux), notifie=True' in mn, \
+        'un relevé manuel est déjà sous les yeux : il ne doit pas ressortir en annonce'
+    assert '_veillePollNotifications' in app and 'coanimm-status-announce' in app
+    assert '_veilleRendreNouveautes' in app, 'l’annonce passe, le texte doit rester'
+    ok("veille : les relevés de fond se signalent, une fois, et seulement s’ils apprennent quelque chose")
+
+
+def test_banc_essai_reordonnanceur():
+    """Choisir un réordonnanceur au jugé, c'est régler un instrument sans l'entendre.
+
+    Le banc pose la MÊME question aux mêmes passages dans chaque moteur. Trois
+    exigences : ne modifier AUCUN réglage, ne pas bloquer la conversation
+    pendant qu'il mesure, et rendre un rapport COPIABLE — un tableau qui
+    n'existe qu'à l'écran ne se compare pas d'une semaine à l'autre.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    src = open(os.path.join(racine, 'modules', 'reranker.py'), encoding='utf-8').read()
+    import modules.reranker as R
+
+    cfg = {}
+    vrai = R._reglage
+    R._reglage = lambda n, d='': cfg.get(n, d)
+    try:
+        # (1) Le modèle par défaut suit le MOTEUR, pas un réglage unique mal partagé
+        assert R._modele_pour('jina', '') == 'jina-reranker-v2-base-multilingual'
+        assert R._modele_pour('cohere', '') == 'rerank-v3.5'
+        cfg['rag_rerank_modele'] = 'bge-reranker-v2-m3'
+        assert R._modele_pour('jina') == 'bge-reranker-v2-m3', 'le réglage explicite prime'
+        assert R._modele_pour('jina', '') == 'jina-reranker-v2-base-multilingual', \
+            'le banc doit pouvoir imposer le défaut de chaque moteur'
+        cfg.clear()
+
+        # (2) Inventaire honnête : les moteurs absents sont LISTÉS avec leur raison
+        noms = [m['nom'] for m in R.moteurs_testables({})]
+        assert noms == list(R.MOTEURS_BANC), noms
+        par_nom = {m['nom']: m for m in R.moteurs_testables({'cohere': 'k'})}
+        assert par_nom['cohere']['disponible'] and par_nom['semantique']['disponible']
+        assert not par_nom['voyage']['disponible'] and 'Aucune clé' in par_nom['voyage']['raison']
+        assert not par_nom['local']['disponible'], 'aucune adresse renseignée'
+        cfg['rag_rerank_url'] = 'http://localhost:8081'
+        assert [m for m in R.moteurs_testables({}) if m['nom'] == 'local'][0]['disponible']
+        cfg.clear()
+
+        # (3) Une question vide n'appelle personne
+        assert 'erreur' in asyncio.run(R.banc_essai('', {}))
+
+        # (4) Mesure complète, réseau et base simulés
+        passages = [{'passage': 'la loi sur le livre numérique', 'titre': 'Loi',
+                     'source': 'loi.pdf', 'score': 0.9},
+                    {'passage': 'recette de tarte', 'titre': 'Tarte',
+                     'source': 'cuisine.pdf', 'score': 0.7}]
+        faux_enrich = types.ModuleType('modules.enrichissement')
+        faux_enrich.search_documents = lambda q, k=5: list(passages)
+        vrai_enrich = sys.modules.get('modules.enrichissement')
+        sys.modules['modules.enrichissement'] = faux_enrich
+        vcohere = R._rerank_cohere
+        R._rerank_cohere = lambda q, t, c, modele=None: [(0, 0.94), (1, 0.02)]
+        try:
+            rap = asyncio.run(R.banc_essai('obligations du livre numérique',
+                                           {'cohere': 'k'},
+                                           moteurs=['semantique', 'cohere', 'voyage']))
+        finally:
+            R._rerank_cohere = vcohere
+            if vrai_enrich is not None:
+                sys.modules['modules.enrichissement'] = vrai_enrich
+            else:
+                sys.modules.pop('modules.enrichissement', None)
+
+        par_moteur = {m['moteur']: m for m in rap['moteurs']}
+        assert set(par_moteur) == {'semantique', 'cohere', 'voyage'}
+        assert par_moteur['cohere']['ok'] and par_moteur['cohere']['classement'][0]['titre'] == 'Loi'
+        assert par_moteur['cohere']['classement'][0]['retenu']
+        assert not par_moteur['cohere']['classement'][1]['retenu'], 'sous le seuil'
+        assert not par_moteur['voyage']['ok'] and 'Aucune clé' in par_moteur['voyage']['note'], \
+            'un moteur sans clé est rapporté, pas masqué'
+        assert par_moteur['semantique']['ok'], 'la référence sans réordonnanceur est mesurée'
+        assert rap['nb_passages'] == 2 and rap['texte'], 'un rapport copiable est produit'
+        assert 'Loi' in rap['texte'] and 'BANC' in rap['texte']
+    finally:
+        R._reglage = vrai
+
+    # (5) Instrument de mesure, pas réglage déguisé : le banc n'écrit RIEN
+    debut = src.index("def banc_essai") if "def banc_essai" in src else src.index("async def banc_essai")
+    corps = src[debut:]
+    assert 'set_setting' not in corps, "le banc ne doit modifier AUCUN réglage"
+    assert '_aio.to_thread' in corps, "les moteurs HTTP sont bloquants : hors de la boucle"
+
+    # (6) Le chemin complet existe, et il est accessible
+    assert '@app.post("/api/rag/banc")' in mn and '/api/rag/banc/moteurs' in mn
+    assert 'id="banc-question"' in html and 'id="banc-texte"' in html
+    assert 'aria-label="Résultats du banc d\'essai"' in html
+    assert '_bancRendre' in app and "createElement('table')" in app, \
+        'un classement se parcourt en tableau, pas en paragraphe'
+    assert "th.scope = 'col'" in app and "td.scope = 'row'" in app, \
+        'sans en-têtes portées, un tableau est illisible au lecteur d’écran'
+    ok("banc d'essai : mesure côte à côte, aucun réglage touché, rapport copiable et tableau accessible")
+
+
+def test_musique_lyria():
+    """Lyria dormait derrière une clé déjà présente.
+
+    Trois exigences : ne rien promettre sans la clé, remonter les paroles
+    SÉPARÉMENT de l'audio (c'est la seule partie lisible au braille), et ne
+    jamais lever d'exception vers l'appelant — une génération musicale ratée
+    n'est pas une panne de NIMM.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    gitignore = open(os.path.join(racine, '.gitignore'), encoding='utf-8').read()
+    import modules.musique as M
+
+    # (1) Sans clé, on le DIT — et on ne tente rien
+    dispo = M.modeles_disponibles({})
+    assert not dispo['cle_presente'] and 'Aucune clé Gemini' in dispo['note']
+    assert M.modeles_disponibles({'gemini': 'k'})['cle_presente']
+    assert 'erreur' in asyncio.run(M.generer('un morceau', api_keys={}))
+    assert 'erreur' in asyncio.run(M.generer('', api_keys={'gemini': 'k'})), \
+        'une consigne vide n’appelle personne'
+
+    # (2) L'ordre des parties n'est PAS garanti : audio d'abord, texte ensuite
+    audio, mime, textes = M._extraire({'candidates': [{'content': {'parts': [
+        {'inlineData': {'data': 'QUJD', 'mimeType': 'audio/mpeg'}},
+        {'text': 'Couplet 1'}, {'text': 'Refrain'}]}}]})
+    assert audio == 'QUJD' and mime == 'audio/mpeg'
+    assert textes == 'Couplet 1\n\nRefrain', textes
+    # …et dans l'autre sens, avec la variante snake_case
+    audio2, _, t2 = M._extraire({'candidates': [{'content': {'parts': [
+        {'text': 'Paroles'}, {'inline_data': {'data': 'WFla', 'mime_type': 'audio/wav'}}]}}]})
+    assert audio2 == 'WFla' and t2 == 'Paroles'
+    assert M._extraire({'bruit': 1}) == ('', '', '')
+
+    # (3) Un refus de sécurité arrive en 200 sans audio : ça se dit
+    refus = M._raison_refus({'candidates': [{'finishReason': 'SAFETY'}]})
+    assert 'refusée' in refus and 'SAFETY' in refus
+    assert 'bloquée' in M._raison_refus({'promptFeedback': {'blockReason': 'OTHER'}})
+    assert M._raison_refus({'candidates': [{'finishReason': 'STOP'}]}) == ''
+
+    # (4) Le décodage ne lève jamais
+    assert M.decoder('QUJD') == b'ABC'
+    assert M.decoder('pas du base64 !!') == b''
+    assert M.decoder('data:audio/mpeg;base64,QUJD') == b'ABC'
+
+    # (5) Le format demandé est corrigé, jamais imposé en douce
+    assert 'wav' in M.MODELES['pro']['formats'] and 'wav' not in M.MODELES['clip']['formats']
+
+    # (6) Chemin complet, confinement du nom de fichier, et audio hors du dépôt
+    assert '/api/musique/generer' in mn and '/api/musique/fichier/' in mn
+    assert '_musique_nom_sur' in mn and 'os.path.basename' in mn, \
+        'un nom venu du client ne traverse jamais un dossier'
+    assert 'data/musiques/' in gitignore, 'les fichiers audio n’ont rien à faire dans git'
+
+    # (7) Interface : bouton conditionné à la clé, paroles copiables, lecteur étiqueté
+    assert 'id="toggle-musique"' in html
+    assert "_btnMus.hidden = !(keys && keys.gemini)" in app, \
+        'un bouton qui mène à un refus n’a rien à faire dans la barre'
+    assert 'zone.readOnly = true' in app and "createElement('textarea')" in app, \
+        'les paroles doivent être sélectionnables et copiables'
+    assert "audio.setAttribute('aria-label'" in app, 'un lecteur audio sans nom est muet'
+    assert "'u': 'toggle-musique'" in app and "'toggle-musique': 'Alt+Shift+U'" in app
+    ok("musique : Lyria ouvert par la clé Gemini, paroles séparées et copiables, échecs muets")
+
+
+def test_imagerie_reglee():
+    """« Gemini (Imagen) » ne réglait rien : ni format, ni résolution, ni modèle.
+
+    La correction évidente — ajouter le vrai Imagen — aurait été une faute :
+    Imagen cesse de répondre le 17 août 2026. Les réglages passent donc par
+    l'API Interactions. Trois exigences : ne rien envoyer chez le prestataire
+    qui y reste (store=false), corriger une résolution impossible sans mentir
+    dessus, et décrire l'image produite.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    src = open(os.path.join(racine, 'modules', 'imagerie.py'), encoding='utf-8').read()
+    import modules.imagerie as I
+
+    # (1) Sans clé, on le DIT — et on n'appelle personne
+    o = I.options({})
+    assert not o['cle_presente'] and 'Aucune clé Gemini' in o['note']
+    assert I.options({'gemini': 'k'})['cle_presente']
+    assert 'erreur' in asyncio.run(I.generer('un chat', api_keys={}))
+    assert 'erreur' in asyncio.run(I.generer('', api_keys={'gemini': 'k'}))
+
+    # (2) RGPD : rien ne reste chez Google. Même choix que l'agent Vibe.
+    assert "'store': False" in src, "l'API Interactions conserve TOUT par défaut"
+
+    # (2 bis) La livraison en ligne est DEMANDÉE, pas espérée : ce module lit des
+    # octets, pas une référence. Et le format demandé est celui qu'on écrira.
+    assert "'delivery': 'inline'" in src
+    assert "'mime_type': _MIME_DEMANDE" in src
+
+    # (2 ter) L'extension du fichier suit le format REÇU, pas celui demandé
+    assert I.extension_pour('image/jpeg') == 'jpg'
+    assert I.extension_pour('image/webp') == 'webp'
+    assert I.extension_pour('image/png') == 'png'
+    assert I.extension_pour('image/jpeg; charset=utf-8') == 'jpg', 'paramètres MIME tolérés'
+    assert I.extension_pour('') == 'png' and I.extension_pour(None) == 'png'
+    assert 'extension_pour' in mn and '.png"' not in mn.split('imagerie_generer')[-1][:1500], \
+        'la route ne doit plus écrire une extension en dur'
+
+    # (3) On n'a PAS branché Imagen, et le code dit pourquoi
+    assert 'imagen-4' not in src and 'imagen-3' not in src, 'API condamnée : pas de code neuf dessus'
+    assert '17 août 2026' in src and '17 août 2026' in mn, \
+        'la raison du choix doit rester lisible là où on serait tenté de revenir dessus'
+    assert 'imagen-' not in mn and ':predict"' not in mn, \
+        "aucun modèle ni endpoint Imagen ne doit être appelé"
+
+    # (4) Lecture de la réponse : l'ordre des blocs n'est PAS garanti
+    rep = {'steps': [
+        {'type': 'model_output', 'content': [
+            {'type': 'text', 'text': 'Voilà.'},
+            {'type': 'image', 'data': 'QUJD', 'mime_type': 'image/png'}]}]}
+    images, texte = I._extraire(rep)
+    assert images and images[0]['b64'] == 'QUJD' and texte == 'Voilà.'
+    # …et dans l'autre sens, avec un raccourci de commodité
+    im2, _ = I._extraire({'output_image': {'data': 'WFla', 'mime_type': 'image/jpeg'}})
+    assert im2[0]['b64'] == 'WFla' and im2[0]['mime'] == 'image/jpeg'
+    assert I._extraire({'bruit': 1}) == ([], '')
+    assert I._extraire('rien') == ([], '')
+
+    # (5) Une résolution impossible est corrigée, mais la réponse porte la VRAIE
+    vraie = I.generer
+    capture = {}
+
+    async def _faux_post(prompt, modele='flash', ratio='1:1', taille='1K',
+                         api_keys=None, images_ref=None):
+        capture['ratio'], capture['taille'] = ratio, taille
+        return {'images': [{'b64': 'QUJD', 'mime': 'image/png'}], 'ratio': ratio,
+                'taille': taille}
+    assert 'lite' in I.MODELES and I.MODELES['lite']['tailles'] == ('1K',), \
+        'le modèle économique ne fait que du 1K'
+    assert '4K' in I.MODELES['flash']['tailles']
+    assert '21:9' in I.RATIOS and '9:16' in I.RATIOS
+
+    # (5 bis) Identifiants relevés dans la liste officielle des modèles, jamais
+    # déduits d'une phrase — voir le même piège attrapé côté Veo.
+    ids = sorted(m['id'] for m in I.MODELES.values())
+    assert ids == ['gemini-3-pro-image', 'gemini-3.1-flash-image',
+                   'gemini-3.1-flash-lite-image'], ids
+    for nom, conf in I.MODELES.items():
+        assert conf['tailles'], nom
+        assert set(conf['tailles']) <= {'0.5K', '1K', '2K', '4K'}, nom
+    assert '0.5K' not in I.MODELES['pro']['tailles'], \
+        'le 0,5K est propre au modèle Flash'
+
+    # (6) L'image générée est DÉCRITE : sans alt, une image est un fichier muet
+    assert '_vibe_describe_image' in mn and 'alt' in mn
+    assert 'id="studio-image-decrire"' in html
+    assert "vign.alt = im.alt ||" in app, 'jamais d’alt inventé quand la description manque'
+    assert 'zone.readOnly = true' in app, 'la description doit être copiable'
+
+    # (7) UNE SEULE porte pour créer un média : le studio est passé de la barre
+    # du haut au menu « + », là où se prennent déjà les décisions « je crée ».
+    # Trois boutons pour deux idées, c'était trois tabulations pour rien.
+    assert 'id="toggle-studio"' not in html and 'toggle-studio' not in app, \
+        'le studio ne doit plus avoir de bouton propre dans la barre du haut'
+    assert 'id="plus-studio"' in html, 'il s’ouvre depuis le menu « + »'
+    assert "_btnStudio = document.getElementById('plus-studio')" in app
+    assert "_btnStudio.hidden = !(keys && keys.gemini)" in app, \
+        'toujours caché sans clé : une porte qui ne mène nulle part ne vaut rien'
+    # Le raccourci survit au déménagement — sinon c'est un accès direct perdu
+    assert "'Alt+Shift+I'" in app and 'window._ouvrirStudio' in app
+    assert "if (k === 'i')" in app and '_entree.hidden' in app, \
+        'le raccourci ne doit pas ouvrir un panneau inutilisable'
+    ok("imagerie : réglages complets, rien conservé chez Google, image décrite, une seule porte")
+
+
+def test_alt_honnete():
+    """Un texte alternatif qui répète la consigne est un texte qui MENT.
+
+    Les images créées depuis la conversation portaient `alt = la consigne` :
+    il disait ce qui avait été demandé, pas ce qui avait été produit. Au
+    lecteur d'écran, impossible de savoir que le modèle avait dérivé. Même
+    défaut dans la galerie. Règle tenue ici : soit une vraie description, soit
+    on écrit qu'il n'y en a pas — jamais la consigne déguisée en description.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    # (1) La consigne ne sert PLUS d'alt — les QUATRE endroits où l'image
+    #     apparaît : création dans le fil, retouche, historique, galerie.
+    #     Le défaut existait aux quatre ; trois avaient été manqués au premier
+    #     passage et c'est ce test qui les a sortis.
+    assert 'alt="${_esc(prompt)}"' not in app, 'création et retouche dans le fil'
+    assert 'alt="${_esc(img.prompt)}"' not in app, 'images rechargées depuis l’historique'
+    assert 'alt="${_esc(img.prompt || img.filename)}"' not in app, 'galerie'
+
+    # (2) Un alt provisoire honnête, remplacé par la vraie description
+    assert 'description en cours' in app
+    assert 'imgEl.alt = desc;' in app
+
+    # (2 bis) Le correctif est FACTORISÉ : quatre copies auraient divergé
+    assert app.count('async function _decrireImageGeneree(') == 1
+    assert app.count('_decrireImageGeneree(') >= 4, 'appelée depuis chaque chemin'
+
+    # (2 ter) Après une retouche, la consigne est une INSTRUCTION : encore moins
+    #         utilisable en description qu'une consigne de création.
+    assert 'Image retouchée, description en cours' in app
+
+    # (2 quater) Historique : pas de description automatique — ce serait un appel
+    #            de vision par image à chaque ouverture de fil — mais un bouton.
+    assert 'img-describe-btn' in app and 'Décrire cette image' in app
+    assert "Pas de description enregistrée" in app
+
+    # (3) Quand la description manque, on le DIT — et on nomme la consigne
+    #     comme consigne, pas comme description
+    assert 'Description automatique indisponible' in app
+    assert "à partir de la consigne" in app
+    assert 'sans description enregistrée' in app, 'galerie : même honnêteté'
+
+    # (4) La route de description ne lève jamais et explique ses échecs
+    assert '/api/image/decrire' in mn and '/api/image/decrire' in app
+    assert '"raison"' in mn, 'un échec silencieux redeviendrait un alt menteur'
+    assert 'return {"description": "", "raison"' in mn
+
+    # (5) La description est jointe à la LISTE de la galerie : une image par
+    #     requête ferait cent allers-retours pour cent vignettes
+    assert "img['alt'] = (fiche.get('alt') or '').strip()" in mn
+
+    # (6) La description reste lisible et COPIABLE, pas seulement parlée :
+    #     une annonce vocale passe, un texte reste.
+    assert 'sum.textContent = "Description de l\'image"' in app
+    assert 'zone.readOnly = true' in app
+    ok("texte alternatif : jamais la consigne déguisée en description, et l’absence est dite")
+
+
+def test_video_veo():
+    """Veo est une opération LONGUE : onze secondes à six minutes.
+
+    Trois exigences, chacune tirée d'une contrainte réelle : corriger AVANT de
+    partir un couple durée/résolution que Google refusera (sinon c'est six
+    minutes d'attente pour rien), rapatrier la vidéo tout de suite (Google
+    l'efface au bout de deux jours), et ne pas confondre un hoquet réseau avec
+    un échec de génération.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    src = open(os.path.join(racine, 'modules', 'video.py'), encoding='utf-8').read()
+    gitignore = open(os.path.join(racine, '.gitignore'), encoding='utf-8').read()
+    import modules.video as V
+
+    # (1) Sans clé, on le DIT
+    o = V.options({})
+    assert not o['cle_presente'] and 'deux jours' in o['avertissement']
+    assert 'erreur' in asyncio.run(V.lancer('une côte', api_keys={}))
+    assert 'erreur' in asyncio.run(V.lancer('', api_keys={'gemini': 'k'}))
+
+    # (2) Règles de Google — fonction PURE, testable sans réseau
+    assert V.regles('8', '720p') == ('8', '720p', '')
+    d, r, note = V.regles('4', '1080p')
+    assert (d, r) == ('8', '1080p') and 'Google' in note, \
+        'corriger avant de partir, mais jamais en silence'
+    d, r, note = V.regles('6', '4k')
+    assert (d, r) == ('8', '4k') and note
+    assert V.regles('9', 'zzz')[:2] == ('8', '720p'), 'valeurs absurdes ramenées au défaut'
+    # Tous les modèles n'ont pas les mêmes résolutions, et les corrections SE CUMULENT
+    d, r, note = V.regles('4', '4k', ('720p', '1080p'))
+    assert (d, r) == ('8', '1080p'), (d, r)
+    assert 'ne propose pas' in note and 'Google' in note, \
+        'deux corrections, deux explications — aucune ne doit manger l’autre'
+    assert V.regles('4', '720p', ('720p', '1080p')) == ('4', '720p', '')
+
+    # (2 bis) Identifiants de modèles — relevés dans la liste officielle, PAS
+    # déduits de la prose. Piège réel : les tables de paramètres de Google
+    # mentionnent un « Veo 3.1 Fast » dont aucun identifiant n'est publié ; le
+    # modèle réellement appelable à côté de Veo 3.1 est Veo 3.1 Lite.
+    ids = sorted(m['id'] for m in V.MODELES.values())
+    assert ids == ['veo-3.1-generate-preview', 'veo-3.1-lite-generate-preview'], ids
+    assert '4k' not in V.MODELES['veo31lite']['resolutions'], \
+        'Veo 3.1 Lite ne fait pas de 4K — le promettre serait un refus à l’arrivée'
+    assert '4k' in V.MODELES['veo31']['resolutions']
+    for nom, conf in V.MODELES.items():
+        assert conf['resolutions'], nom
+        assert set(conf['resolutions']) <= {'720p', '1080p', '4k'}, nom
+
+    # (3) Europe : Veo 3.x n'accepte que allow_adult, posé d'avance
+    assert "'personGeneration': 'allow_adult'" in src, \
+        'sinon on découvre le refus après six minutes d’attente'
+
+    # (4) Lecture de l'opération terminée, formes tolérées
+    fini = {'done': True, 'response': {'generateVideoResponse': {'generatedSamples': [
+        {'video': {'uri': 'https://exemple/veo.mp4'}}]}}}
+    assert V._uri_video(fini) == 'https://exemple/veo.mp4'
+    assert V._uri_video({'response': {'generatedVideos': [{'video': {'url': 'http://u'}}]}}) == 'http://u'
+    assert V._uri_video({'done': True, 'response': {}}) == ''
+    assert V._uri_video(None) == ''
+
+    # (5) Un hoquet réseau n'est PAS un échec : l'opération continue chez Google
+    assert "'fait': False, 'message'" in src
+    assert 'La génération a échoué' in src, 'une vraie erreur, elle, est dite'
+
+    # (6) Chemin complet : lancement, suivi, rapatriement, reprise après rechargement
+    assert '/api/video/lancer' in mn and '/api/video/etat' in mn
+    assert '/api/video/en-cours' in mn, 'une génération de six minutes survit à un F5'
+    assert 'telecharger' in mn, 'rapatrier tout de suite : Google efface à deux jours'
+    assert '_media_nom_sur' in mn and 'os.path.basename' in mn
+    assert 'data/videos/' in gitignore
+
+    # (7) Interface : annonces espacées, lecteur étiqueté, réglages nommés
+    assert '_ST_INTERVALLE_MS = 30000' in app, \
+        'une annonce toutes les 5 secondes couvrirait tout le reste à la voix'
+    assert "lecteur.setAttribute('aria-label'" in app, 'un lecteur vidéo sans nom est muet'
+    assert '_stReprendre' in app
+    assert 'id="studio-video-resolution"' in html and 'aria-live="polite"' in html
+    ok("vidéo : règles de Google appliquées avant l'attente, rapatriement immédiat, suivi qui survit au rechargement")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -1797,8 +2550,14 @@ if __name__ == '__main__':
                test_choix_dans_la_base,
                test_reordonnancement,
                test_veille,
+               test_catalogue_services, test_exa_avance,
+               test_exa_dans_le_chat,
+               test_audit_structurel,
                test_verification_relance_sur_pause,
                test_script_reparation, test_script_permission_inchangee,
-               test_script_blocage_securite_pas_de_retry]:
+               test_script_blocage_securite_pas_de_retry,
+               test_veille_se_signale, test_banc_essai_reordonnanceur,
+               test_musique_lyria,
+               test_imagerie_reglee, test_video_veo, test_alt_honnete]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
