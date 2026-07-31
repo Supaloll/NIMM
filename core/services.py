@@ -51,6 +51,15 @@ SERVICES = [
      'exemple': 'sk-or-…', 'console': 'https://openrouter.ai/keys',
      'role': "Passerelle vers des centaines de modèles (Qwen, Kimi, GLM, MiniMax…) "
              "avec une seule clé."},
+    {'id': 'groq', 'nom': 'Groq', 'famille': 'conversation',
+     'exemple': 'gsk_…', 'console': 'https://console.groq.com/keys',
+     'role': "Réponses quasi instantanées sur des modèles ouverts (Llama, Qwen). "
+             "Le délai avant le premier mot compte double quand la réponse est "
+             "écoutée : à réserver aux tâches de fond et aux échanges rapides."},
+    {'id': 'cerebras', 'nom': 'Cerebras', 'famille': 'conversation',
+     'exemple': 'csk-…', 'console': 'https://cloud.cerebras.ai/',
+     'role': "Le plus rapide du marché, sur modèles ouverts également. Même "
+             "usage que Groq ; un million de jetons par jour offerts."},
 
     # ── recherche et veille ──
     {'id': 'brave', 'nom': 'Brave Search', 'famille': 'recherche',

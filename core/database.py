@@ -984,6 +984,8 @@ def init_db(user_id: str = None):
         ('openai',     'OpenAI',       'tirelire',          2.50,  10.00, 'manual'),
         ('openrouter', 'OpenRouter',   'tirelire',          0.50,   1.50, 'manual'),
         ('mistral',    'Mistral',      'compteur_tokens',   0.10,   0.30, 'monthly'),
+        ('groq',       'Groq',         'tirelire',          0.59,   0.79, 'manual'),
+        ('cerebras',   'Cerebras',     'tirelire',          0.85,   1.20, 'manual'),
         ('ollama',     'Ollama',       'compteur_tokens',   0.0,    0.0,  'never'),
         ('brave',      'Brave Search', 'compteur_requetes', 0.0,    0.0,  'monthly'),
         ('tavily',     'Tavily',       'compteur_requetes', 0.0,    0.0,  'monthly'),
@@ -1731,6 +1733,10 @@ TARIFS_DEFAUT = {
     'gemini_image': {'in': 0.50,  'out': 60.00},  # gemini-3.1-flash-image — pas encore loggé (voir ARCHITECTURE.md)
     'openai':       {'in': 2.50,  'out': 10.00},
     'openrouter':   {'in': 0.50,  'out': 1.50},
+    # Ordres de grandeur pour un modèle 70B ; ces deux fournisseurs facturent
+    # selon la taille du modèle choisi — à ajuster dans l'onglet Coûts.
+    'groq':         {'in': 0.59,  'out': 0.79},
+    'cerebras':     {'in': 0.85,  'out': 1.20},
     'mistral':      {'in': 0.10,  'out': 0.30},
     'ollama':       {'in': 0.0,   'out': 0.0},
     'brave':        {'in': 0.0,   'out': 0.0},

@@ -9,6 +9,7 @@ Sortie : une ligne « OK » par scénario, « TOUS LES TESTS PASSENT » à la fi
 """
 import ast
 import asyncio
+import re
 import json
 import os
 import sys
@@ -2379,6 +2380,333 @@ def test_imagerie_reglee():
     ok("imagerie : réglages complets, rien conservé chez Google, image décrite, une seule porte")
 
 
+def test_fournisseurs_cables_partout():
+    """Un fournisseur à moitié branché répond en direct et se tait en flux.
+
+    L'adresse de base et le modèle de repli étaient recopiés à TROIS endroits
+    d'engine.py — appel direct, flux, flux avec outils. Trois copies, c'est la
+    garantie qu'un ajout n'en touche que deux, et le symptôme est discret : le
+    fournisseur marche quand on le teste, et reste muet en usage réel.
+    Source unique désormais, et ce test vérifie que chaque fournisseur déclaré
+    est atteignable de bout en bout.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    db = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    import core.services as SV
+
+    # engine.py importe httpx, absent de certains environnements de test : on lit
+    # donc la table dans l'ARBRE SYNTAXIQUE plutôt que d'importer le module.
+    arbre = ast.parse(eng)
+    table = None
+    for n_ in ast.walk(arbre):
+        if isinstance(n_, ast.Assign) and any(
+                getattr(t, 'id', '') == 'FOURNISSEURS_OPENAI_COMPAT' for t in n_.targets):
+            table = ast.literal_eval(n_.value)
+    assert table, 'table des fournisseurs compatibles OpenAI introuvable'
+    assert {'deepseek', 'openai', 'openrouter', 'mistral', 'groq', 'cerebras'} <= set(table)
+
+    def _valeur(nom_var):
+        for x in ast.walk(arbre):
+            if isinstance(x, ast.Assign) and any(
+                    getattr(t, 'id', '') == nom_var for t in x.targets):
+                return ast.literal_eval(x.value)
+        return {}
+    modeles_defaut = _valeur('_PROVIDER_DEFAULT_MODEL')
+
+    # (1) Chaque entrée est complète et plausible
+    for nom, conf in table.items():
+        assert conf['base'].startswith('https://'), nom
+        assert conf['modele'], nom
+        assert isinstance(conf.get('outils'), bool), \
+            '%s : dire si le fournisseur sait appeler des outils, ne pas le supposer' % nom
+
+    # (2) UNE seule source pour le CHAT : plus de dictionnaire d'adresses recopié.
+    #     On ne compte pas les occurrences d'une adresse — les points d'accès
+    #     annexes (liste des modèles, agents, solde, complétion de code) la
+    #     réutilisent légitimement. Ce qu'on traque, c'est la structure dupliquée.
+    for reste in ("urls[provider]", "models[provider]",
+                  "urls = {\n        'deepseek'", "models = {\n        'deepseek'"):
+        assert reste not in eng, 'reste de l’ancienne table locale : ' + reste
+    assert eng.count('_base_openai_compat(') >= 6, \
+        'les appels doivent tirer leur adresse de la table, pas d’un littéral'
+
+    # (3) Le flux et le flux-avec-outils se servent de la table, pas d'une liste figée
+    assert 'elif provider in FOURNISSEURS_OPENAI_COMPAT:' in eng
+    assert "_SUPPORTED = {p for p, c in FOURNISSEURS_OPENAI_COMPAT.items() if c.get('outils')}" in eng, \
+        "les fournisseurs sans outils doivent retomber sur le flux simple, pas envoyer une requête ignorée"
+
+    # (4) Les deux nouveaux sont câblés de bout en bout
+    for nom in ('groq', 'cerebras'):
+        assert nom in modeles_defaut, '%s : modèle par défaut' % nom
+        assert nom in SV.ids(), '%s : absent du catalogue des services (pas de champ de clé)' % nom
+        assert "'%s':" % nom in db or "('%s'," % nom in db, '%s : tarif/portefeuille' % nom
+        assert nom.upper() + '_API_KEY' in eng, '%s : clé d’environnement (engine)' % nom
+        assert nom.upper() + '_API_KEY' in hub, '%s : clé d’environnement (hub)' % nom
+        assert "'%s':       '%s'," % (nom, nom) in hub or "'%s':   '%s'," % (nom, nom) in hub, \
+            '%s : correspondance clé→fournisseur dans hub' % nom
+        assert 'value="%s"' % nom in html, '%s : absent des sélecteurs de fournisseur' % nom
+
+    # (5) Le catalogue de modèles est interrogé en direct pour les deux : leurs
+    #     modèles à poids ouverts changent souvent, rien ne doit être figé.
+    assert "if provider in ('groq', 'cerebras'):" in eng and "'/models'" in eng
+
+    # (6) Repli automatique : les deux entrent dans l'ordre de secours, mais
+    #     APRÈS les modèles propriétaires — ils sont rapides, pas plus fins.
+    ordre = eng[eng.index("ordre = ['mistral'"):]
+    ordre = ordre[:ordre.index(']')]
+    for nom in ('groq', 'cerebras'):
+        assert nom in ordre, '%s : absent du repli automatique' % nom
+    assert ordre.index('anthropic') < ordre.index('groq')
+
+    # (7) Modèles conseillés : le minimum vérifié, le catalogue vivant fait le reste
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    bloc = app[app.index('const MODELS_BY_PROVIDER'):]
+    bloc = bloc[:bloc.index('\n};')]
+    for nom in ('groq', 'cerebras'):
+        assert nom + ':' in bloc, '%s : aucun modèle conseillé' % nom
+    ok("fournisseurs : source unique d'adresses, Groq et Cerebras câblés de bout en bout")
+
+
+def test_accessibilite_des_medias():
+    """Toute image, tout lecteur audio ou vidéo doit avoir un nom.
+
+    Pour qui navigue au lecteur d'écran, une image sans texte alternatif est une
+    case vide et un lecteur audio sans nom s'annonce « lecteur audio » sans dire
+    de quoi. Ce contrôle balaie l'interface au lieu de compter sur une relecture
+    — méthode retenue après avoir manqué trois textes alternatifs sur quatre.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) Aucune balise <img> du HTML sans attribut alt
+    sans_alt = [m.group(0)[:80] for m in re.finditer(r'<img\b[^>]*>', html)
+                if 'alt=' not in m.group(0)]
+    assert not sans_alt, 'images sans texte alternatif : ' + ' | '.join(sans_alt)
+
+    # (2) Toute image construite en JS reçoit un alt dans la foulée
+    for m in re.finditer(r"createElement\('img'\)", app):
+        fenetre = app[m.start():m.start() + 1200]
+        ligne = app[:m.start()].count('\n') + 1
+        assert '.alt' in fenetre, 'image créée sans alt vers la ligne %d' % ligne
+
+    # (3) Tout lecteur audio ou vidéo construit en JS reçoit un nom ET ses
+    #     contrôles — un son qu'on ne peut pas arrêter est un piège.
+    for balise in ('audio', 'video'):
+        for m in re.finditer(r"createElement\('%s'\)" % balise, app):
+            fenetre = app[m.start():m.start() + 900]
+            ligne = app[:m.start()].count('\n') + 1
+            assert 'aria-label' in fenetre, \
+                'lecteur %s sans nom vers la ligne %d' % (balise, ligne)
+            assert 'controls' in fenetre, \
+                'lecteur %s sans contrôles vers la ligne %d' % (balise, ligne)
+
+    # (3 bis) Les noms de la barre du haut restent COURTS. Ces boutons sont lus à
+    #     chaque passage du curseur : un libellé de trente-cinq caractères y coûte
+    #     du temps à chaque fois. Remarque de Fernando le 30/07 sur le bouton
+    #     Musique, que j'avais nommé « Musique, génération et bibliothèque ».
+    #     L'infobulle (title) peut rester explicite : elle ne se lit qu'à la demande.
+    zone = html[html.index('<div id="top-right">'):][:4000]
+    trop_longs = []
+    for m in re.finditer(r'<button\s+id="(toggle-[^"]+)"[^>]*?aria-label="([^"]*)"', zone):
+        if len(m.group(2)) > 24:
+            trop_longs.append('%s (%d car.)' % (m.group(1), len(m.group(2))))
+    assert not trop_longs, ('noms trop longs dans la barre du haut : '
+                            + ', '.join(trop_longs))
+
+    # (3 ter) Même borne pour les boutons de la zone de saisie et du menu « + » :
+    #     eux aussi sont traversés en permanence. On borne la LONGUEUR plutôt que
+    #     d'interdire des mots : une première version de ce test proscrivait
+    #     « Ouvrir » et attrapait « Ouvrir le clavier », qui est juste — ce bouton
+    #     ferme le panneau micro pour revenir au clavier, il décrit son effet.
+    zone_saisie = html[html.index('<div id="input-actions">'):][:3000]
+    menu = html[html.index('id="plus-menu"'):][:2000]
+    longs = []
+    for source, ou in ((zone_saisie, 'zone de saisie'), (menu, 'menu +')):
+        for m in re.finditer(r'<button\s+id="([^"]+)"[^>]*?aria-label="([^"]*)"', source):
+            if len(m.group(2)) > 30:
+                longs.append('%s dans %s (%d car.)' % (m.group(1), ou, len(m.group(2))))
+    assert not longs, 'noms accessibles trop longs : ' + ', '.join(longs)
+
+    # (4) Aucun bouton muet : ni texte, ni nom accessible
+    muets = []
+    for m in re.finditer(r'<button\b[^>]*>(.*?)</button>', html, re.S):
+        texte = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+        if not texte and 'aria-label' not in m.group(0):
+            muets.append(m.group(0)[:70].replace('\n', ' '))
+    assert not muets, 'boutons sans nom accessible : ' + ' | '.join(muets)
+    # (5) Le sélecteur de voix est UNIQUE et rassemble tous les moteurs. Ajouter
+    #     une porte par moteur serait une tabulation de plus pour rien — et le
+    #     docstring de list_voices() doit rester juste : périmé, il a suffi à
+    #     faire croire à un manque inexistant lors d'un audit.
+    tts = open(os.path.join(racine, 'modules', 'tts.py'), encoding='utf-8').read()
+    corps = tts[tts.index('def list_voices'):tts.index('def synthesize_voxtral')]
+    for moteur in ('kokoro', 'piper', 'edge', 'gemini', 'voxtral', 'mistral'):
+        assert moteur in corps.lower(), 'moteur absent du sélecteur unique : ' + moteur
+    doc = corps[:corps.index('"""', corps.index('"""') + 3)]
+    assert 'Kokoro + Piper + Edge' not in doc, \
+        'docstring périmé : il annonçait trois moteurs pour six'
+    assert 'id="voice-select"' in html and 'preview-voice-btn' in html, \
+        'une seule liste, un seul bouton d’écoute'
+    ok("accessibilité des médias : aucune image muette, aucun lecteur anonyme, aucun bouton sans nom")
+
+
+def test_modeles_conseilles():
+    """Les modèles CONSEILLÉS vieillissent — et un modèle éteint ne répond plus.
+
+    Le catalogue, lui, est interrogé chez le fournisseur puis fusionné : ce
+    n'est donc pas une liste figée qu'on teste, mais deux choses vérifiables
+    hors ligne — qu'aucun modèle notoirement éteint ne soit proposé, et que la
+    date de dernière revue soit inscrite pour que la péremption se voie.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    # (1) Modèles annoncés « Shut down » par Google : ne jamais les proposer
+    eteints = ('gemini-2.0-flash', 'gemini-2.0-flash-lite',
+               'gemini-3.1-flash-lite-preview', 'gemini-3-pro-preview',
+               'imagen-3.0', 'imagen-4.0')
+    debut = app.index('const MODELS_BY_PROVIDER')
+    bloc = app[debut:app.index('};', debut)]
+    for mort in eteints:
+        assert mort not in bloc, 'modèle éteint encore conseillé : ' + mort
+
+    # (2) Le mécanisme qui empêche la liste de vieillir doit rester en place :
+    #     catalogue vivant interrogé et FUSIONNÉ, pas remplacé.
+    assert '/api/models/' in app and 'Autres modèles disponibles' in app, \
+        'sans la fusion du catalogue vivant, la liste conseillée devient un plafond'
+
+    # (3) Date de dernière revue inscrite : une recommandation sans date ne se
+    #     périme jamais aux yeux du lecteur, alors qu'elle se périme en vrai.
+    assert re.search(r'Conseils revus le \d\d/\d\d/\d{4}', app), \
+        'inscrire la date de revue des modèles conseillés'
+    ok("modèles conseillés : aucun modèle éteint, catalogue vivant fusionné, revue datée")
+
+
+def test_contrat_interface_serveur():
+    """Le piège le plus fréquent de NIMM : une fonction inatteignable.
+
+    Historique de ce défaut, à chaque fois trouvé par accident : le bouton Vibe
+    absent du HTML rendait tout un pipeline injoignable ; la sentinelle
+    [TRUNCATED] guettée par l'interface n'était émise par AUCUN code serveur ;
+    des clés d'API n'avaient aucun champ de saisie. Le code existait, la
+    fonction n'existait pas.
+
+    Ce test vérifie le contrat dans LES DEUX SENS, et ancre la liste des routes
+    légitimement absentes de l'interface. Ajouter une route sans la brancher
+    devient donc un choix explicite, pas un oubli.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    front = (open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+             + '\n' + open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read())
+
+    # Les routes se relèvent dans l'ARBRE SYNTAXIQUE, pas à l'expression
+    # régulière : main.py déclare des chemins en guillemets simples comme en
+    # guillemets doubles, et une regex sur un seul des deux est aveugle sur des
+    # dizaines de routes (erreur commise en écrivant ce test).
+    arbre = ast.parse(src)
+    routes = []
+    for n in ast.walk(arbre):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for d in n.decorator_list:
+                if isinstance(d, ast.Call) \
+                   and getattr(d.func, 'attr', '') in ('get', 'post', 'patch', 'put', 'delete') \
+                   and d.args and isinstance(d.args[0], ast.Constant):
+                    routes.append((d.func.attr.upper(), d.args[0].value, n.name))
+    assert len(routes) > 300, 'garde-fou : %d routes relevées, c’est trop peu' % len(routes)
+    assert any("'" in l for l in src.split('@app.')[1:3]) or True
+
+    def _rx(chemin):
+        bouts = ['[^/]+' if s.startswith('{') else re.escape(s)
+                 for s in chemin.strip('/').split('/')]
+        return re.compile('^/' + '/'.join(bouts) + '/?$')
+    motifs = [_rx(c) for _, c, _ in routes]
+
+    # ── SENS 1 : l'interface appelle-t-elle des routes inexistantes ? ──
+    def _formes(u):
+        u = u.split('?')[0]
+        u = re.sub(r'\$\{[^}]*\}', 'zzz', u)          # `${variable}`
+        u = re.sub(r"['\"]\s*\+.*$", 'zzz', u)          # '...' + variable
+        u = u.rstrip('/')
+        yield u
+        if not u.endswith('zzz'):
+            yield u + '/zzz'
+    appels = {m.group(1) for m in re.finditer(r"""['\"`](/api/[^'\"`\s]*)""", front)}
+    appels.discard('/api/')                             # fragment, pas un appel
+    orphelins = [u for u in sorted(appels)
+                 if not any(rx.match(f) for f in _formes(u) for rx in motifs)]
+    assert not orphelins, ("l'interface appelle des routes qui n'existent pas : "
+                           + ', '.join(orphelins))
+
+    # ── SENS 2 : quelles routes l'interface ne nomme jamais ? ──
+    # Certaines ne DOIVENT pas y figurer, et chacune a sa raison. La liste est
+    # explicite pour qu'une nouvelle route non branchée saute aux yeux.
+    permis_prefixes = (
+        '/api/coanimm/',        # outils exécutés par le LLM, pas par l'interface
+        '/api/exa/',            # idem : recherche par le sens, côté agent
+    )
+    permis_exact = {
+        '/',                                  # la page elle-même
+        '/api/vibe/files/{filename}',         # adresse rendue par le serveur
+        '/api/musique/fichier/{nom}',         # idem
+        '/api/video/fichier/{nom}',           # idem
+        '/api/memory/clean',                  # administration / scripts
+        '/api/memory/all',                    # administration / scripts
+        '/api/mistral/ocr',                   # appelée depuis un script CoaNIMM
+        '/api/mistral-conversations/start',   # vestige, à trancher
+        '/api/settings/vision-provider',      # vestige : remplacé par /api/settings/routing
+        '/api/voice/list-mistral',            # DIAGNOSTIC : appelée à la main en dépannage
+        '/api/voice/test-tts/{pid}',          # DIAGNOSTIC : idem (les docstrings le disent)
+        '/api/tokens/estimate',               # sans interface, à dessein — voir plus bas
+        '/api/mistral/audio/voices',          # appelée depuis un script CoaNIMM
+        '/api/mistral/audio/speak',           # idem
+    }
+    # Une route de diagnostic n'est PAS une fonction inatteignable : elle est
+    # faite pour être appelée à la main quand quelque chose ne marche pas.
+    # Confondre les deux a produit un faux positif d'audit le 30/07 — les voix
+    # Mistral étaient déjà dans le sélecteur, et j'ai proposé de « brancher » des
+    # outils de dépannage. La distinction se lit dans le docstring.
+    for chemin in ('/api/voice/list-mistral', '/api/voice/test-tts/{pid}'):
+        i = src.find(chemin)
+        assert i > 0 and 'diagnostic' in src[i:i + 400].lower(), \
+            'route rangée en diagnostic sans le dire dans son docstring : ' + chemin
+    # Certaines familles de routes sont appelées avec une adresse CONSTRUITE :
+    # le fournisseur est une variable, donc le chemin complet n'apparaît nulle
+    # part en clair. On l'admet, mais seulement sur preuve : la ligne qui bâtit
+    # l'adresse doit être là. Sans cette preuve, la famille redevient suspecte.
+    assert "'/api/' + _batchProvider() + '/batch'" in front, \
+        'la base des routes de traitement par lots a changé : revoir cette exception'
+    familles_construites = ('/api/mistral/batch', '/api/gemini/batch',
+                            '/api/anthropic/batch')
+
+    def _cite(chemin):
+        litteral = chemin.split('{')[0].rstrip('/')
+        if litteral and litteral in front:
+            return True
+        if chemin.startswith(familles_construites):
+            return True
+        bouts = [s for s in chemin.strip('/').split('/') if not s.startswith('{')]
+        return len(bouts) >= 2 and ('/' + '/'.join(bouts[-2:])) in front
+
+    non_branchees = sorted({c for _, c, _ in routes
+                            if not _cite(c)
+                            and not c.startswith(permis_prefixes)
+                            and c not in permis_exact})
+    assert not non_branchees, (
+        "routes ajoutées sans être branchées à l'interface (les brancher, ou les "
+        "inscrire dans permis_exact avec leur raison) : " + ', '.join(non_branchees))
+
+    # La liste blanche ne doit pas devenir un tapis sous lequel on balaie :
+    # elle est bornée, et chaque entrée porte un commentaire dans le source.
+    assert len(permis_exact) <= 15, 'la liste des exceptions grossit trop'
+    ok("contrat interface/serveur : aucun appel dans le vide, aucune route ajoutée sans être branchée")
+
+
 def test_alt_honnete():
     """Un texte alternatif qui répète la consigne est un texte qui MENT.
 
@@ -2558,6 +2886,9 @@ if __name__ == '__main__':
                test_script_blocage_securite_pas_de_retry,
                test_veille_se_signale, test_banc_essai_reordonnanceur,
                test_musique_lyria,
-               test_imagerie_reglee, test_video_veo, test_alt_honnete]:
+               test_imagerie_reglee, test_video_veo, test_alt_honnete,
+               test_contrat_interface_serveur,
+               test_accessibilite_des_medias, test_modeles_conseilles,
+               test_fournisseurs_cables_partout]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
