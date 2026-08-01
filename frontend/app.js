@@ -4899,7 +4899,7 @@ async function loadSettingsIntoUI() {
 
         // Auto-sélection : si le chat n'est pas encore routé, choisir le premier provider disponible
         if (!routing.chat) {
-            const chatProviders = ['anthropic','deepseek','gemini','openai','openrouter','mistral'];
+            const chatProviders = ['anthropic','deepseek','gemini','openai','openrouter','mistral','groq','cerebras'];
             const firstAvailable = chatProviders.find(p => keys[p]);
             if (firstAvailable) {
                 const provSel = document.getElementById('provider-select');
@@ -5057,7 +5057,7 @@ async function _checkProviderBanner() {
         ]);
         const provider = routing.chat || '';
         const LOCAL    = ['ollama'];
-        const KEY_MAP  = { anthropic:'anthropic', deepseek:'deepseek', openai:'openai', gemini:'gemini', openrouter:'openrouter', mistral:'mistral', tavily:'tavily' };
+        const KEY_MAP  = { anthropic:'anthropic', deepseek:'deepseek', openai:'openai', gemini:'gemini', openrouter:'openrouter', mistral:'mistral', groq:'groq', cerebras:'cerebras', tavily:'tavily' };
         const keyName  = KEY_MAP[provider];
         const missing  = !provider || (!LOCAL.includes(provider) && keyName && !keys[keyName]);
         document.getElementById('no-provider-banner').classList.toggle('hidden', !missing);
@@ -5749,7 +5749,7 @@ function _svcIds() {
     // le formulaire doit rester utilisable même si la route échoue.
     return _SERVICES.length ? _SERVICES.map(s => s.id)
         : ['anthropic', 'deepseek', 'gemini', 'openai', 'openrouter',
-           'mistral', 'stability_ai', 'brave', 'tavily'];
+           'mistral', 'groq', 'cerebras', 'stability_ai', 'brave', 'tavily'];
 }
 
 function _svcEchappe(t) {
@@ -5818,7 +5818,7 @@ async function _saveApiKeys() {
 
     // Si le provider actuel est Ollama ou vide, basculer automatiquement sur le premier provider configuré
     const currentProvider = await fetch('/api/settings/provider').then(r => r.json()).then(d => d.provider).catch(() => '');
-    const llmProviders = ['deepseek','anthropic','openai','gemini','mistral','openrouter'];
+    const llmProviders = ['deepseek','anthropic','openai','gemini','mistral','openrouter','groq','cerebras'];
     if (!currentProvider || currentProvider === 'ollama') {
         const firstAvailable = llmProviders.find(p => keys[p]);
         if (firstAvailable) {
@@ -5925,7 +5925,7 @@ document.getElementById('image-edit-ok')?.addEventListener('click', async () => 
 document.getElementById('save-api-keys-btn').addEventListener('click', _saveApiKeys);
 
 // Entree ou perte de focus sur un champ cle -> sauvegarde automatique
-['anthropic','deepseek','gemini','openai','openrouter','mistral','stability-ai','brave','tavily'].forEach(p => {
+['anthropic','deepseek','gemini','openai','openrouter','mistral','groq','cerebras','stability-ai','brave','tavily'].forEach(p => {
     const el = document.getElementById(`api-key-${p}`);
     if (!el) return;
     el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); _saveApiKeys(); } });
@@ -8572,7 +8572,8 @@ async function loadCosts() {
 
 const _COST_ICONS = {
     anthropic: '🔴', deepseek: '🟢', gemini: '🟡', openai: '🔴',
-    openrouter: '🟠', mistral: '🔵', ollama: '🟢', brave: '🔵', tavily: '🟣'
+    openrouter: '🟠', mistral: '🔵', ollama: '🟢', brave: '🔵', tavily: '🟣',
+    groq: '⚡', cerebras: '⚡'
 };
 
 // Injecte une seule fois le style du tableau des coûts (évite de toucher styles.css).

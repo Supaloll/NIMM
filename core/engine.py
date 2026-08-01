@@ -142,6 +142,7 @@ def classer_erreur_fournisseur(exc, provider: str = '') -> dict:
             txt = (getattr(rep, 'text', '') or '')[:800]
     except Exception:
         pass
+    brut = txt                      # corps de la réponse, casse d'origine
     txt = (txt + ' ' + str(exc)).lower()
     nom = provider or 'le fournisseur'
 
@@ -163,8 +164,45 @@ def classer_erreur_fournisseur(exc, provider: str = '') -> dict:
     if 'connect' in txt or 'network' in txt or 'name resolution' in txt:
         return {'categorie': 'réseau', 'recuperable': True,
                 'message': "La connexion réseau a échoué."}
+    if code == 400:
+        # Requête refusée : l'API DIT toujours pourquoi, et ce détail ne
+        # remontait pas — l'utilisateur ne voyait que l'adresse appelée, ce qui
+        # ne permet ni de comprendre ni de rapporter le problème.
+        # Cas vécu : un modèle Anthropic récent refuse toute température choisie,
+        # et le message d'origine l'expliquait mot pour mot.
+        return {'categorie': 'requête', 'recuperable': False,
+                'message': (f"{nom} a refusé la requête : "
+                            + (_detail_erreur_api(brut) or "raison non précisée.")
+                            + " Si le problème persiste après un changement de "
+                              "modèle, c'est un défaut de NIMM à signaler.")}
     return {'categorie': 'erreur', 'recuperable': False,
             'message': f"Erreur inattendue de {nom} : {str(exc)[:200]}"}
+
+
+def _detail_erreur_api(corps: str) -> str:
+    """Message d'erreur lisible extrait du corps d'une réponse d'API.
+
+    Les fournisseurs répondent tous en JSON mais pas au même endroit :
+    `error.message` (Anthropic, OpenAI, Groq), `message` à la racine, ou
+    `error` en simple chaîne. On accepte les trois plutôt que d'en privilégier
+    un et de perdre l'explication chez les autres.
+    """
+    if not (corps or '').strip():
+        return ''
+    try:
+        data = json.loads(corps)
+    except Exception:
+        return corps.strip()[:300]
+    for chemin in (('error', 'message'), ('message',), ('detail',)):
+        noeud = data
+        for cle in chemin:
+            noeud = noeud.get(cle) if isinstance(noeud, dict) else None
+        if isinstance(noeud, str) and noeud.strip():
+            return noeud.strip()[:300]
+    err = data.get('error') if isinstance(data, dict) else None
+    if isinstance(err, str) and err.strip():
+        return err.strip()[:300]
+    return corps.strip()[:300]
 
 
 # ══════════════════════════════════════════
@@ -223,6 +261,31 @@ def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
 # Function Calling, FIM ; Not Supported Parameters: temperature, top_p… »).
 # Leur envoyer quand même produit au mieux une requête ignorée, au pire un refus.
 _MODELES_SANS_OUTILS = ('deepseek-reasoner',)
+
+
+# Depuis la génération 4.7, plusieurs modèles Anthropic REFUSENT tout paramètre
+# d'échantillonnage : « non-default temperature, top_p, or top_k values return a
+# 400 error on every request, regardless of whether thinking is used ». Ce n'est
+# donc pas lié à la réflexion — c'est vrai sur CHAQUE appel.
+# Envoyer `temperature` à Sonnet 5 ou Opus 5 casse toute conversation, avec un
+# 400 dont le message d'origine ne remontait pas jusqu'à l'utilisateur.
+# La liste est un préfixe : les identifiants sont figés (pas d'alias glissant).
+_ANTHROPIC_SANS_ECHANTILLONNAGE = (
+    'claude-fable-5', 'claude-mythos-5', 'claude-mythos-preview',
+    'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7',
+    'claude-sonnet-5',
+)
+
+
+def anthropic_accepte_temperature(model: str) -> bool:
+    """Ce modèle Anthropic accepte-t-il une température choisie ?
+
+    Fonction PURE, donc testable sans réseau ni clé. En cas de doute sur un
+    modèle inconnu, on répond OUI : le comportement historique est conservé,
+    et seuls les modèles explicitement listés perdent le réglage.
+    """
+    m = (model or '').strip().lower()
+    return not any(m.startswith(p) for p in _ANTHROPIC_SANS_ECHANTILLONNAGE)
 
 
 # Les modèles de raisonnement OpenAI (série o) refusent `max_tokens` — il faut
@@ -610,8 +673,14 @@ async def continuer_reponse_stream(messages: list, prefixe: str, provider: str,
     oai += [{'role': m['role'], 'content': m.get('content', '')}
             for m in messages if m.get('role') != 'system']
     oai.append({'role': 'assistant', 'content': prefixe, 'prefix': True})
-    payload = {'model': _resolve_model(provider, model), 'messages': oai,
-               'max_tokens': max_tokens, 'temperature': temperature, 'stream': True}
+    _m_repr = _resolve_model(provider, model)
+    payload = {'model': _m_repr, 'messages': oai,
+               'max_tokens': max_tokens, 'stream': True}
+    # Même garde que partout ailleurs : un modèle de raisonnement refuse la
+    # température, et la reprise de réponse ne doit pas être le seul chemin
+    # qui l'ignore.
+    if not (_modele_raisonnement_openai(_m_repr) or _modele_sans_outils(_m_repr)):
+        payload['temperature'] = temperature
     async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream('POST', f'{base}/chat/completions',
                                  headers={'Authorization': f'Bearer {api_key}',
@@ -1212,9 +1281,11 @@ async def _call_anthropic(messages, model, system_prompt, max_tokens, temperatur
     payload = {
         'model':      model,
         'max_tokens': max_tokens,
-        'temperature': temperature,
         'messages':   anthropic_messages,
     }
+    # Certains modèles refusent toute température choisie (400 systématique).
+    if anthropic_accepte_temperature(model):
+        payload['temperature'] = temperature
     if system_prompt:
         payload['system'] = system_prompt
     if tools:
@@ -1283,11 +1354,13 @@ async def _anthropic_tools_turn(messages, tools, model, system_prompt, max_token
     payload = {
         'model':       model,
         'max_tokens':  max_tokens,
-        'temperature': temperature,
         'messages':    _oai_msgs_to_anthropic(messages),
         'tools':       _oai_tools_to_anthropic(tools),
         'stream':      True,
     }
+    # Même règle que sur les deux autres chemins Anthropic.
+    if anthropic_accepte_temperature(model):
+        payload['temperature'] = temperature
     if system_prompt:
         payload['system'] = system_prompt
     if _anthropic_cache_enabled():
@@ -1446,8 +1519,15 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
             json={
                 'model':       model,
                 'messages':    oai_messages,
-                'max_tokens':  max_tokens,
-                'temperature': temperature,
+                # MÊME garde que sur le chemin streamé (_call_openai_compat_stream) :
+                # la série o d'OpenAI n'accepte que `max_completion_tokens`, et ni
+                # elle ni `deepseek-reasoner` n'acceptent `temperature`. Sans lui,
+                # l'appel direct échouait en 400 alors que le flux passait — une
+                # asymétrie invisible tant qu'on ne teste que la conversation.
+                **({'max_completion_tokens': max_tokens} if _modele_raisonnement_openai(model)
+                   else {'max_tokens': max_tokens}),
+                **({} if (_modele_raisonnement_openai(model) or _modele_sans_outils(model))
+                   else {'temperature': temperature}),
                 **({'tools': tools} if tools else {}),
                 **(_oai_response_format(provider_name, output_schema) or {}),
             }
@@ -1923,8 +2003,13 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
             json={
                 'model':       model,
                 'messages':    oai_messages,
-                'max_tokens':  max_tokens,
-                'temperature': temperature,
+                # Le flux AVEC outils avait ce garde, pas le flux simple —
+                # c'est pourtant lui qu'emprunte la conversation ordinaire.
+                # Un modèle de raisonnement y échouait donc en 400.
+                **({'max_completion_tokens': max_tokens} if _modele_raisonnement_openai(model)
+                   else {'max_tokens': max_tokens}),
+                **({} if (_modele_raisonnement_openai(model) or _modele_sans_outils(model))
+                   else {'temperature': temperature}),
                 'stream':      True,
                 'stream_options': {'include_usage': True},
                 **({'tools': tools} if tools else {}),
@@ -2013,10 +2098,12 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
     payload = {
         'model':      model,
         'max_tokens': max_tokens,
-        'temperature': temperature,
         'messages':   anthropic_messages,
         'stream':     True,
     }
+    # Même règle qu'en appel direct : ces modèles refusent toute température.
+    if anthropic_accepte_temperature(model):
+        payload['temperature'] = temperature
     if system_prompt:
         payload['system'] = system_prompt
     if tools:
