@@ -2380,6 +2380,107 @@ def test_imagerie_reglee():
     ok("imagerie : réglages complets, rien conservé chez Google, image décrite, une seule porte")
 
 
+def test_anthropic_parametres_echantillonnage():
+    """RÉGRESSION VÉCUE : « 400 Bad Request » sur toute conversation Anthropic.
+
+    Cause : depuis la génération 4.7, plusieurs modèles Anthropic refusent TOUT
+    paramètre d'échantillonnage — « non-default temperature, top_p, or top_k
+    values return a 400 error on every request, regardless of whether thinking
+    is used ». Ce n'est donc pas lié à la réflexion : c'est vrai sur chaque
+    appel. NIMM envoyait `temperature` en dur sur les TROIS chemins Anthropic.
+    Déclenchée en mettant Sonnet 5 et Opus 5 dans les modèles conseillés : le
+    modèle changeait, et plus rien ne répondait.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+
+    # (1) La règle est PURE et testable sans réseau ni clé
+    espace = {}
+    deb = eng.index('_ANTHROPIC_SANS_ECHANTILLONNAGE = (')
+    fin = eng.index('\n\n', eng.index('return not any', deb))
+    exec(eng[deb:fin], espace)
+    accepte = espace['anthropic_accepte_temperature']
+
+    for interdit in ('claude-sonnet-5', 'claude-opus-5', 'claude-fable-5',
+                     'claude-opus-4-7', 'claude-opus-4-8', 'claude-mythos-5'):
+        assert not accepte(interdit), interdit + ' : température refusée par l’API'
+    for permis in ('claude-sonnet-4-6', 'claude-haiku-4-5-20251001',
+                   'claude-3-5-sonnet-20241022'):
+        assert accepte(permis), permis + ' : la température doit rester réglable'
+    assert not accepte('CLAUDE-SONNET-5'), 'la casse ne doit pas ouvrir une brèche'
+    # Modèle inconnu : on conserve le comportement historique plutôt que de
+    # retirer un réglage à un modèle qui l'accepte peut-être.
+    assert accepte('') and accepte(None) and accepte('un-modele-inconnu')
+
+    # (2) Les TROIS chemins Anthropic appliquent la règle — c'est le nombre de
+    #     chemins qui compte : n'en corriger que deux, c'est le bug qui revient
+    #     dès qu'on active les outils ou qu'on quitte le flux.
+    assert eng.count('anthropic_accepte_temperature(model)') == 3, \
+        'appel direct, flux et flux-avec-outils doivent tous appliquer la règle'
+
+    # (3) Plus aucun envoi inconditionnel dans les charges utiles Anthropic
+    for bloc in re.findall(r"payload = \{[^}]*'messages':\s*(?:_oai_msgs_to_anthropic|anthropic_messages)[^}]*\}", eng):
+        assert "'temperature': temperature" not in bloc, \
+            'température encore envoyée en dur à Anthropic'
+    # (4) MÊME CLASSE DE DÉFAUT CHEZ LES AUTRES — cherchée à la demande de
+    #     Fernando après la panne Anthropic. Deux trous PRÉEXISTANTS trouvés :
+    #     le garde des modèles de raisonnement OpenAI (série o, qui exigent
+    #     `max_completion_tokens` et refusent `temperature`) existait sur le flux
+    #     AVEC outils, mais ni sur l'appel direct, ni sur le flux SIMPLE — or
+    #     c'est ce dernier qu'emprunte la conversation ordinaire. Même asymétrie
+    #     que celle qui a cassé Anthropic : un chemin corrigé, les autres non.
+    for fonction, ancre in (
+            ('_call_openai_compat', "**({'max_completion_tokens': max_tokens} if _modele_raisonnement_openai(model)"),
+            ('_call_openai_compat_stream', "# Le flux AVEC outils avait ce garde, pas le flux simple"),
+            ('continuer_reponse_stream', "if not (_modele_raisonnement_openai(_m_repr) or _modele_sans_outils(_m_repr)):"),
+    ):
+        assert ancre in eng, '%s : garde des modèles de raisonnement absent' % fonction
+
+    # Aucune charge utile OpenAI-compatible ne doit envoyer `temperature` en dur.
+    # Gemini et Ollama sont hors sujet : le premier la range dans
+    # `generationConfig` (acceptée par tous ses modèles, la réflexion se règle
+    # ailleurs), le second est un serveur local tolérant.
+    for bloc in re.findall(r"json=\{[^}]*'chat/completions'[^}]*\}", eng):
+        assert "'temperature': temperature," not in bloc, \
+            'charge utile OpenAI-compat avec température inconditionnelle'
+    ok("Anthropic : température omise sur les modèles qui la refusent, sur les trois chemins")
+
+
+def test_erreur_api_explique_la_cause():
+    """Une erreur qui ne dit que l'adresse appelée ne sert à personne.
+
+    Le 400 ci-dessus s'affichait « Erreur inattendue de anthropic : Client error
+    '400 Bad Request' for url … » — l'API expliquait pourtant précisément le
+    refus, dans le corps de la réponse, qui n'était jamais lu.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+
+    espace = {'json': json}
+    deb = eng.index('def _detail_erreur_api')
+    fin = eng.index('\n\n', eng.index('return corps.strip()[:300]', deb))
+    exec(eng[deb:fin], espace)
+    detail = espace['_detail_erreur_api']
+
+    # Les fournisseurs ne rangent pas le message au même endroit : accepter les
+    # trois formes plutôt que d'en privilégier une et perdre les autres.
+    assert 'temperature' in detail(
+        '{"type":"error","error":{"type":"invalid_request_error",'
+        '"message":"temperature: Input should be 1"}}')
+    assert detail('{"error":{"message":"Unsupported parameter"}}') == 'Unsupported parameter'
+    assert detail('{"message":"Bad model id"}') == 'Bad model id'
+    assert detail('{"detail":"Nom de fichier invalide."}') == 'Nom de fichier invalide.'
+    assert detail('{"error":"model not found"}') == 'model not found'
+    assert detail('Bad Request') == 'Bad Request', 'corps non JSON : rendu tel quel'
+    assert detail('') == '' and detail(None) == ''
+
+    # Le classement traite désormais le 400, et le corps de la réponse est
+    # conservé dans sa casse d'origine (le reste est mis en minuscules).
+    assert "if code == 400:" in eng and 'brut = txt' in eng
+    assert '_detail_erreur_api(brut)' in eng
+    ok("erreurs d'API : la raison du refus remonte jusqu'à l'utilisateur")
+
+
 def test_fournisseurs_cables_partout():
     """Un fournisseur à moitié branché répond en direct et se tait en flux.
 
@@ -2468,6 +2569,48 @@ def test_fournisseurs_cables_partout():
     bloc = bloc[:bloc.index('\n};')]
     for nom in ('groq', 'cerebras'):
         assert nom + ':' in bloc, '%s : aucun modèle conseillé' % nom
+
+    # (8) LES LISTES EN DUR DE app.js — trouvées par Fernando, qui ne voyait pas
+    #     les nouveaux fournisseurs dans les fils existants. Le premier jet de ce
+    #     test ne regardait que les sélecteurs du HTML et les avait toutes ratées.
+    #     Chacune a un effet observable différent : sans elles, le fournisseur
+    #     apparaît dans un menu mais n'est jamais choisi automatiquement, son
+    #     champ de clé ne s'enregistre pas tout seul, et il n'a pas de pastille
+    #     dans les coûts. Autant de pannes discrètes.
+    listes = {
+        'auto-sélection du chat':        'const chatProviders = [',
+        'correspondance des clés':       'const KEY_MAP  = {',
+        'repli du catalogue':            "_SERVICES.length ? _SERVICES.map",
+        'bascule automatique':           'const llmProviders = [',
+        'pastilles de coûts':            'const _COST_ICONS = {',
+    }
+    def _declaration(app, ancre):
+        """Le texte de CETTE déclaration seulement, jusqu'à son délimiteur.
+
+        Une fenêtre de taille fixe déborderait sur les déclarations suivantes,
+        qui citent les mêmes fournisseurs : le test passerait alors qu'une liste
+        est incomplète. Défaut constaté en éprouvant ce contrôle.
+        """
+        deb = app.index(ancre)
+        fin_c = app.find('];', deb)
+        fin_a = app.find('};', deb)
+        candidats = [x for x in (fin_c, fin_a) if x != -1]
+        return app[deb:min(candidats) + 2] if candidats else app[deb:deb + 300]
+
+    for libelle, ancre in listes.items():
+        assert ancre in app, 'ancre introuvable (%s) : le test doit être remis à jour' % libelle
+        extrait = _declaration(app, ancre)
+        for nom in ('groq', 'cerebras'):
+            assert nom in extrait, "%s : %s manquant dans « %s »" % (libelle, nom, ancre)
+
+    # La sauvegarde automatique des champs de clé : liste distincte des autres,
+    # certains services y portant un nom à tiret.
+    m = re.search(r"\[([^\]]*'anthropic'[^\]]*)\]\.forEach\(p => \{\s*\n\s*const el = document\.getElementById\(`api-key-",
+                  app)
+    assert m, 'la sauvegarde automatique des clés a changé de forme : remettre ce test à jour'
+    for nom in ('groq', 'cerebras'):
+        assert "'" + nom + "'" in m.group(1), \
+            '%s : absent de la sauvegarde automatique des champs de clé' % nom
     ok("fournisseurs : source unique d'adresses, Groq et Cerebras câblés de bout en bout")
 
 
@@ -2889,6 +3032,8 @@ if __name__ == '__main__':
                test_imagerie_reglee, test_video_veo, test_alt_honnete,
                test_contrat_interface_serveur,
                test_accessibilite_des_medias, test_modeles_conseilles,
-               test_fournisseurs_cables_partout]:
+               test_fournisseurs_cables_partout,
+               test_anthropic_parametres_echantillonnage,
+               test_erreur_api_explique_la_cause]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
