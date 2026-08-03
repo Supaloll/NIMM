@@ -352,9 +352,9 @@ def ocr_mistral(path, api_key, is_image=False):
     if not api_key:
         raise RuntimeError("Clé API Mistral manquante (à renseigner dans les paramètres).")
     try:
-        from mistralai import Mistral
+        from mistralai.client import Mistral
     except Exception:
-        raise RuntimeError("mistralai n'est pas installé (pip install mistralai).")
+        raise RuntimeError("mistralai n'est pas installé ou version incompatible (pip install --upgrade mistralai).")
     import os
     client = Mistral(api_key=api_key)
     with open(path, "rb") as f:

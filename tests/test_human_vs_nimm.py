@@ -7,7 +7,7 @@ Objectif : détecter les dérives thématiques.
 Config : fichier .env à la racine du projet
   USER_PROVIDER=deepseek          # ou mistral
   USER_API_KEY=sk-...
-  USER_MODEL=deepseek-chat        # ou mistral-small-latest
+  USER_MODEL=deepseek-v4-flash        # ou mistral-small-latest
   MAX_TURNS=12
   DELAY_SECONDS=2
   NIMM_MASK=lia
@@ -30,7 +30,7 @@ load_dotenv()
 NIMM_URL       = os.getenv("NIMM_URL",       "http://localhost:8080")
 USER_PROVIDER  = os.getenv("USER_PROVIDER",  "deepseek")
 USER_API_KEY   = os.getenv("USER_API_KEY",   "")
-USER_MODEL     = os.getenv("USER_MODEL",     "deepseek-chat")
+USER_MODEL     = os.getenv("USER_MODEL",     "deepseek-v4-flash")
 MAX_TURNS      = int(os.getenv("MAX_TURNS",  "12"))
 DELAY_SECONDS  = int(os.getenv("DELAY_SECONDS", "2"))
 NIMM_MASK      = os.getenv("NIMM_MASK",      "lia")

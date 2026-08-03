@@ -98,7 +98,7 @@ def create_user(user_id: str, name: str, emoji: str = '👤', admin: bool = Fals
     init_db(user_id)
     # Parametres par defaut pour le nouveau profil
     set_setting('provider',    'deepseek')
-    set_setting('model',       'deepseek-chat')
+    set_setting('model',       'deepseek-v4-flash')
     set_setting('mask',        'lia')
     print(f'[DB] Profil créé : {user_id} ({name})')
     return user

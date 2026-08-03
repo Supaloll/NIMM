@@ -30,16 +30,16 @@ def test_fallback_sur_chat():
 def test_routage_dedie():
     settings = {
         'provider': 'anthropic', 'model': 'claude-x', 'local_mode': False,
-        'provider_routing': {'memoire': {'provider': 'deepseek', 'model': 'deepseek-chat'}},
+        'provider_routing': {'memoire': {'provider': 'deepseek', 'model': 'deepseek-v4-flash'}},
     }
-    assert hub.get_task_provider_model('memoire', settings) == ('deepseek', 'deepseek-chat')
+    assert hub.get_task_provider_model('memoire', settings) == ('deepseek', 'deepseek-v4-flash')
     print("OK  routage dédié → provider+modèle de la tâche")
 
 
 def test_mode_local_force_ollama():
     settings = {
         'provider': 'anthropic', 'model': 'claude-x', 'local_mode': True,
-        'provider_routing': {'memoire': {'provider': 'deepseek', 'model': 'deepseek-chat'}},
+        'provider_routing': {'memoire': {'provider': 'deepseek', 'model': 'deepseek-v4-flash'}},
     }
     assert hub.get_task_provider_model('memoire', settings) == ('ollama', 'claude-x')
     print("OK  mode local → ollama, routage ignoré")
