@@ -183,7 +183,7 @@ def classer_erreur_fournisseur(exc, provider: str = '') -> dict:
 # à l'autre : on ne le promet donc pas, et NIMM retombe proprement sur un flux
 # sans outils plutôt que d'envoyer une requête qui serait ignorée.
 FOURNISSEURS_OPENAI_COMPAT = {
-    'deepseek':   {'base': 'https://api.deepseek.com/v1',     'modele': 'deepseek-chat',
+    'deepseek':   {'base': 'https://api.deepseek.com/v1',     'modele': 'deepseek-v4-flash',
                    'outils': True},
     'openai':     {'base': 'https://api.openai.com/v1',       'modele': 'gpt-4o-mini',
                    'outils': True},
@@ -325,7 +325,7 @@ def get_api_key(provider: str, db_keys: dict = None) -> Optional[str]:
 
 _PROVIDER_DEFAULT_MODEL = {
     'anthropic':  'claude-sonnet-4-6',
-    'deepseek':   'deepseek-chat',
+    'deepseek':   'deepseek-v4-flash',
     'openai':     'gpt-4o-mini',
     'openrouter': 'openai/gpt-4o-mini',
     'mistral':    'mistral-small-latest',
@@ -1110,7 +1110,7 @@ async def call_llm(
         return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images,
                                      tools=tools, output_schema=output_schema, thinking_budget=thinking_budget)
     elif provider == 'deepseek':
-        return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', _base_openai_compat('deepseek'), images=images, output_schema=output_schema)
+        return await _call_openai_compat(messages, model or 'deepseek-v4-flash', system_prompt, max_tokens, temperature, api_keys, 'deepseek', _base_openai_compat('deepseek'), images=images, output_schema=output_schema)
     elif provider == 'gemini':
         return await _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys, tools=tools)
     elif provider == 'openai':

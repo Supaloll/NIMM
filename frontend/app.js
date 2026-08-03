@@ -3495,8 +3495,9 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
         }
 
         _bip(220, 80); // bip grave : début de réponse
-        // Retirer la bulle "recherche en cours" si elle est encore affichée
+        // Retirer la bulle "recherche en cours" / "outil en cours" si elle est encore affichée
         document.getElementById('web-search-loader')?.remove();
+        document.getElementById('tool-loading')?.remove();
 
         // Transformer le loader en bulle de réponse — zéro saut visuel
         const loaderEl = document.getElementById('thinking-loader');
@@ -3717,6 +3718,31 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                     continue;
                 }
 
+                if (data.startsWith('[TOOL_LOADING]')) {
+                    const toolName = data.slice('[TOOL_LOADING]'.length).trim();
+                    const toolLabels = {
+                        search_documents: '📄 Consultation de vos documents…',
+                    };
+                    const label = toolLabels[toolName] || '🔧 NIMM consulte un outil…';
+                    if (!document.getElementById('tool-loading')) {
+                        const tlDiv = document.createElement('div');
+                        tlDiv.id        = 'tool-loading';
+                        tlDiv.className = 'message assistant';
+                        const tlEmoji = document.createElement('div');
+                        tlEmoji.className = 'bubble-emoji';
+                        tlEmoji.setAttribute('aria-hidden', 'true');
+                        const tlBubble = document.createElement('div');
+                        tlBubble.className = 'message-bubble web-search-loader';
+                        tlBubble.innerHTML = '<span>' + label + '</span><span class="stt-dots"><span></span><span></span><span></span></span>';
+                        tlDiv.appendChild(tlEmoji);
+                        tlDiv.appendChild(tlBubble);
+                        document.getElementById('messages').appendChild(tlDiv);
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        _srAnnounce(label);
+                    }
+                    continue;
+                }
+
                 if (data.startsWith('[VIBE_INACTIF]')) {
                     const vMsg = 'Mode Vibe inactif : sélectionne le LLM Mistral dans les réglages. Message envoyé en chat normal.';
                     if (typeof showToast === 'function') showToast(vMsg, 'warning');
@@ -3879,6 +3905,7 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                 }
 
                                 document.getElementById('web-search-loader')?.remove();
+                                document.getElementById('tool-loading')?.remove();
                                 fullText += data.replace(/\\n/g, '\n');
                 const cleaned = fullText
                     .replace(/%%DOMINANT:[^%]+%%/g, '')
@@ -5148,7 +5175,7 @@ const MODELS_BY_PROVIDER = {
         { value: 'claude-opus-5',               label: '💰💰💰 Claude Opus — le plus puissant' },
     ],
     deepseek: [
-        { value: 'deepseek-chat',      label: '💰 DeepSeek Chat — usage general' },
+        { value: 'deepseek-v4-flash',      label: '💰 DeepSeek V4 Flash — usage general' },
         { value: 'deepseek-reasoner',  label: '💰💰 DeepSeek Reasoner — raisonnement avance' },
     ],
     gemini: [

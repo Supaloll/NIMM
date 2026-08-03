@@ -4472,6 +4472,8 @@ async def process_message_stream(
                     for call in event['calls']:
                         if call['name'] == 'search_web':
                             yield "data: [WEB_SEARCH_LOADING]\n\n"
+                        else:
+                            yield "data: [TOOL_LOADING]" + call['name'] + chr(10) + chr(10)
                         tool_result = await _execute_tool(call['name'], call['args'], thread_id)
                         # Emettre les citations Mistral routing si presentes
                         _cit_val = _pending_citations.get(None)

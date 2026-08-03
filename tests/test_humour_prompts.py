@@ -30,7 +30,7 @@ if not DEEPSEEK_API_KEY:
     sys.exit(1)
 
 API_URL = 'https://api.deepseek.com/v1/chat/completions'
-MODEL   = 'deepseek-chat'
+MODEL   = 'deepseek-v4-flash'
 TEMP    = 0.7
 MAX_TOKENS = 512
 

@@ -139,7 +139,7 @@ def _titre(texte):
 
 _PROVIDER_DEFAULT_MODEL = {
     'anthropic': 'claude-haiku-4-5-20251001',
-    'deepseek':  'deepseek-chat',
+    'deepseek':  'deepseek-v4-flash',
     'mistral':   'mistral-medium-latest',
     'gemini':    'gemini-1.5-flash',
     'ollama':    'llama3.1:8b',
@@ -262,7 +262,7 @@ def forger_prompt(template: str, user_msg: str, assistant_msg: str) -> str:
 # ══════════════════════════════════════════════════════════════
 
 def appel_deepseek(prompt: str, api_key: str, model: str) -> tuple:
-    model = model or 'deepseek-chat'
+    model = model or 'deepseek-v4-flash'
     r = requests.post(
         'https://api.deepseek.com/chat/completions',
         headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},

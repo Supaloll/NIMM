@@ -123,7 +123,7 @@ def charger_config() -> tuple:
 
     cur.execute("SELECT value FROM settings WHERE key = 'chat_model' LIMIT 1")
     row = cur.fetchone()
-    model = row[0].strip() if row and row[0] else 'deepseek-chat'
+    model = row[0].strip() if row and row[0] else 'deepseek-v4-flash'
 
     cur.execute("SELECT value FROM settings WHERE key = 'api_keys' LIMIT 1")
     row = cur.fetchone()
@@ -194,7 +194,7 @@ def build_prompt(user_msg: str, assistant_reply: str, user_name: str = "Laurent"
 # ══════════════════════════════════════════════════════════
 
 def appel_deepseek(prompt: str, api_key: str, model: str) -> tuple:
-    model = model or "deepseek-chat"
+    model = model or "deepseek-v4-flash"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type":  "application/json",
