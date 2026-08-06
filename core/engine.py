@@ -2265,6 +2265,11 @@ async def call_llm_stream_with_tools(
     _raisonnement_acc = ''  # chaîne de pensée (deepseek-reasoner et similaires)
     _dsml_detected  = False
 
+    import time as _time_perf
+    _t_avant_appel = _time_perf.perf_counter()
+    _taille_payload = len(str(payload))
+    print(f"[PERF-ENGINE] Envoi à {provider} ({_model}) — payload ~{_taille_payload} caractères ({_taille_payload // 4} tokens estimés)")
+
     async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream(
             'POST',
@@ -2273,7 +2278,12 @@ async def call_llm_stream_with_tools(
             json=payload,
         ) as r:
             r.raise_for_status()
+            _premiere_ligne = True
             async for line in r.aiter_lines():
+                if _premiere_ligne:
+                    _delta = _time_perf.perf_counter() - _t_avant_appel
+                    print(f"[PERF-ENGINE] Première ligne reçue de {provider} après {_delta:.2f}s")
+                    _premiere_ligne = False
                 if not line.startswith('data:'):
                     continue
                 chunk = line[5:].strip()

@@ -60,16 +60,25 @@ def _warmup_embeddings():
     sys.stdout.reconfigure(encoding='utf-8')
     print("[WARMUP] Thread embeddings demarre...")
     try:
-        from core.database import get_setting, _load_users
-        if not _load_users():
+        from core.database import get_setting, _load_users, set_user_context
+        users = _load_users()
+        if not users:
             print("[WARMUP] Embeddings désactivé — aucun utilisateur.")
             return
-        enabled = get_setting('embeddings_enabled', 'false')
-        print(f"[WARMUP] embeddings_enabled = {enabled}")
-        if enabled.lower() != 'true':
-            print("[WARMUP] Embeddings desactive, abandon.")
+        # 'embeddings_enabled' est un réglage PROPRE À CHAQUE PROFIL. Ce thread
+        # tourne à part (pas une tâche asyncio) : il n'hérite d'aucun contexte
+        # utilisateur. Sans vérifier profil par profil, get_setting() retombe
+        # toujours sur son défaut ('false'), même si un profil l'a activé.
+        enabled_for = None
+        for u in users:
+            set_user_context(u['id'])
+            if get_setting('embeddings_enabled', 'false').lower() == 'true':
+                enabled_for = u['id']
+                break
+        if not enabled_for:
+            print("[WARMUP] Embeddings désactivé pour tous les profils, abandon.")
             return
-        print("[WARMUP] Embeddings actives, chargement...")
+        print(f"[WARMUP] Embeddings actives pour '{enabled_for}', chargement...")
         from modules.memory import _get_model
         print("[WARMUP] Appel _get_model()...")
         model = _get_model()
@@ -812,6 +821,13 @@ async def generate_title(thread_id: str, req: dict = Body(default={})):
     if not content:
         raise HTTPException(400, "Contenu requis.")
     title = await generate_tab_title(content)
+    if not title.strip():
+        # Le LLM a renvoyé un titre vide : on NE remplace PAS le nom actuel du
+        # fil (le placeholder '💬 Nouveau fil' reste visible) plutôt que
+        # d'écraser avec une chaîne vide, ce qui rendait le fil invisible dans
+        # la sidebar. Le prochain message retentera la génération.
+        print(f"[HUB] ⚠️ Titre vide reçu pour le fil {thread_id} — nom conservé.")
+        return {"name": ""}
     update_thread_name(thread_id, title)
     return {"name": title}
 
