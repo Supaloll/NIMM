@@ -24,7 +24,7 @@ import httpx as _httpx
 
 from core.database import (
     init_db, get_threads, get_thread, create_thread, delete_thread, set_thread_mask,
-    update_thread_name, update_thread_tags, get_messages, add_message, count_messages,
+    update_thread_name, update_thread_tags, get_messages, add_message,
     get_setting, set_setting, get_api_keys as _db_get_api_keys, set_api_keys as _db_set_api_keys,
     get_all_memory, delete_memory,
     update_memory_value, save_memory,
@@ -698,7 +698,7 @@ async def memorize_thread_route(thread_id: str):
 async def remove_thread(thread_id: str):
     delete_thread(thread_id)
     set_setting(f'session_bilan_{thread_id}', '')
-    set_setting(f'ghost_threads', _remove_from_ghost_list(thread_id))
+    set_setting('ghost_threads', _remove_from_ghost_list(thread_id))
     return {"status": "ok"}
 
 def _remove_from_ghost_list(thread_id: str) -> str:
@@ -1356,7 +1356,7 @@ async def coanimm_mistral_code_interpreter(req: CoanimmGenerateRequest):
     Mode cloud : envoie la consigne a Mistral avec l'outil code_interpreter.
     Retourne le code genere, la sortie d'execution et les fichiers produits.
     """
-    import httpx as _hx, json as _j, base64 as _b64
+    import httpx as _hx, json as _j
     try:
         from core.database import get_api_keys as _gak
         _mkey = (_gak().get('mistral') or '').strip()
@@ -2125,9 +2125,9 @@ async def coanimm_critique(req: CoanimmCritiqueRequest):
 async def coanimm_generate_image_endpoint(req: CoanimmGenerateImageRequest):
     """Génère une image via le provider configuré et la sauvegarde dans le workspace CoaNIMM."""
     from core.engine import generate_image
-    from core.hub import load_settings, get_task_provider_model
+    from core.hub import load_settings
     from modules.coanimm import _workspace_dir
-    import base64, time, mimetypes
+    import time
     import core.database as _dbtool
     if "image" in _dbtool.list_coanimm_disabled_tools():
         return {"status": "error", "message": "Outil désactivé dans les réglages CoaNIMM : génération d'image."}
@@ -2187,7 +2187,7 @@ async def coanimm_suggest_name(req: CoanimmSuggestNameRequest):
             temperature=0.3,
         )
         return {"status": "ok", "name": name.strip().strip('"').strip("'")}
-    except Exception as e:
+    except Exception:
         return {"status": "ok", "name": ""}  # silencieux, le champ reste vide
 
 class CoanimmSaveSkillRequest(BaseModel):
@@ -2415,7 +2415,7 @@ async def coanimm_generate_map(req: CoanimmMapRequest):
     """Génère un plan de trajet pédestre à partir de waypoints géocodés.
     Utilise OpenStreetMap (osmnx) pour le réseau réel, matplotlib pour le rendu,
     contextily pour le fond de carte, et exporte en PDF ou HTML."""
-    import tempfile, os, math
+    import os, math
     try:
         import osmnx as ox
         import networkx as nx
@@ -4312,7 +4312,7 @@ async def reprendre_archive(entry_id: int):
     Insere le resume archive + une question de relance comme messages assistant.
     Retourne { thread_id }.
     """
-    from core.database import get_bibliotheque_by_ids, create_thread, add_message, get_thread
+    from core.database import get_bibliotheque_by_ids, create_thread, add_message
     from core.hub import resume_from_archive
 
     # 1. Recuperer la fiche
@@ -4346,7 +4346,7 @@ async def reprendre_archive(entry_id: int):
 # ══════════════════════════════════════════
 
 from core.database import (
-    create_rappel, update_rappel_date, close_rappel,
+    create_rappel, close_rappel,
     get_rappels_actifs, get_all_rappels
 )
 
@@ -4422,7 +4422,7 @@ async def list_masks():
                 result.append({'id': mask_id, 'label': label})
             except Exception:
                 result.append({'id': mask_id, 'label': mask_id.capitalize()})
-    except Exception as e:
+    except Exception:
         return []
     return result
 
@@ -4786,7 +4786,7 @@ async def voice_test_tts(pid: str):
         try: body = e.read().decode("utf-8", errors="replace")
         except: pass
         return {"error": f"HTTP {e.code}: {e.reason}", "mistral_error_body": body,
-                "request_body_sent": json.loads(body_bytes := json.dumps({"voice_id": vid, "input": "Test.", "response_format": "mp3"})), "voice_id": vid}
+                "request_body_sent": {"voice_id": vid, "input": "Test.", "response_format": "mp3"}, "voice_id": vid}
     except Exception as e:
         return {"error": str(e), "traceback": _tb.format_exc(), "voice_id": vid}
 
@@ -4794,7 +4794,7 @@ async def voice_test_tts(pid: str):
 @app.delete("/api/voice/profile/{pid}")
 async def voice_delete_profile(pid: str):
     """Supprime un profil de voix (local + Mistral)."""
-    import json, urllib.request
+    import urllib.request
     from core.database import _load_users
     if not get_current_user():
         _users = _load_users()
@@ -5110,7 +5110,6 @@ async def mistral_conv_start(req: MistralConvStartReq):
 @app.post('/api/mistral-agents/{agent_id}/upload-file')
 async def mistral_agent_upload_file(agent_id: str, file: UploadFile = File(...)):
     """Upload un fichier dans la bibliothèque de documents d'un agent Mistral."""
-    import base64
     key = _mistral_api_key()
     content = await file.read()
     # Mistral Files API : multipart/form-data
@@ -5920,7 +5919,6 @@ async def upload_file(file: UploadFile = File(...)):
     filename = (file.filename or '').lower()
     api_keys = {}
     try:
-        import json as _json
         api_keys = _db_get_api_keys()
     except Exception:
         pass
@@ -6043,7 +6041,6 @@ async def image_edit(req: ImageEditRequest):
     """Retouche une image existante via Gemini."""
     api_keys = {}
     try:
-        import json as _json
         api_keys = _db_get_api_keys()
     except Exception:
         pass
@@ -6587,7 +6584,7 @@ class CoanimmMeteoReq(BaseModel):
 @app.post("/api/coanimm/meteo")
 async def coanimm_meteo(req: CoanimmMeteoReq):
     """Météo pour une ville ou des coordonnées, via Open-Meteo (sans clé API)."""
-    import core.database as _db, urllib.parse as _up
+    import core.database as _db
     if "meteo" in _db.list_coanimm_disabled_tools():
         return {"result": "[Outil météo désactivé]"}
     location = (req.location or "").strip()
@@ -6831,7 +6828,6 @@ class ImageRenameRequest(BaseModel):
 @app.post("/api/images/save")
 async def images_save(req: ImageSaveRequest):
     """Sauvegarde une image (b64 ou url) sur disque + DB. Retourne id + filename."""
-    import re as _re
     ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:20]
     filename = f"nimm_{ts}.png"
     filepath = os.path.join(_IMAGES_DIR, filename)

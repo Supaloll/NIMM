@@ -2197,6 +2197,10 @@ body {
    MENU CONTEXTUEL COPIER / → ONGLET
    ══════════════════════════════════════════ */
 
+.message-actions {
+    position: relative;
+}
+
 .copy-menu {
     position: absolute;
     display: flex;
