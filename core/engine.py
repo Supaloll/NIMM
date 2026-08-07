@@ -1450,13 +1450,24 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
                 'temperature': temperature,
                 **({'tools': tools} if tools else {}),
                 **(_oai_response_format(provider_name, output_schema) or {}),
+                # deepseek-v4-* réfléchit par défaut (effort 'high') : ça mange
+                # le budget max_tokens en tokens invisibles, laissant parfois 0
+                # token pour la vraie réponse (cause des titres/résumés vides).
+                **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' else {}),
             }
         )
         r.raise_for_status()
         data = r.json()
         usage = data.get('usage', {})
         _log(provider_name, model, _oai_tokens_entree(usage), usage.get('completion_tokens', 0))
-        content = data['choices'][0]['message']['content'] or ''
+        _msg_brut = data['choices'][0]['message']
+        content = _msg_brut['content'] or ''
+        if not content.strip():
+            print(f"[PERF-DEBUG] Contenu vide de {provider_name} ({model}) — "
+                  f"finish_reason={data['choices'][0].get('finish_reason')!r}, "
+                  f"usage={usage}, "
+                  f"reasoning_content_present={bool(_msg_brut.get('reasoning_content'))}, "
+                  f"cles_message={list(_msg_brut.keys())}")
         citations = (data.get('citations')
                      or data['choices'][0].get('message', {}).get('citations') or [])
         if citations:
@@ -1928,6 +1939,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                 'stream':      True,
                 'stream_options': {'include_usage': True},
                 **({'tools': tools} if tools else {}),
+                **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' else {}),
             }
         ) as r:
             r.raise_for_status()
@@ -2257,6 +2269,12 @@ async def call_llm_stream_with_tools(
             payload['tool_choice'] = 'auto'
     else:
         print(f"[ENGINE] {_model} : modèle de raisonnement — outils et température non transmis.")
+    if provider == 'deepseek':
+        # deepseek-v4-* active le mode réflexion par défaut, effort 'high'
+        # (doc DeepSeek). Ça ajoute plusieurs secondes avant le premier mot ET
+        # consomme le budget max_tokens en tokens invisibles. NIMM veut de la
+        # réactivité conversationnelle, pas une chaîne de pensée exposée.
+        payload['thinking'] = {'type': 'disabled'}
 
     # Accumulateurs pour reconstruire les tool_calls fragmentés
     _tool_calls_acc = {}   # index → {"id": str, "name": str, "arguments": str}

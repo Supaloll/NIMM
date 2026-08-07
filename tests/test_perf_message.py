@@ -11,7 +11,6 @@ Usage : NIMM doit déjà tourner (py -m uvicorn main:app --port 8080).
 """
 import sys
 import time
-import uuid
 import getpass
 import httpx
 
@@ -160,6 +159,19 @@ def reparer_fils_vides():
         print(f"  - {tid} → {statut}")
 
 
+def voir_routage():
+    """Affiche le routage provider/modèle par tâche (chat, titre, memoire, etc.)."""
+    user_id = trouver_utilisateur()
+    entetes = {"X-User-ID": user_id}
+    deverrouiller_si_besoin(user_id, entetes)
+
+    r = httpx.get(f"{BASE_URL}/api/settings/routing", headers=entetes, timeout=10)
+    r.raise_for_status()
+    print("[TEST] Routage actuel :")
+    for tache, valeur in r.json().items():
+        print(f"  - {tache} : {valeur}")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--list":
         lister_fils()
@@ -167,6 +179,8 @@ if __name__ == "__main__":
         tester_titre(sys.argv[2])
     elif len(sys.argv) > 1 and sys.argv[1] == "--repair":
         reparer_fils_vides()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--routage":
+        voir_routage()
     else:
         msg = sys.argv[1] if len(sys.argv) > 1 else MESSAGE_DEFAUT
         mesurer(msg)

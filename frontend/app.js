@@ -2729,6 +2729,7 @@ function appendUserMessage(content, fileName = null) {
         document.querySelectorAll('.copy-menu').forEach(m => m.style.display = 'none');
         document.querySelectorAll('.msg-action-btn').forEach(b => b.setAttribute('aria-expanded', 'false'));
         if (actMenu.style.display === 'none' || actMenu.style.display === '') {
+            _positionMenu(actBtn, actMenu, true);
             actMenu.style.display = 'flex';
             actBtn.setAttribute('aria-expanded', 'true');
             _menuKeyboard(actBtn, actMenu, () => {
@@ -7939,15 +7940,24 @@ function _setSttState(state) {
     if (_sttTurboActive) micBtn.classList.add('turbo');
 }
 
-function _positionMenu(btn, menu) {
+function _positionMenu(btn, menu, anchorRight = false) {
     const rect       = btn.getBoundingClientRect();
     const menuH      = 110; // ~3 items
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    // La barre de saisie (#input-area) est fixe en bas d'écran et peut
+    // recouvrir une partie de la fenêtre : la limite basse réelle utilisable
+    // est son bord haut, pas le bas de la fenêtre.
+    const inputArea  = document.getElementById('input-area');
+    const limiteBasse = inputArea ? inputArea.getBoundingClientRect().top : window.innerHeight;
+    const spaceBelow = limiteBasse - rect.bottom - 8;
     const spaceAbove = rect.top - 8;
     menu.style.position = 'fixed';
-    // Clamp left pour ne pas deborder a droite
+    // messages utilisateur (à droite) : ancre le coin droit du menu sur le
+    // coin droit du bouton, ouvre vers la gauche — messages NIMM (à gauche) :
+    // comportement d'origine, ancre à gauche, ouvre vers la droite.
     const menuW = 140;
-    const left  = Math.min(rect.left, window.innerWidth - menuW - 8);
+    const rawLeft = anchorRight ? (rect.right - menuW) : rect.left;
+    // Clamp pour ne jamais déborder ni à droite ni à gauche de l'écran
+    const left = Math.min(rawLeft, window.innerWidth - menuW - 8);
     menu.style.left = Math.max(0, left) + 'px';
     // Ouvre vers le bas si assez de place, sinon vers le haut
     if (spaceBelow >= menuH) {

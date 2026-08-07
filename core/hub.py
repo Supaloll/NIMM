@@ -196,7 +196,11 @@ async def generate_tab_title(content: str) -> str:
         title = await call_llm(
             messages    = [{'role': 'user', 'content': prompt}],
             provider    = provider,
-            max_tokens  = 20,
+            # 300 et non 20 : certains modèles (ex. DeepSeek récents) glissent un
+            # raisonnement interne avant la réponse visible, qui consomme aussi
+            # max_tokens. À 20, ce raisonnement épuisait tout le budget et ne
+            # laissait plus rien pour le titre — d'où des titres vides observés.
+            max_tokens  = 300,
             temperature = 0.3,
             api_keys    = api_keys,
             model       = model,
