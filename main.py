@@ -4581,18 +4581,34 @@ async def tts_speak(req: TTSRequest):
         style = (req.style or "").strip()
         if not style and voice.startswith('gemini:'):
             style = get_setting("gemini_tts_style", "")
-        # Lire la clé API dans le contexte asyncio (avant le thread executor)
-        _voxtral_key = ''
+        # Lire la clé API dans le contexte asyncio (avant le thread executor) —
+        # les ContextVar ne traversent pas vers le thread, donc get_api_keys()
+        # DOIT être appelé ICI, pendant qu'on est encore dans le contexte
+        # utilisateur, et non à l'intérieur de synthesize() (cf. bug voix Gemini
+        # muettes malgré une clé configurée — ARCHITECTURE.md).
+        _synth_key = ''
         if voice.startswith('voxtral:'):
             try:
                 from core.database import get_api_keys
-                _voxtral_key = (get_api_keys().get('mistral') or '').strip()
+                _synth_key = (get_api_keys().get('mistral') or '').strip()
             except Exception:
-                _voxtral_key = ''
+                _synth_key = ''
+        elif voice.startswith('gemini:'):
+            try:
+                from core.database import get_api_keys
+                _keys = get_api_keys() or {}
+                _synth_key = (_keys.get('gemini') or _keys.get('google') or '').strip()
+            except Exception:
+                _synth_key = ''
         import functools as _ft
         audio_bytes, media_type = await loop.run_in_executor(
-            None, _ft.partial(synthesize, req.text, voice, style, _voxtral_key)
+            None, _ft.partial(synthesize, req.text, voice, style, _synth_key)
         )
+        if not audio_bytes:
+            # La synthèse a échoué en silence côté moteur (clé invalide, quota
+            # dépassé, service indisponible...) — sans ce garde-fou, BytesIO(None)
+            # plantait plus bas avec un message technique illisible.
+            raise HTTPException(502, "La synthèse vocale a échoué (clé API invalide, quota dépassé, ou service momentanément indisponible). Vérifie tes clés API et réessaie.")
         ext = 'mp3' if 'mpeg' in media_type else 'wav'
         return StreamingResponse(
             io.BytesIO(audio_bytes),

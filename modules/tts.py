@@ -439,12 +439,17 @@ def _gemini_tts_request(body, api_key, model, retries=2):
     return None
 
 
-def synthesize_gemini(text, voice_name='Kore', style=''):
-    """Synthèse mono-locuteur via l'API Gemini TTS. Retourne du WAV (24 kHz) ou None."""
+def synthesize_gemini(text, voice_name='Kore', style='', api_key=''):
+    """Synthèse mono-locuteur via l'API Gemini TTS. Retourne du WAV (24 kHz) ou None.
+
+    api_key : transmise par l'appelant (lue dans le contexte asyncio, AVANT le
+    thread executor — cf. main.py). Repli sur _gemini_api_key() pour les appels
+    directs hors requête HTTP (tests, scripts), où le contexte utilisateur peut
+    déjà être posé sur le thread principal."""
     text = _clean_text(text)
     if not text:
         return None
-    api_key = _gemini_api_key()
+    api_key = (api_key or '').strip() or _gemini_api_key()
     if not api_key:
         print('[TTS/Gemini] Aucune clé API Gemini configurée.')
         return None
@@ -460,12 +465,15 @@ def synthesize_gemini(text, voice_name='Kore', style=''):
     return _pcm_to_wav(pcm) if pcm else None
 
 
-def synthesize_gemini_multi(transcript, speakers, style=''):
-    """Synthèse multi-locuteurs (jusqu'à 2). speakers = [(nom, voix), ...]. WAV ou None."""
+def synthesize_gemini_multi(transcript, speakers, style='', api_key=''):
+    """Synthèse multi-locuteurs (jusqu'à 2). speakers = [(nom, voix), ...]. WAV ou None.
+
+    api_key : même règle que synthesize_gemini() — transmise par l'appelant en
+    priorité, repli sur _gemini_api_key() sinon."""
     transcript = _clean_text(transcript)
     if not transcript:
         return None
-    api_key = _gemini_api_key()
+    api_key = (api_key or '').strip() or _gemini_api_key()
     if not api_key:
         print('[TTS/Gemini] Aucune clé API Gemini configurée.')
         return None
@@ -504,7 +512,7 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '', api_key: 
     if voice.startswith('edge:'):
         return synthesize_edge(text, voice[5:]), 'audio/mpeg'
     if voice.startswith('gemini:'):
-        return synthesize_gemini(text, voice[7:], style=style), 'audio/wav'
+        return synthesize_gemini(text, voice[7:], style=style, api_key=api_key), 'audio/wav'
     if voice.startswith('voxtral:'):
         return synthesize_voxtral(text, voice[8:], api_key=api_key), 'audio/mpeg'
     if voice.startswith('mistral:'):
