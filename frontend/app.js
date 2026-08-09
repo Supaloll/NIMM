@@ -4924,6 +4924,7 @@ async function loadSettingsIntoUI() {
         // Grisage des options incompatibles selon clés présentes
         _applyProviderConstraints(keys);
         _checkProviderBanner();
+        _checkBackupBanner();
 
         // Auto-sélection : si le chat n'est pas encore routé, choisir le premier provider disponible
         if (!routing.chat) {
@@ -10359,6 +10360,121 @@ document.getElementById('mcp-add-btn')?.addEventListener('click', async () => {
 });
 document.getElementById('mcp-details')?.addEventListener('toggle', function () {
     if (this.open) loadMcpServers();
+});
+
+// ── Sauvegarde (dossier synchronisé cloud-agnostique) ──
+function _renderBackupStatus(d) {
+    const line = document.getElementById('backup-status-line');
+    const folderInput = document.getElementById('backup-folder-path');
+    const autoCb = document.getElementById('backup-auto-enabled');
+    const dismissedCb = document.getElementById('backup-dismissed');
+    if (folderInput) folderInput.value = d.folder_path || '';
+    if (autoCb) autoCb.checked = !!d.auto_enabled;
+    if (dismissedCb) dismissedCb.checked = !!d.dismissed;
+    if (!line) return;
+    if (!d.last_backup_at) {
+        line.textContent = 'Aucune sauvegarde effectuée pour le moment.';
+        return;
+    }
+    const date = new Date(d.last_backup_at).toLocaleString('fr-FR');
+    line.textContent = (d.last_backup_ok ? '✅ ' : '⚠️ ') + 'Dernière sauvegarde : ' + date
+        + (d.last_backup_message ? ' — ' + d.last_backup_message : '');
+}
+
+async function loadBackupStatus() {
+    const line = document.getElementById('backup-status-line');
+    const form = document.getElementById('backup-section');
+    try {
+        const r = await fetch('/api/backup/status');
+        if (r.status === 403) {
+            if (form) form.querySelectorAll('input, button').forEach(el => el.disabled = true);
+            if (line) line.textContent = 'Réservé au propriétaire du profil.';
+            return;
+        }
+        const d = await r.json();
+        _renderBackupStatus(d);
+    } catch (e) { if (line) line.textContent = 'Erreur lors de la lecture du statut.'; }
+}
+
+document.getElementById('backup-save-btn')?.addEventListener('click', async () => {
+    const folder_path = (document.getElementById('backup-folder-path')?.value || '').trim();
+    const auto_enabled = !!document.getElementById('backup-auto-enabled')?.checked;
+    const dismissed = !!document.getElementById('backup-dismissed')?.checked;
+    try {
+        const r = await fetch('/api/backup/config', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_path, auto_enabled, dismissed }),
+        });
+        const d = await r.json();
+        if (r.ok) {
+            _renderBackupStatus(d);
+            _coanimmAnnounce('Réglages de sauvegarde enregistrés.');
+            _checkBackupBanner();
+        } else {
+            _coanimmAnnounce('Enregistrement refusé : ' + (d.detail || 'erreur.'));
+        }
+    } catch (e) { _coanimmAnnounce('Erreur réseau lors de l’enregistrement.'); }
+});
+
+document.getElementById('backup-run-btn')?.addEventListener('click', async () => {
+    const line = document.getElementById('backup-status-line');
+    if (line) line.textContent = 'Sauvegarde en cours…';
+    _coanimmAnnounce('Sauvegarde en cours.');
+    try {
+        const r = await fetch('/api/backup/run', { method: 'POST' });
+        const d = await r.json();
+        if (r.ok) {
+            await loadBackupStatus();
+            _coanimmAnnounce(d.message || 'Sauvegarde terminée.');
+            _checkBackupBanner();
+        } else {
+            if (line) line.textContent = 'Échec : ' + (d.detail || 'erreur.');
+            _coanimmAnnounce('Sauvegarde refusée : ' + (d.detail || 'erreur.'));
+        }
+    } catch (e) {
+        if (line) line.textContent = 'Erreur réseau pendant la sauvegarde.';
+        _coanimmAnnounce('Erreur réseau pendant la sauvegarde.');
+    }
+});
+
+document.getElementById('backup-details')?.addEventListener('toggle', function () {
+    if (this.open) loadBackupStatus();
+});
+
+async function _checkBackupBanner() {
+    const banner = document.getElementById('backup-warning-banner');
+    const text = document.getElementById('backup-warning-text');
+    if (!banner) return;
+    try {
+        const r = await fetch('/api/backup/status');
+        if (r.status === 403) { banner.classList.add('hidden'); return; } // pas propriétaire : rien à faire, pas d'inquiétude inutile
+        const d = await r.json();
+        if (d.dismissed) { banner.classList.add('hidden'); return; } // choix explicite de l'utilisateur : respecté
+        if (!d.folder_path) {
+            if (text) text.textContent = 'Sauvegarde non configurée';
+            banner.classList.remove('hidden');
+        } else if (d.last_backup_ok === false) {
+            if (text) text.textContent = 'Dernière sauvegarde en échec';
+            banner.classList.remove('hidden');
+        } else {
+            banner.classList.add('hidden');
+        }
+    } catch (e) { banner.classList.add('hidden'); }
+}
+
+document.getElementById('backup-banner-open-settings')?.addEventListener('click', () => {
+    document.getElementById('settings-modal').classList.remove('hidden');
+    document.querySelectorAll('.settings-tab').forEach(b => {
+        const isParams = b.dataset.tab === 'params';
+        b.classList.toggle('active', isParams);
+        b.setAttribute('aria-selected', isParams ? 'true' : 'false');
+    });
+    document.querySelectorAll('.settings-tab-content').forEach(c => {
+        c.classList.toggle('hidden', c.id !== 'settings-tab-params');
+    });
+    const details = document.getElementById('backup-details');
+    if (details) details.open = true;
+    loadBackupStatus();
 });
 
 // ── Ricochets planifiés ──

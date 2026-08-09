@@ -126,6 +126,67 @@ def update_user(user_id: str, name: str = None, emoji: str = None, admin: bool =
     raise ValueError(f"Profil '{user_id}' introuvable.")
 
 # ══════════════════════════════════════════
+# GESTION SAUVEGARDE — config machine (pas par profil)
+# ══════════════════════════════════════════
+#
+# Le dossier de sauvegarde et l'état de planification sont globaux
+# (une sauvegarde couvre TOUTES les DB des profils), donc stockés
+# à part des settings par profil, même famille que users.json.
+
+_BACKUP_CONFIG_FILE = os.path.join(DATA_DIR, 'backup_config.json')
+
+_BACKUP_CONFIG_DEFAUT = {
+    'folder_path': '',
+    'auto_enabled': False,
+    'dismissed': False,
+    'last_backup_at': None,
+    'last_backup_ok': None,
+    'last_backup_message': '',
+}
+
+def get_backup_config() -> dict:
+    """Retourne la config de sauvegarde (fusionnée avec les défauts —
+    tolère un fichier absent ou partiel)."""
+    if not os.path.exists(_BACKUP_CONFIG_FILE):
+        return dict(_BACKUP_CONFIG_DEFAUT)
+    try:
+        with open(_BACKUP_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        merged = dict(_BACKUP_CONFIG_DEFAUT)
+        merged.update(data)
+        return merged
+    except Exception:
+        return dict(_BACKUP_CONFIG_DEFAUT)
+
+def set_backup_config(**champs) -> dict:
+    """Met à jour un ou plusieurs champs de la config de sauvegarde."""
+    config = get_backup_config()
+    for k, v in champs.items():
+        if k in _BACKUP_CONFIG_DEFAUT:
+            config[k] = v
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(_BACKUP_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    return config
+
+def list_user_db_paths() -> list:
+    """Retourne [(user_id, chemin_db), ...] pour tous les profils connus,
+    y compris sans profil déclaré (fallback : scan des fichiers nimm_*.db)."""
+    users = _load_users()
+    if users:
+        return [(u['id'], get_db_path(u['id'])) for u in users]
+    # Fallback mono-profil / pas de users.json : scan direct du dossier data/
+    resultats = []
+    try:
+        for nom in os.listdir(DATA_DIR):
+            if nom.startswith('nimm_') and nom.endswith('.db'):
+                uid = nom[len('nimm_'):-len('.db')]
+                resultats.append((uid, os.path.join(DATA_DIR, nom)))
+    except Exception:
+        pass
+    return resultats
+
+# ══════════════════════════════════════════
 # VERROU DE SESSION — PIN local (haché) + identité Tailscale
 # ══════════════════════════════════════════
 #
