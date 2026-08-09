@@ -15,7 +15,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260808">
+<link rel="stylesheet" href="/static/styles.css?v=20260809">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -67,6 +67,11 @@
     <!-- BANNIÈRE PROVIDER MANQUANT -->
     <div id="no-provider-banner" class="hidden" role="alert" aria-live="assertive">
         ⚙️ Aucun fournisseur configuré — <button id="banner-open-settings">Configure ta clé API pour démarrer</button>
+    </div>
+
+    <!-- BANNIÈRE SAUVEGARDE (propriétaire uniquement) -->
+    <div id="backup-warning-banner" class="hidden" role="alert" aria-live="assertive">
+        💾 <span id="backup-warning-text">Sauvegarde non configurée</span> — <button id="backup-banner-open-settings">Régler dans les Paramètres</button>
     </div>
 
     <!-- BARRE ONGLETS -->
@@ -703,6 +708,34 @@
                     <input type="password" id="mcp-token" autocomplete="new-password">
                     <button type="button" id="mcp-add-btn" style="align-self:flex-start;font-size:0.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Ajouter ce serveur</button>
                 </div>
+            </details>
+        </div>
+
+        <!-- ── SAUVEGARDE (dossier synchronisé cloud-agnostique) ── -->
+        <div class="setting-group" id="backup-section">
+            <details id="backup-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">💾 Sauvegarde</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Copie hebdomadaire de toutes les bases familiales vers un dossier synchronisé
+                    (Google Drive, pCloud, Dropbox, NAS…). NIMM dépose le fichier au même endroit
+                    à chaque fois — l'application du fournisseur choisi envoie ensuite le reste dans
+                    le cloud automatiquement. Rien n'est jamais supprimé.
+                </p>
+                <label for="backup-folder-path">Dossier de sauvegarde (chemin local synchronisé)</label>
+                <input type="text" id="backup-folder-path" autocomplete="off" placeholder="G:\Mon Drive\NIMM_Backups" style="width:100%;box-sizing:border-box;margin:4px 0 8px;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;margin-bottom:10px;">
+                    <input type="checkbox" id="backup-auto-enabled">
+                    Sauvegarde automatique hebdomadaire
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;margin-bottom:10px;">
+                    <input type="checkbox" id="backup-dismissed">
+                    Je ne souhaite pas de sauvegarde cloud (ne plus me prévenir)
+                </label>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <button type="button" id="backup-save-btn" style="font-size:0.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Enregistrer</button>
+                    <button type="button" id="backup-run-btn" style="font-size:0.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Sauvegarder maintenant</button>
+                </div>
+                <p id="backup-status-line" style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;" aria-live="polite"></p>
             </details>
         </div>
 
@@ -2220,7 +2253,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260808"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260809"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

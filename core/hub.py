@@ -3766,6 +3766,58 @@ async def memory_worker():
 
 
 # ══════════════════════════════════════════
+# SAUVEGARDE — déclenchement manuel + planification hebdomadaire
+# ══════════════════════════════════════════
+
+def trigger_backup() -> dict:
+    """Déclenche une sauvegarde immédiate de tous les profils.
+    Aucune logique ici — le hub délègue à modules/sauvegarde.py (Hub-and-Spoke).
+    Utilisé à la fois par le bouton manuel et par le planificateur."""
+    from modules.sauvegarde import run_backup
+    res = run_backup()
+    try:
+        from core.database import add_diagnostic
+        add_diagnostic('sauvegarde', res.get('message', ''))
+    except Exception:
+        pass  # pas de contexte utilisateur (déclenchement planifié) — silencieux
+    return res
+
+
+BACKUP_TICK_SECONDS = 3600     # vérifie une fois par heure
+BACKUP_INTERVAL_DAYS = 7       # rythme hebdomadaire choisi par Laurent
+
+async def backup_scheduler_worker():
+    """Boucle de fond : déclenche la sauvegarde automatique si activée dans
+    les réglages ET que la dernière sauvegarde RÉUSSIE remonte à plus de 7
+    jours. Si la dernière tentative a échoué (dossier mal configuré, etc.),
+    retente à chaque tick plutôt que d'attendre une semaine en silence."""
+    from datetime import timedelta as _timedelta
+    await asyncio.sleep(30)
+    print("[BACKUP-SCHED] Planificateur de sauvegarde démarré.")
+    while True:
+        try:
+            from core.database import get_backup_config
+            config = get_backup_config()
+            if config.get('auto_enabled'):
+                due = True
+                if config.get('last_backup_ok'):
+                    last = config.get('last_backup_at')
+                    if last:
+                        try:
+                            last_dt = datetime.fromisoformat(last)
+                            due = (datetime.now() - last_dt) >= _timedelta(days=BACKUP_INTERVAL_DAYS)
+                        except ValueError:
+                            due = True
+                if due:
+                    print("[BACKUP-SCHED] Échéance atteinte — sauvegarde automatique.")
+                    res = trigger_backup()
+                    print(f"[BACKUP-SCHED] {res.get('message', '')}")
+        except Exception as e:
+            print(f"[BACKUP-SCHED] Tick ignoré : {e}")
+        await asyncio.sleep(BACKUP_TICK_SECONDS)
+
+
+# ══════════════════════════════════════════
 # BIBLIOTHÈQUE — GÉNÉRATION RÉSUMÉ
 # ══════════════════════════════════════════
 

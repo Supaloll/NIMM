@@ -1420,6 +1420,30 @@ body {
     color: #fff;
 }
 
+#backup-warning-banner {
+    background: #3a2200;
+    color: #f0a050;
+    font-size: 0.85rem;
+    padding: 7px 16px;
+    text-align: center;
+    border-bottom: 1px solid #7a4a00;
+}
+
+#backup-warning-banner button {
+    background: none;
+    border: none;
+    color: #f5c070;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    font-size: inherit;
+    padding: 0;
+}
+
+#backup-warning-banner button:hover {
+    color: #fff;
+}
+
 .routing-warning {
     grid-column: 2;
     font-size: 0.75rem;

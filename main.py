@@ -190,6 +190,8 @@ async def lifespan(app: FastAPI):
     from modules.coanimm import schedule_worker
     asyncio.create_task(schedule_worker())
     asyncio.create_task(_veille_worker())
+    from core.hub import backup_scheduler_worker
+    asyncio.create_task(backup_scheduler_worker())
     yield
 
 async def _veille_worker():
@@ -1717,6 +1719,44 @@ async def mcp_servers_delete(server_id: str):
     if not _db.is_current_user_admin():
         raise HTTPException(403, detail="Seul le propriétaire peut supprimer un serveur MCP.")
     return {"status": "ok", "servers": _db.remove_mcp_server(server_id)}
+
+class BackupConfigReq(BaseModel):
+    folder_path: Optional[str] = None
+    auto_enabled: Optional[bool] = None
+    dismissed: Optional[bool] = None
+
+@app.get("/api/backup/status")
+async def backup_status():
+    """État de la sauvegarde (dossier, planification, dernier résultat).
+    Réservé au propriétaire : une sauvegarde couvre les données de toute la famille."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut consulter la sauvegarde.")
+    return _db.get_backup_config()
+
+@app.post("/api/backup/config")
+async def backup_config_update(req: BackupConfigReq):
+    """Met à jour le dossier de sauvegarde et/ou l'activation de la planification auto."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut configurer la sauvegarde.")
+    champs = {}
+    if req.folder_path is not None:
+        champs['folder_path'] = req.folder_path.strip()
+    if req.auto_enabled is not None:
+        champs['auto_enabled'] = req.auto_enabled
+    if req.dismissed is not None:
+        champs['dismissed'] = req.dismissed
+    return _db.set_backup_config(**champs)
+
+@app.post("/api/backup/run")
+async def backup_run_now():
+    """Déclenche une sauvegarde immédiate de tous les profils (bouton manuel)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut déclencher une sauvegarde.")
+    from core.hub import trigger_backup
+    return trigger_backup()
 
 @app.get("/api/diagnostics")
 async def diagnostics_list():
