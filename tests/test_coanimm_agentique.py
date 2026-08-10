@@ -392,12 +392,36 @@ def test_specificites_anthropic_confinees():
         j, k = src.find('\nasync def ', i + 10), src.find('\ndef ', i + 10)
         return src[i:min([x for x in (j, k) if x > 0] or [len(src)])]
 
-    # 1. Les champs propres à Anthropic ne sont posés que dans ses fonctions
-    for motif in ("payload['cache_control']", "payload['thinking']", "payload['output_config']"):
+    # 1. Les champs propres à Anthropic ne sont posés que dans ses fonctions.
+    #    EXCEPTION `thinking` (correctif de Laurent, 07/08/2026) : cette clé n'est
+    #    plus propre à Anthropic, et les deux fournisseurs l'emploient en sens
+    #    INVERSE. Anthropic s'en sert pour ACTIVER une réflexion étendue
+    #    ({'type': 'enabled', budget}) ; DeepSeek pour la DÉSACTIVER
+    #    ({'type': 'disabled'}), son modèle v4 la lançant d'office — ce qui
+    #    ajoutait plusieurs secondes avant le premier mot et vidait le budget de
+    #    sortie en jetons invisibles (titres et résumés vides).
+    #    La règle juste n'est donc plus « Anthropic seulement » mais « jamais
+    #    sans savoir à qui on parle » : hors fonction Anthropic, la pose doit
+    #    être gardée par un test explicite sur le fournisseur.
+    for motif in ("payload['cache_control']", "payload['output_config']"):
         for m in re.finditer(re.escape(motif), src):
             debut = src.rfind('def ', 0, m.start())
             nom = src[debut:src.find('(', debut)]
             assert 'anthropic' in nom, f"{motif} posé hors Anthropic ({nom})"
+
+    for m in re.finditer(re.escape("payload['thinking']"), src):
+        debut = src.rfind('def ', 0, m.start())
+        nom = src[debut:src.find('(', debut)]
+        if 'anthropic' in nom:
+            continue
+        amont = src[max(0, m.start() - 400):m.start()]
+        assert re.search(r"provider\s*==\s*'\w+'", amont), (
+            f"payload['thinking'] posé dans {nom} sans garde sur le fournisseur : "
+            "un fournisseur qui ignore ce champ le refusera")
+    # Les deux sémantiques ne doivent pas se confondre.
+    for m in re.finditer(r"payload\['thinking'\] = \{'type': 'disabled'\}", src):
+        amont = src[max(0, m.start() - 400):m.start()]
+        assert "'deepseek'" in amont, "réflexion désactivée sans dire pour quel fournisseur"
 
     # 2. Dans call_llm, chaque paramètre ne part que vers les fonctions qui le gèrent
     plat = re.sub(r'\s+', ' ', corps('call_llm'))

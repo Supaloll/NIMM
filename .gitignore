@@ -211,6 +211,12 @@ data/.nimm_api_keyfile
 # Espaces de travail CoaNIMM (générés par fil, données utilisateur)
 data/coanimm_workspace/
 
+# Configuration LOCALE de la sauvegarde : elle contient le chemin du dossier
+# de destination, propre à chaque machine, et l'horodatage des sauvegardes.
+# Versionnée, elle écrasait le chemin de l'un par celui de l'autre à chaque
+# mise à jour, et publiait une arborescence personnelle dans un dépôt public.
+data/backup_config.json
+
 # Morceaux générés par Lyria : gros fichiers audio, aucune raison d'être versionnés
 data/musiques/
 
