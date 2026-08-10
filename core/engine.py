@@ -221,7 +221,7 @@ def _detail_erreur_api(corps: str) -> str:
 # à l'autre : on ne le promet donc pas, et NIMM retombe proprement sur un flux
 # sans outils plutôt que d'envoyer une requête qui serait ignorée.
 FOURNISSEURS_OPENAI_COMPAT = {
-    'deepseek':   {'base': 'https://api.deepseek.com/v1',     'modele': 'deepseek-chat',
+    'deepseek':   {'base': 'https://api.deepseek.com/v1',     'modele': 'deepseek-v4-flash',
                    'outils': True},
     'openai':     {'base': 'https://api.openai.com/v1',       'modele': 'gpt-4o-mini',
                    'outils': True},
@@ -388,7 +388,7 @@ def get_api_key(provider: str, db_keys: dict = None) -> Optional[str]:
 
 _PROVIDER_DEFAULT_MODEL = {
     'anthropic':  'claude-sonnet-4-6',
-    'deepseek':   'deepseek-chat',
+    'deepseek':   'deepseek-v4-flash',
     'openai':     'gpt-4o-mini',
     'openrouter': 'openai/gpt-4o-mini',
     'mistral':    'mistral-small-latest',
@@ -1179,7 +1179,7 @@ async def call_llm(
         return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images,
                                      tools=tools, output_schema=output_schema, thinking_budget=thinking_budget)
     elif provider == 'deepseek':
-        return await _call_openai_compat(messages, model or 'deepseek-chat', system_prompt, max_tokens, temperature, api_keys, 'deepseek', _base_openai_compat('deepseek'), images=images, output_schema=output_schema)
+        return await _call_openai_compat(messages, model or 'deepseek-v4-flash', system_prompt, max_tokens, temperature, api_keys, 'deepseek', _base_openai_compat('deepseek'), images=images, output_schema=output_schema)
     elif provider == 'gemini':
         return await _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys, tools=tools)
     elif provider == 'openai':
@@ -1530,13 +1530,24 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
                    else {'temperature': temperature}),
                 **({'tools': tools} if tools else {}),
                 **(_oai_response_format(provider_name, output_schema) or {}),
+                # deepseek-v4-* réfléchit par défaut (effort 'high') : ça mange
+                # le budget max_tokens en tokens invisibles, laissant parfois 0
+                # token pour la vraie réponse (cause des titres/résumés vides).
+                **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' else {}),
             }
         )
         r.raise_for_status()
         data = r.json()
         usage = data.get('usage', {})
         _log(provider_name, model, _oai_tokens_entree(usage), usage.get('completion_tokens', 0))
-        content = data['choices'][0]['message']['content'] or ''
+        _msg_brut = data['choices'][0]['message']
+        content = _msg_brut['content'] or ''
+        if not content.strip():
+            print(f"[PERF-DEBUG] Contenu vide de {provider_name} ({model}) — "
+                  f"finish_reason={data['choices'][0].get('finish_reason')!r}, "
+                  f"usage={usage}, "
+                  f"reasoning_content_present={bool(_msg_brut.get('reasoning_content'))}, "
+                  f"cles_message={list(_msg_brut.keys())}")
         citations = (data.get('citations')
                      or data['choices'][0].get('message', {}).get('citations') or [])
         if citations:
@@ -2013,6 +2024,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                 'stream':      True,
                 'stream_options': {'include_usage': True},
                 **({'tools': tools} if tools else {}),
+                **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' else {}),
             }
         ) as r:
             r.raise_for_status()
@@ -2344,6 +2356,12 @@ async def call_llm_stream_with_tools(
             payload['tool_choice'] = 'auto'
     else:
         print(f"[ENGINE] {_model} : modèle de raisonnement — outils et température non transmis.")
+    if provider == 'deepseek':
+        # deepseek-v4-* active le mode réflexion par défaut, effort 'high'
+        # (doc DeepSeek). Ça ajoute plusieurs secondes avant le premier mot ET
+        # consomme le budget max_tokens en tokens invisibles. NIMM veut de la
+        # réactivité conversationnelle, pas une chaîne de pensée exposée.
+        payload['thinking'] = {'type': 'disabled'}
 
     # Accumulateurs pour reconstruire les tool_calls fragmentés
     _tool_calls_acc = {}   # index → {"id": str, "name": str, "arguments": str}
@@ -2351,6 +2369,11 @@ async def call_llm_stream_with_tools(
     _raw_acc        = ''   # accumule le content brut pour détecter le DSML
     _raisonnement_acc = ''  # chaîne de pensée (deepseek-reasoner et similaires)
     _dsml_detected  = False
+
+    import time as _time_perf
+    _t_avant_appel = _time_perf.perf_counter()
+    _taille_payload = len(str(payload))
+    print(f"[PERF-ENGINE] Envoi à {provider} ({_model}) — payload ~{_taille_payload} caractères ({_taille_payload // 4} tokens estimés)")
 
     async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream(
@@ -2360,7 +2383,12 @@ async def call_llm_stream_with_tools(
             json=payload,
         ) as r:
             r.raise_for_status()
+            _premiere_ligne = True
             async for line in r.aiter_lines():
+                if _premiere_ligne:
+                    _delta = _time_perf.perf_counter() - _t_avant_appel
+                    print(f"[PERF-ENGINE] Première ligne reçue de {provider} après {_delta:.2f}s")
+                    _premiere_ligne = False
                 if not line.startswith('data:'):
                     continue
                 chunk = line[5:].strip()

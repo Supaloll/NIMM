@@ -710,7 +710,7 @@ def test_modele_de_raisonnement():
              eng.find('\ndef _anthropic_billable_input')], ns)
     f = ns['_modele_sans_outils']
     assert f('deepseek-reasoner') and f('DeepSeek-Reasoner'), 'casse indifférente'
-    for autre in ('deepseek-chat', 'mistral-large-latest', 'gpt-4o', ''):
+    for autre in ('deepseek-v4-flash', 'mistral-large-latest', 'gpt-4o', ''):
         assert not f(autre), f'garde trop large : {autre}'
 
     for n in ast.walk(ast.parse(eng)):

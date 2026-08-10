@@ -2729,6 +2729,7 @@ function appendUserMessage(content, fileName = null) {
         document.querySelectorAll('.copy-menu').forEach(m => m.style.display = 'none');
         document.querySelectorAll('.msg-action-btn').forEach(b => b.setAttribute('aria-expanded', 'false'));
         if (actMenu.style.display === 'none' || actMenu.style.display === '') {
+            _positionMenu(actBtn, actMenu, true);
             actMenu.style.display = 'flex';
             actBtn.setAttribute('aria-expanded', 'true');
             _menuKeyboard(actBtn, actMenu, () => {
@@ -3495,8 +3496,9 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
         }
 
         _bip(220, 80); // bip grave : début de réponse
-        // Retirer la bulle "recherche en cours" si elle est encore affichée
+        // Retirer la bulle "recherche en cours" / "outil en cours" si elle est encore affichée
         document.getElementById('web-search-loader')?.remove();
+        document.getElementById('tool-loading')?.remove();
 
         // Transformer le loader en bulle de réponse — zéro saut visuel
         const loaderEl = document.getElementById('thinking-loader');
@@ -3717,6 +3719,31 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                     continue;
                 }
 
+                if (data.startsWith('[TOOL_LOADING]')) {
+                    const toolName = data.slice('[TOOL_LOADING]'.length).trim();
+                    const toolLabels = {
+                        search_documents: '📄 Consultation de vos documents…',
+                    };
+                    const label = toolLabels[toolName] || '🔧 NIMM consulte un outil…';
+                    if (!document.getElementById('tool-loading')) {
+                        const tlDiv = document.createElement('div');
+                        tlDiv.id        = 'tool-loading';
+                        tlDiv.className = 'message assistant';
+                        const tlEmoji = document.createElement('div');
+                        tlEmoji.className = 'bubble-emoji';
+                        tlEmoji.setAttribute('aria-hidden', 'true');
+                        const tlBubble = document.createElement('div');
+                        tlBubble.className = 'message-bubble web-search-loader';
+                        tlBubble.innerHTML = '<span>' + label + '</span><span class="stt-dots"><span></span><span></span><span></span></span>';
+                        tlDiv.appendChild(tlEmoji);
+                        tlDiv.appendChild(tlBubble);
+                        document.getElementById('messages').appendChild(tlDiv);
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        _srAnnounce(label);
+                    }
+                    continue;
+                }
+
                 if (data.startsWith('[VIBE_INACTIF]')) {
                     const vMsg = 'Mode Vibe inactif : sélectionne le LLM Mistral dans les réglages. Message envoyé en chat normal.';
                     if (typeof showToast === 'function') showToast(vMsg, 'warning');
@@ -3879,6 +3906,7 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                 }
 
                                 document.getElementById('web-search-loader')?.remove();
+                                document.getElementById('tool-loading')?.remove();
                                 fullText += data.replace(/\\n/g, '\n');
                 const cleaned = fullText
                     .replace(/%%DOMINANT:[^%]+%%/g, '')
@@ -4896,6 +4924,7 @@ async function loadSettingsIntoUI() {
         // Grisage des options incompatibles selon clés présentes
         _applyProviderConstraints(keys);
         _checkProviderBanner();
+        _checkBackupBanner();
 
         // Auto-sélection : si le chat n'est pas encore routé, choisir le premier provider disponible
         if (!routing.chat) {
@@ -5148,7 +5177,7 @@ const MODELS_BY_PROVIDER = {
         { value: 'claude-opus-5',               label: '💰💰💰 Claude Opus — le plus puissant' },
     ],
     deepseek: [
-        { value: 'deepseek-chat',      label: '💰 DeepSeek Chat — usage general' },
+        { value: 'deepseek-v4-flash',      label: '💰 DeepSeek V4 Flash — usage general' },
         { value: 'deepseek-reasoner',  label: '💰💰 DeepSeek Reasoner — raisonnement avance' },
     ],
     gemini: [
@@ -7912,15 +7941,24 @@ function _setSttState(state) {
     if (_sttTurboActive) micBtn.classList.add('turbo');
 }
 
-function _positionMenu(btn, menu) {
+function _positionMenu(btn, menu, anchorRight = false) {
     const rect       = btn.getBoundingClientRect();
     const menuH      = 110; // ~3 items
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
+    // La barre de saisie (#input-area) est fixe en bas d'écran et peut
+    // recouvrir une partie de la fenêtre : la limite basse réelle utilisable
+    // est son bord haut, pas le bas de la fenêtre.
+    const inputArea  = document.getElementById('input-area');
+    const limiteBasse = inputArea ? inputArea.getBoundingClientRect().top : window.innerHeight;
+    const spaceBelow = limiteBasse - rect.bottom - 8;
     const spaceAbove = rect.top - 8;
     menu.style.position = 'fixed';
-    // Clamp left pour ne pas deborder a droite
+    // messages utilisateur (à droite) : ancre le coin droit du menu sur le
+    // coin droit du bouton, ouvre vers la gauche — messages NIMM (à gauche) :
+    // comportement d'origine, ancre à gauche, ouvre vers la droite.
     const menuW = 140;
-    const left  = Math.min(rect.left, window.innerWidth - menuW - 8);
+    const rawLeft = anchorRight ? (rect.right - menuW) : rect.left;
+    // Clamp pour ne jamais déborder ni à droite ni à gauche de l'écran
+    const left = Math.min(rawLeft, window.innerWidth - menuW - 8);
     menu.style.left = Math.max(0, left) + 'px';
     // Ouvre vers le bas si assez de place, sinon vers le haut
     if (spaceBelow >= menuH) {
@@ -10323,6 +10361,121 @@ document.getElementById('mcp-add-btn')?.addEventListener('click', async () => {
 });
 document.getElementById('mcp-details')?.addEventListener('toggle', function () {
     if (this.open) loadMcpServers();
+});
+
+// ── Sauvegarde (dossier synchronisé cloud-agnostique) ──
+function _renderBackupStatus(d) {
+    const line = document.getElementById('backup-status-line');
+    const folderInput = document.getElementById('backup-folder-path');
+    const autoCb = document.getElementById('backup-auto-enabled');
+    const dismissedCb = document.getElementById('backup-dismissed');
+    if (folderInput) folderInput.value = d.folder_path || '';
+    if (autoCb) autoCb.checked = !!d.auto_enabled;
+    if (dismissedCb) dismissedCb.checked = !!d.dismissed;
+    if (!line) return;
+    if (!d.last_backup_at) {
+        line.textContent = 'Aucune sauvegarde effectuée pour le moment.';
+        return;
+    }
+    const date = new Date(d.last_backup_at).toLocaleString('fr-FR');
+    line.textContent = (d.last_backup_ok ? '✅ ' : '⚠️ ') + 'Dernière sauvegarde : ' + date
+        + (d.last_backup_message ? ' — ' + d.last_backup_message : '');
+}
+
+async function loadBackupStatus() {
+    const line = document.getElementById('backup-status-line');
+    const form = document.getElementById('backup-section');
+    try {
+        const r = await fetch('/api/backup/status');
+        if (r.status === 403) {
+            if (form) form.querySelectorAll('input, button').forEach(el => el.disabled = true);
+            if (line) line.textContent = 'Réservé au propriétaire du profil.';
+            return;
+        }
+        const d = await r.json();
+        _renderBackupStatus(d);
+    } catch (e) { if (line) line.textContent = 'Erreur lors de la lecture du statut.'; }
+}
+
+document.getElementById('backup-save-btn')?.addEventListener('click', async () => {
+    const folder_path = (document.getElementById('backup-folder-path')?.value || '').trim();
+    const auto_enabled = !!document.getElementById('backup-auto-enabled')?.checked;
+    const dismissed = !!document.getElementById('backup-dismissed')?.checked;
+    try {
+        const r = await fetch('/api/backup/config', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_path, auto_enabled, dismissed }),
+        });
+        const d = await r.json();
+        if (r.ok) {
+            _renderBackupStatus(d);
+            _coanimmAnnounce('Réglages de sauvegarde enregistrés.');
+            _checkBackupBanner();
+        } else {
+            _coanimmAnnounce('Enregistrement refusé : ' + (d.detail || 'erreur.'));
+        }
+    } catch (e) { _coanimmAnnounce('Erreur réseau lors de l’enregistrement.'); }
+});
+
+document.getElementById('backup-run-btn')?.addEventListener('click', async () => {
+    const line = document.getElementById('backup-status-line');
+    if (line) line.textContent = 'Sauvegarde en cours…';
+    _coanimmAnnounce('Sauvegarde en cours.');
+    try {
+        const r = await fetch('/api/backup/run', { method: 'POST' });
+        const d = await r.json();
+        if (r.ok) {
+            await loadBackupStatus();
+            _coanimmAnnounce(d.message || 'Sauvegarde terminée.');
+            _checkBackupBanner();
+        } else {
+            if (line) line.textContent = 'Échec : ' + (d.detail || 'erreur.');
+            _coanimmAnnounce('Sauvegarde refusée : ' + (d.detail || 'erreur.'));
+        }
+    } catch (e) {
+        if (line) line.textContent = 'Erreur réseau pendant la sauvegarde.';
+        _coanimmAnnounce('Erreur réseau pendant la sauvegarde.');
+    }
+});
+
+document.getElementById('backup-details')?.addEventListener('toggle', function () {
+    if (this.open) loadBackupStatus();
+});
+
+async function _checkBackupBanner() {
+    const banner = document.getElementById('backup-warning-banner');
+    const text = document.getElementById('backup-warning-text');
+    if (!banner) return;
+    try {
+        const r = await fetch('/api/backup/status');
+        if (r.status === 403) { banner.classList.add('hidden'); return; } // pas propriétaire : rien à faire, pas d'inquiétude inutile
+        const d = await r.json();
+        if (d.dismissed) { banner.classList.add('hidden'); return; } // choix explicite de l'utilisateur : respecté
+        if (!d.folder_path) {
+            if (text) text.textContent = 'Sauvegarde non configurée';
+            banner.classList.remove('hidden');
+        } else if (d.last_backup_ok === false) {
+            if (text) text.textContent = 'Dernière sauvegarde en échec';
+            banner.classList.remove('hidden');
+        } else {
+            banner.classList.add('hidden');
+        }
+    } catch (e) { banner.classList.add('hidden'); }
+}
+
+document.getElementById('backup-banner-open-settings')?.addEventListener('click', () => {
+    document.getElementById('settings-modal').classList.remove('hidden');
+    document.querySelectorAll('.settings-tab').forEach(b => {
+        const isParams = b.dataset.tab === 'params';
+        b.classList.toggle('active', isParams);
+        b.setAttribute('aria-selected', isParams ? 'true' : 'false');
+    });
+    document.querySelectorAll('.settings-tab-content').forEach(c => {
+        c.classList.toggle('hidden', c.id !== 'settings-tab-params');
+    });
+    const details = document.getElementById('backup-details');
+    if (details) details.open = true;
+    loadBackupStatus();
 });
 
 // ── Ricochets planifiés ──
