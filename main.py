@@ -24,7 +24,7 @@ import httpx as _httpx
 
 from core.database import (
     init_db, get_threads, get_thread, create_thread, delete_thread, set_thread_mask,
-    update_thread_name, update_thread_tags, get_messages, add_message, count_messages,
+    update_thread_name, update_thread_tags, get_messages, add_message,
     get_setting, set_setting, get_api_keys as _db_get_api_keys, set_api_keys as _db_set_api_keys,
     get_all_memory, delete_memory,
     update_memory_value, save_memory,
@@ -60,16 +60,25 @@ def _warmup_embeddings():
     sys.stdout.reconfigure(encoding='utf-8')
     print("[WARMUP] Thread embeddings demarre...")
     try:
-        from core.database import get_setting, _load_users
-        if not _load_users():
+        from core.database import get_setting, _load_users, set_user_context
+        users = _load_users()
+        if not users:
             print("[WARMUP] Embeddings désactivé — aucun utilisateur.")
             return
-        enabled = get_setting('embeddings_enabled', 'false')
-        print(f"[WARMUP] embeddings_enabled = {enabled}")
-        if enabled.lower() != 'true':
-            print("[WARMUP] Embeddings desactive, abandon.")
+        # 'embeddings_enabled' est un réglage PROPRE À CHAQUE PROFIL. Ce thread
+        # tourne à part (pas une tâche asyncio) : il n'hérite d'aucun contexte
+        # utilisateur. Sans vérifier profil par profil, get_setting() retombe
+        # toujours sur son défaut ('false'), même si un profil l'a activé.
+        enabled_for = None
+        for u in users:
+            set_user_context(u['id'])
+            if get_setting('embeddings_enabled', 'false').lower() == 'true':
+                enabled_for = u['id']
+                break
+        if not enabled_for:
+            print("[WARMUP] Embeddings désactivé pour tous les profils, abandon.")
             return
-        print("[WARMUP] Embeddings actives, chargement...")
+        print(f"[WARMUP] Embeddings actives pour '{enabled_for}', chargement...")
         from modules.memory import _get_model
         print("[WARMUP] Appel _get_model()...")
         model = _get_model()
@@ -181,6 +190,8 @@ async def lifespan(app: FastAPI):
     from modules.coanimm import schedule_worker
     asyncio.create_task(schedule_worker())
     asyncio.create_task(_veille_worker())
+    from core.hub import backup_scheduler_worker
+    asyncio.create_task(backup_scheduler_worker())
     yield
 
 async def _veille_worker():
@@ -689,7 +700,7 @@ async def memorize_thread_route(thread_id: str):
 async def remove_thread(thread_id: str):
     delete_thread(thread_id)
     set_setting(f'session_bilan_{thread_id}', '')
-    set_setting(f'ghost_threads', _remove_from_ghost_list(thread_id))
+    set_setting('ghost_threads', _remove_from_ghost_list(thread_id))
     return {"status": "ok"}
 
 def _remove_from_ghost_list(thread_id: str) -> str:
@@ -812,6 +823,13 @@ async def generate_title(thread_id: str, req: dict = Body(default={})):
     if not content:
         raise HTTPException(400, "Contenu requis.")
     title = await generate_tab_title(content)
+    if not title.strip():
+        # Le LLM a renvoyé un titre vide : on NE remplace PAS le nom actuel du
+        # fil (le placeholder '💬 Nouveau fil' reste visible) plutôt que
+        # d'écraser avec une chaîne vide, ce qui rendait le fil invisible dans
+        # la sidebar. Le prochain message retentera la génération.
+        print(f"[HUB] ⚠️ Titre vide reçu pour le fil {thread_id} — nom conservé.")
+        return {"name": ""}
     update_thread_name(thread_id, title)
     return {"name": title}
 
@@ -1340,7 +1358,7 @@ async def coanimm_mistral_code_interpreter(req: CoanimmGenerateRequest):
     Mode cloud : envoie la consigne a Mistral avec l'outil code_interpreter.
     Retourne le code genere, la sortie d'execution et les fichiers produits.
     """
-    import httpx as _hx, json as _j, base64 as _b64
+    import httpx as _hx, json as _j
     try:
         from core.database import get_api_keys as _gak
         _mkey = (_gak().get('mistral') or '').strip()
@@ -1701,6 +1719,44 @@ async def mcp_servers_delete(server_id: str):
     if not _db.is_current_user_admin():
         raise HTTPException(403, detail="Seul le propriétaire peut supprimer un serveur MCP.")
     return {"status": "ok", "servers": _db.remove_mcp_server(server_id)}
+
+class BackupConfigReq(BaseModel):
+    folder_path: Optional[str] = None
+    auto_enabled: Optional[bool] = None
+    dismissed: Optional[bool] = None
+
+@app.get("/api/backup/status")
+async def backup_status():
+    """État de la sauvegarde (dossier, planification, dernier résultat).
+    Réservé au propriétaire : une sauvegarde couvre les données de toute la famille."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut consulter la sauvegarde.")
+    return _db.get_backup_config()
+
+@app.post("/api/backup/config")
+async def backup_config_update(req: BackupConfigReq):
+    """Met à jour le dossier de sauvegarde et/ou l'activation de la planification auto."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut configurer la sauvegarde.")
+    champs = {}
+    if req.folder_path is not None:
+        champs['folder_path'] = req.folder_path.strip()
+    if req.auto_enabled is not None:
+        champs['auto_enabled'] = req.auto_enabled
+    if req.dismissed is not None:
+        champs['dismissed'] = req.dismissed
+    return _db.set_backup_config(**champs)
+
+@app.post("/api/backup/run")
+async def backup_run_now():
+    """Déclenche une sauvegarde immédiate de tous les profils (bouton manuel)."""
+    import core.database as _db
+    if not _db.is_current_user_admin():
+        raise HTTPException(403, detail="Seul le propriétaire peut déclencher une sauvegarde.")
+    from core.hub import trigger_backup
+    return trigger_backup()
 
 @app.get("/api/diagnostics")
 async def diagnostics_list():
@@ -2109,9 +2165,9 @@ async def coanimm_critique(req: CoanimmCritiqueRequest):
 async def coanimm_generate_image_endpoint(req: CoanimmGenerateImageRequest):
     """Génère une image via le provider configuré et la sauvegarde dans le workspace CoaNIMM."""
     from core.engine import generate_image
-    from core.hub import load_settings, get_task_provider_model
+    from core.hub import load_settings
     from modules.coanimm import _workspace_dir
-    import base64, time, mimetypes
+    import time
     import core.database as _dbtool
     if "image" in _dbtool.list_coanimm_disabled_tools():
         return {"status": "error", "message": "Outil désactivé dans les réglages CoaNIMM : génération d'image."}
@@ -2171,7 +2227,7 @@ async def coanimm_suggest_name(req: CoanimmSuggestNameRequest):
             temperature=0.3,
         )
         return {"status": "ok", "name": name.strip().strip('"').strip("'")}
-    except Exception as e:
+    except Exception:
         return {"status": "ok", "name": ""}  # silencieux, le champ reste vide
 
 class CoanimmSaveSkillRequest(BaseModel):
@@ -2399,7 +2455,7 @@ async def coanimm_generate_map(req: CoanimmMapRequest):
     """Génère un plan de trajet pédestre à partir de waypoints géocodés.
     Utilise OpenStreetMap (osmnx) pour le réseau réel, matplotlib pour le rendu,
     contextily pour le fond de carte, et exporte en PDF ou HTML."""
-    import tempfile, os, math
+    import os, math
     try:
         import osmnx as ox
         import networkx as nx
@@ -4296,7 +4352,7 @@ async def reprendre_archive(entry_id: int):
     Insere le resume archive + une question de relance comme messages assistant.
     Retourne { thread_id }.
     """
-    from core.database import get_bibliotheque_by_ids, create_thread, add_message, get_thread
+    from core.database import get_bibliotheque_by_ids, create_thread, add_message
     from core.hub import resume_from_archive
 
     # 1. Recuperer la fiche
@@ -4330,7 +4386,7 @@ async def reprendre_archive(entry_id: int):
 # ══════════════════════════════════════════
 
 from core.database import (
-    create_rappel, update_rappel_date, close_rappel,
+    create_rappel, close_rappel,
     get_rappels_actifs, get_all_rappels
 )
 
@@ -4406,7 +4462,7 @@ async def list_masks():
                 result.append({'id': mask_id, 'label': label})
             except Exception:
                 result.append({'id': mask_id, 'label': mask_id.capitalize()})
-    except Exception as e:
+    except Exception:
         return []
     return result
 
@@ -4565,18 +4621,34 @@ async def tts_speak(req: TTSRequest):
         style = (req.style or "").strip()
         if not style and voice.startswith('gemini:'):
             style = get_setting("gemini_tts_style", "")
-        # Lire la clé API dans le contexte asyncio (avant le thread executor)
-        _voxtral_key = ''
+        # Lire la clé API dans le contexte asyncio (avant le thread executor) —
+        # les ContextVar ne traversent pas vers le thread, donc get_api_keys()
+        # DOIT être appelé ICI, pendant qu'on est encore dans le contexte
+        # utilisateur, et non à l'intérieur de synthesize() (cf. bug voix Gemini
+        # muettes malgré une clé configurée — ARCHITECTURE.md).
+        _synth_key = ''
         if voice.startswith('voxtral:'):
             try:
                 from core.database import get_api_keys
-                _voxtral_key = (get_api_keys().get('mistral') or '').strip()
+                _synth_key = (get_api_keys().get('mistral') or '').strip()
             except Exception:
-                _voxtral_key = ''
+                _synth_key = ''
+        elif voice.startswith('gemini:'):
+            try:
+                from core.database import get_api_keys
+                _keys = get_api_keys() or {}
+                _synth_key = (_keys.get('gemini') or _keys.get('google') or '').strip()
+            except Exception:
+                _synth_key = ''
         import functools as _ft
         audio_bytes, media_type = await loop.run_in_executor(
-            None, _ft.partial(synthesize, req.text, voice, style, _voxtral_key)
+            None, _ft.partial(synthesize, req.text, voice, style, _synth_key)
         )
+        if not audio_bytes:
+            # La synthèse a échoué en silence côté moteur (clé invalide, quota
+            # dépassé, service indisponible...) — sans ce garde-fou, BytesIO(None)
+            # plantait plus bas avec un message technique illisible.
+            raise HTTPException(502, "La synthèse vocale a échoué (clé API invalide, quota dépassé, ou service momentanément indisponible). Vérifie tes clés API et réessaie.")
         ext = 'mp3' if 'mpeg' in media_type else 'wav'
         return StreamingResponse(
             io.BytesIO(audio_bytes),
@@ -4770,7 +4842,7 @@ async def voice_test_tts(pid: str):
         try: body = e.read().decode("utf-8", errors="replace")
         except: pass
         return {"error": f"HTTP {e.code}: {e.reason}", "mistral_error_body": body,
-                "request_body_sent": json.loads(body_bytes := json.dumps({"voice_id": vid, "input": "Test.", "response_format": "mp3"})), "voice_id": vid}
+                "request_body_sent": {"voice_id": vid, "input": "Test.", "response_format": "mp3"}, "voice_id": vid}
     except Exception as e:
         return {"error": str(e), "traceback": _tb.format_exc(), "voice_id": vid}
 
@@ -4778,7 +4850,7 @@ async def voice_test_tts(pid: str):
 @app.delete("/api/voice/profile/{pid}")
 async def voice_delete_profile(pid: str):
     """Supprime un profil de voix (local + Mistral)."""
-    import json, urllib.request
+    import urllib.request
     from core.database import _load_users
     if not get_current_user():
         _users = _load_users()
@@ -5094,7 +5166,6 @@ async def mistral_conv_start(req: MistralConvStartReq):
 @app.post('/api/mistral-agents/{agent_id}/upload-file')
 async def mistral_agent_upload_file(agent_id: str, file: UploadFile = File(...)):
     """Upload un fichier dans la bibliothèque de documents d'un agent Mistral."""
-    import base64
     key = _mistral_api_key()
     content = await file.read()
     # Mistral Files API : multipart/form-data
@@ -5904,7 +5975,6 @@ async def upload_file(file: UploadFile = File(...)):
     filename = (file.filename or '').lower()
     api_keys = {}
     try:
-        import json as _json
         api_keys = _db_get_api_keys()
     except Exception:
         pass
@@ -6027,7 +6097,6 @@ async def image_edit(req: ImageEditRequest):
     """Retouche une image existante via Gemini."""
     api_keys = {}
     try:
-        import json as _json
         api_keys = _db_get_api_keys()
     except Exception:
         pass
@@ -6571,7 +6640,7 @@ class CoanimmMeteoReq(BaseModel):
 @app.post("/api/coanimm/meteo")
 async def coanimm_meteo(req: CoanimmMeteoReq):
     """Météo pour une ville ou des coordonnées, via Open-Meteo (sans clé API)."""
-    import core.database as _db, urllib.parse as _up
+    import core.database as _db
     if "meteo" in _db.list_coanimm_disabled_tools():
         return {"result": "[Outil météo désactivé]"}
     location = (req.location or "").strip()
@@ -6815,7 +6884,6 @@ class ImageRenameRequest(BaseModel):
 @app.post("/api/images/save")
 async def images_save(req: ImageSaveRequest):
     """Sauvegarde une image (b64 ou url) sur disque + DB. Retourne id + filename."""
-    import re as _re
     ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:20]
     filename = f"nimm_{ts}.png"
     filepath = os.path.join(_IMAGES_DIR, filename)

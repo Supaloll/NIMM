@@ -7,6 +7,7 @@
 import json
 import asyncio
 import re
+import time
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
@@ -195,7 +196,11 @@ async def generate_tab_title(content: str) -> str:
         title = await call_llm(
             messages    = [{'role': 'user', 'content': prompt}],
             provider    = provider,
-            max_tokens  = 20,
+            # 300 et non 20 : certains modèles (ex. DeepSeek récents) glissent un
+            # raisonnement interne avant la réponse visible, qui consomme aussi
+            # max_tokens. À 20, ce raisonnement épuisait tout le budget et ne
+            # laissait plus rien pour le titre — d'où des titres vides observés.
+            max_tokens  = 300,
             temperature = 0.3,
             api_keys    = api_keys,
             model       = model,
@@ -3761,6 +3766,58 @@ async def memory_worker():
 
 
 # ══════════════════════════════════════════
+# SAUVEGARDE — déclenchement manuel + planification hebdomadaire
+# ══════════════════════════════════════════
+
+def trigger_backup() -> dict:
+    """Déclenche une sauvegarde immédiate de tous les profils.
+    Aucune logique ici — le hub délègue à modules/sauvegarde.py (Hub-and-Spoke).
+    Utilisé à la fois par le bouton manuel et par le planificateur."""
+    from modules.sauvegarde import run_backup
+    res = run_backup()
+    try:
+        from core.database import add_diagnostic
+        add_diagnostic('sauvegarde', res.get('message', ''))
+    except Exception:
+        pass  # pas de contexte utilisateur (déclenchement planifié) — silencieux
+    return res
+
+
+BACKUP_TICK_SECONDS = 3600     # vérifie une fois par heure
+BACKUP_INTERVAL_DAYS = 7       # rythme hebdomadaire choisi par Laurent
+
+async def backup_scheduler_worker():
+    """Boucle de fond : déclenche la sauvegarde automatique si activée dans
+    les réglages ET que la dernière sauvegarde RÉUSSIE remonte à plus de 7
+    jours. Si la dernière tentative a échoué (dossier mal configuré, etc.),
+    retente à chaque tick plutôt que d'attendre une semaine en silence."""
+    from datetime import timedelta as _timedelta
+    await asyncio.sleep(30)
+    print("[BACKUP-SCHED] Planificateur de sauvegarde démarré.")
+    while True:
+        try:
+            from core.database import get_backup_config
+            config = get_backup_config()
+            if config.get('auto_enabled'):
+                due = True
+                if config.get('last_backup_ok'):
+                    last = config.get('last_backup_at')
+                    if last:
+                        try:
+                            last_dt = datetime.fromisoformat(last)
+                            due = (datetime.now() - last_dt) >= _timedelta(days=BACKUP_INTERVAL_DAYS)
+                        except ValueError:
+                            due = True
+                if due:
+                    print("[BACKUP-SCHED] Échéance atteinte — sauvegarde automatique.")
+                    res = trigger_backup()
+                    print(f"[BACKUP-SCHED] {res.get('message', '')}")
+        except Exception as e:
+            print(f"[BACKUP-SCHED] Tick ignoré : {e}")
+        await asyncio.sleep(BACKUP_TICK_SECONDS)
+
+
+# ══════════════════════════════════════════
 # BIBLIOTHÈQUE — GÉNÉRATION RÉSUMÉ
 # ══════════════════════════════════════════
 
@@ -4185,6 +4242,13 @@ async def process_message_stream(
     Version streaming de process_message.
     Yield les tokens un par un, puis envoie les métadonnées à la fin.
     """
+    _perf_t0 = time.perf_counter()
+    def _perf(label):
+        nonlocal _perf_t0
+        _now = time.perf_counter()
+        print(f"[PERF] {label}: {_now - _perf_t0:.2f}s")
+        _perf_t0 = _now
+
     # 0. Moderation Mistral (optionnelle)
     try:
         import json as _jmod
@@ -4210,10 +4274,12 @@ async def process_message_stream(
             yield "data: [DONE]\n\n"
             return
 
+    _perf("moderation")
     from core.engine import call_llm_stream
 
     # 1. Settings + masque (avec verrouillage masque par fil)
     settings = load_settings(thread_id)
+    _perf("settings")
 
     # ── Garde provider ──
     provider  = settings.get('provider', '')
@@ -4283,6 +4349,7 @@ async def process_message_stream(
     except Exception as e:
         print(f"[HUB] Erreur IntentGate (stream) : {e}")
         # Continuer normalement en cas d'erreur
+    _perf("intentgate")
 
     # Charger la personnalité (masque ou potards)
     try:
@@ -4295,6 +4362,7 @@ async def process_message_stream(
 
     # Pérémer les rappels dont la date est dépassée — silencieux, une fois par pipeline
     perimer_rappels_depasses()
+    _perf("masque+rappels")
 
     # 3. Contexte — push allégé : seuls les permanents sont injectés d'emblée.
     # Les souvenirs épisodiques/persistants et la bibliothèque sont désormais
@@ -4302,6 +4370,7 @@ async def process_message_stream(
     # biblio_context = _match_bibliotheque() — matching fuzzy automatique sur l'index bibliothèque
     memory_context = build_memory_context_permanent_only()
     biblio_context = _match_bibliotheque(user_message)
+    _perf("memoire+bibliotheque")
     # Carnet — signal leger uniquement : le LLM consulte via search_carnet() s'il en a besoin (pull, pas push)
     n_messages = count_messages(thread_id)
     carnet_notes = ['actif'] if count_carnet_notes(thread_id) > 0 else None
@@ -4313,6 +4382,7 @@ async def process_message_stream(
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
     recent_focus = get_messages(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
+    _perf("carnet+mood+bilans")
     # Un document ATTACHÉ au fil l'emporte sur la base de connaissances : quand
     # l'utilisateur a désigné son document, deviner en plus n'apporte que du bruit.
     _doc_fil, _doc_fil_titre = _document_du_fil(thread_id)
@@ -4320,12 +4390,15 @@ async def process_message_stream(
         doc_context, _doc_titles = '', []
     else:
         doc_context, _doc_titles = _match_documents(user_message, settings.get('api_keys'))
+    _perf("match_documents")
     system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
                                     doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
+    _perf("system_prompt")
 
     # 4. Historique
     history  = get_messages(thread_id, limit=60)
     messages = _sanitize_history([{'role': m['role'], 'content': m['content']} for m in history])
+    _perf("historique")
 
     # 5. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
     # La recherche automatique est gérée par le tool calling (search_web).
@@ -4379,6 +4452,7 @@ async def process_message_stream(
 
     # Sauvegarder le message utilisateur avant le stream (résistance aux interruptions)
     _add_msg(thread_id, 'user', user_message)
+    _perf("recherche_web+avant_stream")
 
     # 6. Stream des tokens — les tags %%...%% sont filtrés avant le yield
     full_reply  = ''
@@ -4438,6 +4512,7 @@ async def process_message_stream(
 
         else:
             # Phase 1 : stream avec détection tool calls
+            _premier_evt_llm = True
             async for event in call_llm_stream_with_tools(
                 messages=messages,
                 tools=_gemini_gs_tools if _gemini_gs_tools else
@@ -4449,6 +4524,9 @@ async def process_message_stream(
                 temperature=settings['temperature'],
                 api_keys=settings['api_keys'],
             ):
+                if _premier_evt_llm:
+                    _perf(f"premier_evenement_llm({event['type']})")
+                    _premier_evt_llm = False
                 if event['type'] == 'token':
                     full_reply += event['text']
                     _yield_buf += event['text']
@@ -4472,6 +4550,8 @@ async def process_message_stream(
                     for call in event['calls']:
                         if call['name'] == 'search_web':
                             yield "data: [WEB_SEARCH_LOADING]\n\n"
+                        else:
+                            yield "data: [TOOL_LOADING]" + call['name'] + chr(10) + chr(10)
                         tool_result = await _execute_tool(call['name'], call['args'], thread_id)
                         # Emettre les citations Mistral routing si presentes
                         _cit_val = _pending_citations.get(None)
