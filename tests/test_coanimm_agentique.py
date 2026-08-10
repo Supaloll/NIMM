@@ -2470,6 +2470,73 @@ def test_anthropic_parametres_echantillonnage():
     ok("Anthropic : température omise sur les modèles qui la refusent, sur les trois chemins")
 
 
+def test_reflexion_deepseek():
+    """La réflexion invisible de DeepSeek : coupée partout, mais RÉGLABLE.
+
+    Trouvaille de Laurent (07/08/2026) : `deepseek-v4-*` réfléchit d'office à
+    effort élevé. Invisible, mais ça consomme le budget `max_tokens` — d'où
+    des titres de fils vides — et ça ajoutait quatorze secondes avant le
+    premier mot. Son correctif couvrait TROIS chemins ; il en existe QUATRE,
+    la reprise de réponse ayant été oubliée. Même motif que les adresses de
+    base et la température Anthropic : un chemin traité, les autres non.
+
+    Sa question ouverte — est-ce que ça nuit sur les questions complexes ? —
+    n'a pas de réponse tranchée, et c'est précisément pourquoi le choix ne
+    doit pas être figé dans le code.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) La règle est PURE et testable sans base ni réseau
+    deb = eng.index('def reflexion_deepseek_desactivee')
+    fin = eng.index('def _modele_raisonnement_openai', deb)
+    import sys as _sys, types as _types
+    def _regle(valeur, panne=False):
+        faux = _types.ModuleType('core.database')
+        if panne:
+            def _boum(*a, **k): raise RuntimeError('base indisponible')
+            faux.get_setting = _boum
+        else:
+            faux.get_setting = lambda c, d='': valeur
+        _sys.modules['core.database'] = faux
+        ns = {}
+        exec(eng[deb:fin], ns)
+        return ns['reflexion_deepseek_desactivee']()
+
+    assert _regle('coupee') is True, 'défaut : réflexion coupée'
+    assert _regle('gardee') is False
+    assert _regle('GARDEE') is False, 'la casse ne doit pas ouvrir une brèche'
+    assert _regle('') is True and _regle('valeur_inconnue') is True
+    assert _regle(None, panne=True) is True, 'base indisponible : défaut réactif'
+
+    # (2) LES QUATRE chemins DeepSeek, pas trois. Le compte est ancré : en
+    #     couvrir un de moins, c'est la lenteur qui revient sur ce chemin-là.
+    assert eng.count('and reflexion_deepseek_desactivee()') == 4, (
+        'appel direct, flux simple, flux-outils ET reprise de réponse')
+    # Aucune pose inconditionnelle ne doit subsister
+    for m in re.finditer(r"thinking. \{.type.: .disabled.\}", eng):
+        amont = eng[max(0, m.start() - 300):m.start()]
+        assert 'reflexion_deepseek_desactivee' in amont, \
+            'réflexion coupée sans passer par le réglage'
+
+    # (3) Le réglage est ATTEIGNABLE : une fonction sans interface n'existe pas
+    assert '@app.get("/api/settings/deepseek-reflexion")' in mn
+    assert '@app.post("/api/settings/deepseek-reflexion")' in mn
+    assert 'deepseek-reflexion-toggle' in html, 'aucune case à cocher'
+    assert "_wireToggleReglage('deepseek-reflexion-toggle'" in app, \
+        'brancher via le helper existant plutôt que d\'inventer un contrat de plus'
+
+    # (4) Même contrat {active} que les autres réglages à case : un troisième
+    #     format aurait été une divergence de plus à maintenir.
+    bloc = mn[mn.index('async def deepseek_reflexion_get'):]
+    bloc = bloc[:bloc.index('@app.post')]
+    assert "'active'" in bloc and 'mode' not in bloc.split('"""')[-1]
+    ok("réflexion DeepSeek : coupée par défaut sur les QUATRE chemins, et réglable")
+
+
 def test_erreur_api_explique_la_cause():
     """Une erreur qui ne dit que l'adresse appelée ne sert à personne.
 
@@ -3058,6 +3125,7 @@ if __name__ == '__main__':
                test_accessibilite_des_medias, test_modeles_conseilles,
                test_fournisseurs_cables_partout,
                test_anthropic_parametres_echantillonnage,
-               test_erreur_api_explique_la_cause]:
+               test_erreur_api_explique_la_cause,
+               test_reflexion_deepseek]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

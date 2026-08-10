@@ -2098,6 +2098,31 @@ async def tokens_estimate(req: TokenCountReq):
 class AnthropicCacheToggleReq(BaseModel):
     active: bool = True
 
+class ReflexionDeepseekReq(BaseModel):
+    active: bool = False
+
+@app.get("/api/settings/deepseek-reflexion")
+async def deepseek_reflexion_get():
+    """Réglage : laisser DeepSeek réfléchir avant de répondre.
+
+    Ses modèles récents réfléchissent d'office. C'est invisible, ça consomme le
+    budget de réponse — d'où des titres de fils vides — et ça ajoute plusieurs
+    secondes de silence avant que la synthèse vocale ne démarre. Coupée par
+    défaut, donc. Mais c'est un ARBITRAGE entre profondeur et réactivité, pas
+    une évidence : le figer en dur retirait le choix à l'utilisateur.
+
+    Même contrat `{active}` que les autres réglages à case à cocher : un
+    troisième format aurait été une divergence de plus à maintenir."""
+    import core.database as _db
+    actif = (_db.get_setting('deepseek_reflexion', 'coupee') or 'coupee').strip().lower() == 'gardee'
+    return {'active': actif}
+
+@app.post("/api/settings/deepseek-reflexion")
+async def deepseek_reflexion_set(req: ReflexionDeepseekReq):
+    import core.database as _db
+    _db.set_setting('deepseek_reflexion', 'gardee' if req.active else 'coupee')
+    return {'active': bool(req.active)}
+
 @app.get("/api/settings/anthropic-cache")
 async def anthropic_cache_get():
     """Réglage : mise en cache automatique des prompts Anthropic (économie d'entrée)."""

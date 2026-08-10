@@ -11143,6 +11143,12 @@ _wireToggleReglage('coanimm-thinking-toggle', '/api/settings/coanimm-thinking',
 _wireToggleReglage('anthropic-cache-toggle', '/api/settings/anthropic-cache',
     'Mise en cache des prompts activée.',
     'Mise en cache des prompts désactivée : les messages longs coûteront plus cher.');
+// Ses modèles récents réfléchissent d'office : invisible, mais plusieurs secondes
+// de silence avant que la synthèse vocale ne démarre, et un budget de réponse
+// amputé (d'où les titres de fils vides). Coupée par défaut, mais réglable.
+_wireToggleReglage('deepseek-reflexion-toggle', '/api/settings/deepseek-reflexion',
+    'Réflexion DeepSeek gardée : réponses plus fines sur les questions complexes, mais plusieurs secondes avant le premier mot.',
+    'Réflexion DeepSeek coupée : réponse immédiate.');
 
 // ── Vérification du résultat (critique) : réglage serveur, actif par défaut ──
 (function _coanimmWireCritiqueToggle(){

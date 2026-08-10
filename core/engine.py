@@ -292,6 +292,34 @@ def anthropic_accepte_temperature(model: str) -> bool:
 # `max_completion_tokens` — et n'acceptent pas `temperature`. Le catalogue de
 # modèles interrogé en direct les propose désormais : sans garde, les choisir
 # produirait une erreur 400 incompréhensible.
+def reflexion_deepseek_desactivee() -> bool:
+    """Faut-il couper la réflexion interne de DeepSeek ?
+
+    QUESTION OUVERTE PAR LAURENT (07/08/2026) : couper la réflexion peut-il
+    nuire sur les questions complexes ? Probablement, et c'est bien pour ça
+    que ce réglage existe. `deepseek-v4-*` réfléchit d'office à effort élevé :
+    cette réflexion est INVISIBLE mais elle consomme le budget `max_tokens`
+    et ajoute plusieurs secondes avant le premier mot. Sur les tâches courtes
+    — titre de fil, extraction mémoire, synthèse — elle vidait le budget avant
+    la vraie réponse, d'où les titres vides.
+
+    Le défaut reste « coupée » : quatorze secondes de silence avant que la
+    synthèse vocale ne démarre rendent l'outil pénible. Mais c'est un
+    ARBITRAGE, pas une évidence — on échange de la profondeur contre de la
+    réactivité — et le figer en dur retirait le choix à l'utilisateur.
+
+    NB : un mode « gardée en conversation, coupée sur les tâches courtes »
+    serait le meilleur des deux, mais il suppose que la tâche soit connue ici.
+    Elle ne l'est pas : le moteur ignore s'il sert un chat ou un titre. Le
+    proposer sans propager la tâche donnerait un réglage sans effet.
+    """
+    try:
+        from core.database import get_setting
+        return (get_setting('deepseek_reflexion', 'coupee') or 'coupee'                ).strip().lower() != 'gardee'
+    except Exception:
+        return True          # base indisponible : on garde le défaut réactif
+
+
 def _modele_raisonnement_openai(model: str) -> bool:
     import re as _re_o
     return bool(_re_o.match(r'^o\d', (model or '').lower()))
@@ -681,6 +709,11 @@ async def continuer_reponse_stream(messages: list, prefixe: str, provider: str,
     # qui l'ignore.
     if not (_modele_raisonnement_openai(_m_repr) or _modele_sans_outils(_m_repr)):
         payload['temperature'] = temperature
+    # QUATRIÈME chemin appelant DeepSeek — oublié lors du correctif de latence,
+    # qui n'en couvrait que trois. La reprise relançait donc la réflexion, avec
+    # la même attente et le même budget mangé que sur les autres chemins.
+    if provider == 'deepseek' and reflexion_deepseek_desactivee():
+        payload['thinking'] = {'type': 'disabled'}
     async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream('POST', f'{base}/chat/completions',
                                  headers={'Authorization': f'Bearer {api_key}',
@@ -1533,7 +1566,7 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
                 # deepseek-v4-* réfléchit par défaut (effort 'high') : ça mange
                 # le budget max_tokens en tokens invisibles, laissant parfois 0
                 # token pour la vraie réponse (cause des titres/résumés vides).
-                **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' else {}),
+                **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' and reflexion_deepseek_desactivee() else {}),
             }
         )
         r.raise_for_status()
@@ -2024,7 +2057,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                 'stream':      True,
                 'stream_options': {'include_usage': True},
                 **({'tools': tools} if tools else {}),
-                **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' else {}),
+                **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' and reflexion_deepseek_desactivee() else {}),
             }
         ) as r:
             r.raise_for_status()
@@ -2356,7 +2389,7 @@ async def call_llm_stream_with_tools(
             payload['tool_choice'] = 'auto'
     else:
         print(f"[ENGINE] {_model} : modèle de raisonnement — outils et température non transmis.")
-    if provider == 'deepseek':
+    if provider == 'deepseek' and reflexion_deepseek_desactivee():
         # deepseek-v4-* active le mode réflexion par défaut, effort 'high'
         # (doc DeepSeek). Ça ajoute plusieurs secondes avant le premier mot ET
         # consomme le budget max_tokens en tokens invisibles. NIMM veut de la
