@@ -5,6 +5,7 @@
 
 import json
 import re
+import threading
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -33,24 +34,44 @@ def _is_embeddings_enabled() -> bool:
     except Exception:
         return False
 
+# Le chargement du modèle prend plusieurs secondes et peut être demandé par
+# DEUX côtés à la fois : le préchauffage lancé au démarrage, et le premier
+# message si l'utilisateur écrit avant qu'il ait fini. Sans verrou, le second
+# appelant voit `_embed_model` encore à None et lance un SECOND chargement du
+# même modèle, en parallèle : les deux se disputent le disque et le
+# processeur, et le message attend le sien jusqu'au bout. Avec le verrou, il
+# attend simplement la fin du premier.
+_embed_lock = threading.Lock()
+
+
 def _get_model():
-    """Charge le modèle sentence-transformers à la demande. Retourne None si désactivé ou erreur."""
+    """Charge le modèle sentence-transformers à la demande, UNE seule fois.
+
+    Retourne None si désactivé ou en erreur. Double vérification autour du
+    verrou : le cas courant (modèle déjà chargé) ne coûte rien du tout, seuls
+    les appels concurrents du tout premier chargement s'attendent.
+    """
     global _embed_model, _embed_error
     if not _is_embeddings_enabled():
         return None
     if _embed_model is not None:
         return _embed_model
-    try:
-        from sentence_transformers import SentenceTransformer
-        print("[MEMORY] 🔄 Chargement du modèle embeddings...")
-        _embed_error = None
-        _embed_model = SentenceTransformer(_EMBED_MODEL_NAME)
-        print("[MEMORY] ✅ Modèle embeddings chargé.")
-    except Exception as e:
-        print(f"[MEMORY] ⚠️ Modèle embeddings non disponible : {e}")
-        _embed_model = None
-        _embed_error = str(e)
-    return _embed_model
+    with _embed_lock:
+        # Relecture SOUS le verrou : pendant l'attente, un autre fil a pu
+        # terminer le chargement.
+        if _embed_model is not None:
+            return _embed_model
+        try:
+            from sentence_transformers import SentenceTransformer
+            print("[MEMORY] 🔄 Chargement du modèle embeddings...")
+            _embed_error = None
+            _embed_model = SentenceTransformer(_EMBED_MODEL_NAME)
+            print("[MEMORY] ✅ Modèle embeddings chargé.")
+        except Exception as e:
+            print(f"[MEMORY] ⚠️ Modèle embeddings non disponible : {e}")
+            _embed_model = None
+            _embed_error = str(e)
+        return _embed_model
 
 def _embed(text: str):
     """Retourne le vecteur embedding d'un texte, ou None si indisponible."""
