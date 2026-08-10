@@ -41,6 +41,11 @@ Tourne entièrement sur ta machine — tes conversations ne quittent jamais ton 
 - 📄 **Lecture de fichiers** — PDF et images analysés directement dans le chat
 - 🗂️ **Base de connaissances** — ingère tes documents (PDF, pages web, textes collés) dans une mémoire locale interrogeable par le sens ; NIMM y puise automatiquement pour te répondre, sans rien envoyer au cloud
 - 📅 **Agenda** — rappels et échéances, signalés automatiquement dans la conversation
+- 🎬 **Studio image et vidéo** — crée une image en choisissant son format, sa résolution et son modèle, ou une vidéo de quelques secondes avec son (Veo). **Chaque image est décrite** : le texte alternatif dit ce qui a été produit, pas ce qui a été demandé, et quand la description manque, c'est écrit
+- 🎵 **Musique** — génère un morceau à partir d'une description (Lyria). Les paroles et la structure arrivent en texte copiable, à côté de l'audio
+- 🛰️ **Veille documentaire** — surveille un sujet dans le temps, relève les nouveautés toute seule et te les annonce **une fois** : ce qui n'apprend rien ne dérange pas
+- 🔬 **Banc d'essai** — pose la même question à chaque moteur de pertinence configuré et compare : documents remontés, scores, temps de réponse. Rapport copiable, aucun réglage modifié
+- 💾 **Sauvegarde** — copie automatique de tes bases vers un dossier de ton choix (disque externe, dossier synchronisé…), débrayable dans les réglages
 - 🔎 **Recherche par sens** — retrouve un souvenir même sans les mots exacts (optionnel)
 - ✏️ **Modifier / Régénérer** — réédite ton dernier message ou demande une nouvelle réponse
 - 📤 **Export** — marque des réponses et exporte-les en TXT, DOCX, PDF, RTF, ODT, EPUB ou MP3
@@ -185,7 +190,9 @@ Elle est **chiffrée au repos** sur ta machine (jamais stockée en clair). C'est
 | OpenAI (GPT) | ☁️ Cloud | ✅ | Alternative solide |
 | Mistral | ☁️ Cloud | ✅ | Option européenne — Magistral (raisonnement), Codestral (code), Pixtral (vision), Voxtral (audio), OCR, TTS, Batch |
 | OpenRouter | ☁️ Cloud | ✅ | Accès à des dizaines de modèles |
-| Google Gemini | ☁️ Cloud | ✅ | ✅ Nano Banana | Recommandé — format, résolution et modèle réglables ; ouvre aussi Lyria (musique) et Veo (vidéo) |
+| Groq | ☁️ Cloud | — | Réponse quasi instantanée sur modèles ouverts (Llama, Qwen). Le délai avant le premier mot compte double quand la réponse est écoutée : à réserver aux tâches de fond via le routage par tâche |
+| Cerebras | ☁️ Cloud | — | Le plus rapide du marché, mêmes modèles ouverts. Un million de jetons par jour offerts |
+| Google Gemini | ☁️ Cloud | ✅ | Recommandé — image réglable (Nano Banana : format, résolution, modèle) ; la même clé ouvre Lyria (musique) et Veo (vidéo) |
 | Ollama | 🏠 Local | — | Gratuit, nécessite un PC puissant |
 
 ---

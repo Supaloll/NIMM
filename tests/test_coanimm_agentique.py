@@ -1689,7 +1689,10 @@ def test_reordonnancement():
 
     # (5) Câblage hub : filet élargi SEULEMENT si un moteur peut trier derrière
     assert 'k=10 if _moteur else 3' in hub, 'sinon on ajoute du hors-sujet sans trieur'
-    assert hub.count("_match_documents(user_message, settings.get('api_keys'))") == 2, \
+    # Les deux chemins de conversation appellent la base de connaissances.
+    # On compte l'APPEL, pas sa forme : depuis qu'il passe par un fil
+    # d'exécution (il bloquait la boucle), il s'écrit sur deux lignes.
+    assert len(re.findall(r'_match_documents,?\s*\n?\s*user_message', hub)) == 2, \
         'les deux chemins de conversation'
     assert 'add_diagnostic' in hub and '_resume' in hub, 'traçable au journal'
     assert 'passages = passages[:3]' in hub, 'moteur muet → on revient à l’ancien filet'
@@ -2470,6 +2473,98 @@ def test_anthropic_parametres_echantillonnage():
     ok("Anthropic : température omise sur les modèles qui la refusent, sur les trois chemins")
 
 
+def test_demarrage_a_froid():
+    """Ce qui coûte au PREMIER message, et qui ne se voit qu'une fois.
+
+    Laurent a ramené la latence de 15 s à 7-8 s et signalait « encore un peu de
+    marge ». Deux défauts trouvés en suivant sa piste :
+
+    1. `_get_model()` n'avait AUCUN verrou. Le préchauffage lancé au démarrage
+       et le premier message pouvaient demander le modèle en même temps : le
+       second voyait `_embed_model` encore à None et lançait un SECOND
+       chargement du même modèle, en concurrence avec le premier.
+    2. `_match_documents` était appelé DANS la coroutine : il calcule un
+       plongement et peut lancer des appels HTTP vers le réordonnanceur, ce qui
+       bloquait toute la boucle — donc tout le serveur — et à froid le
+       chargement du modèle s'y ajoutait.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    mem = open(os.path.join(racine, 'modules', 'memory.py'), encoding='utf-8').read()
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+
+    # (1) Le chargement du modèle est protégé, avec double vérification
+    assert '_embed_lock = threading.Lock()' in mem
+    corps = mem[mem.index('def _get_model'):]
+    corps = corps[:corps.index('def _embed')]
+    assert 'with _embed_lock:' in corps, 'chargement non protégé'
+    # Deux tests de présence : un AVANT le verrou (coût nul en régime courant)
+    # et un DEDANS (un autre fil a pu terminer pendant l'attente).
+    assert corps.count('if _embed_model is not None:') == 2, \
+        'double vérification requise : sans celle du dessus, chaque appel prend le verrou'
+
+    # (2) Les étapes bloquantes sortent de la boucle, sur les DEUX chemins
+    #     (message simple et message diffusé) — même motif que partout ailleurs :
+    #     n'en traiter qu'un, c'est laisser le défaut sur l'autre.
+    assert hub.count('await asyncio.to_thread(') >= 2
+    arbre = ast.parse(hub)
+    for n in ast.walk(arbre):
+        if isinstance(n, ast.AsyncFunctionDef) and n.name in ('process_message', 'process_message_stream'):
+            for x in ast.walk(n):
+                if isinstance(x, ast.Call) and getattr(x.func, 'id', '') == '_match_documents':
+                    ligne = hub.split(chr(10))[x.lineno - 1]
+                    amont = hub.split(chr(10))[x.lineno - 2]
+                    assert 'to_thread' in ligne or 'to_thread' in amont, (
+                        '%s : _match_documents bloque la boucle (ligne %d)' % (n.name, x.lineno))
+    ok("démarrage à froid : modèle chargé une seule fois, plongements hors de la boucle")
+
+
+def test_documentation_a_jour():
+    """Le README est la porte d'entrée : il vieillit sans que rien ne l'annonce.
+
+    Remarque de Fernando (10/08/2026) : « as-tu mis à jour les fichiers de doc ? »
+    Non. ARCHITECTURE.md était tenu à jour à chaque lot — c'est le journal
+    technique — mais le README ignorait cinq fonctions livrées et deux
+    fournisseurs branchés. Ce test lie les deux : un fournisseur déclaré dans
+    le catalogue doit figurer dans le README.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    readme = open(os.path.join(racine, 'README.md'), encoding='utf-8').read()
+    import core.services as SV
+
+    # (1) Tout fournisseur de conversation du catalogue est dans le README
+    for s in SV.SERVICES:
+        if s.get('famille') != 'conversation':
+            continue
+        nom = s['nom'].split('(')[0].strip()
+        assert nom.lower() in readme.lower(), (
+            'fournisseur absent du README : ' + nom)
+
+    # (2) Les fonctions livrées y sont nommées
+    for fonction in ('Lyria', 'Veo', 'veille', "banc d'essai", 'sauvegarde'):
+        assert fonction.lower() in readme.lower(), (
+            'fonction absente du README : ' + fonction)
+
+    # (3) Les tableaux sont BIEN FORMÉS. Une ligne qui a une colonne de trop
+    #     décale toute la lecture au lecteur d'écran — défaut introduit par moi
+    #     le 30/07 sur la ligne Gemini, passé inaperçu dix jours.
+    lignes = readme.split(chr(10))
+    i = 0
+    while i < len(lignes):
+        if lignes[i].startswith('|') and i + 1 < len(lignes) and set(lignes[i+1].replace('|','').replace(':','').strip()) <= set('- '):
+            attendu = lignes[i].count('|')
+            j = i
+            while j < len(lignes) and lignes[j].startswith('|'):
+                assert lignes[j].count('|') == attendu, (
+                    'tableau mal formé ligne %d : %d séparateurs au lieu de %d — %s'
+                    % (j + 1, lignes[j].count('|'), attendu, lignes[j][:60]))
+                j += 1
+            i = j
+        else:
+            i += 1
+    ok("documentation : README à jour des fournisseurs et des fonctions, tableaux bien formés")
+
+
 def test_reflexion_deepseek():
     """La réflexion invisible de DeepSeek : coupée partout, mais RÉGLABLE.
 
@@ -3126,6 +3221,8 @@ if __name__ == '__main__':
                test_fournisseurs_cables_partout,
                test_anthropic_parametres_echantillonnage,
                test_erreur_api_explique_la_cause,
-               test_reflexion_deepseek]:
+               test_reflexion_deepseek,
+               test_documentation_a_jour,
+               test_demarrage_a_froid]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

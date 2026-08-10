@@ -4015,7 +4015,12 @@ async def process_message(
     if _doc_fil:
         doc_context, _doc_titles = '', []
     else:
-        doc_context, _doc_titles = _match_documents(user_message, settings.get('api_keys'))
+        # Hors de la boucle : cette étape calcule un plongement et peut lancer
+        # des appels HTTP vers le réordonnanceur. Exécutée telle quelle dans la
+        # coroutine, elle bloquait TOUT le serveur — et à froid, le chargement du
+        # modèle d'embeddings (plusieurs secondes) s'y ajoutait.
+        doc_context, _doc_titles = await asyncio.to_thread(
+            _match_documents, user_message, settings.get('api_keys'))
     system_prompt = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
                                     doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
 
@@ -4389,7 +4394,12 @@ async def process_message_stream(
     if _doc_fil:
         doc_context, _doc_titles = '', []
     else:
-        doc_context, _doc_titles = _match_documents(user_message, settings.get('api_keys'))
+        # Hors de la boucle : cette étape calcule un plongement et peut lancer
+        # des appels HTTP vers le réordonnanceur. Exécutée telle quelle dans la
+        # coroutine, elle bloquait TOUT le serveur — et à froid, le chargement du
+        # modèle d'embeddings (plusieurs secondes) s'y ajoutait.
+        doc_context, _doc_titles = await asyncio.to_thread(
+            _match_documents, user_message, settings.get('api_keys'))
     _perf("match_documents")
     system_prompt  = build_system_prompt(mask, memory_context, carnet_notes, presence_note, last_dominant, settings['user_name'], biblio_context, force_mem, recent_messages=recent_focus, location=location, session_bilans=session_bilans, doc_context=doc_context,
                                     doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
