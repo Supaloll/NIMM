@@ -1467,6 +1467,10 @@ Analyse les sentiments de : ..."
                 <label for="anthropic-cache-toggle" style="font-size:0.82rem;margin:0;cursor:pointer;">Mettre en cache les prompts Anthropic (réduit fortement le coût des messages longs)</label>
             </div>
             <div style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;">
+                <input type="checkbox" id="deepseek-reflexion-toggle" style="width:auto;margin:2px 0 0;flex:none;">
+                <label for="deepseek-reflexion-toggle" style="font-size:0.82rem;margin:0;cursor:pointer;">Laisser DeepSeek réfléchir avant de répondre (réponses plus fines sur les questions complexes, mais plusieurs secondes d'attente avant le premier mot)</label>
+            </div>
+            <div style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;">
                 <input type="checkbox" id="coanimm-critique-toggle" checked style="width:auto;margin:2px 0 0;flex:none;">
                 <label for="coanimm-critique-toggle" style="font-size:0.82rem;margin:0;cursor:pointer;">Vérifier le résultat après chaque exécution et corriger si besoin (un appel IA en plus par tâche)</label>
             </div>
@@ -2220,7 +2224,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260731-listes"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260810-reflexion"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
