@@ -1758,6 +1758,34 @@ async def backup_run_now():
     from core.hub import trigger_backup
     return trigger_backup()
 
+@app.get("/api/journal-technique")
+async def journal_technique(lignes: int = 120, filtre: str = ""):
+    """Les dernières lignes de la sortie technique de NIMM.
+
+    POURQUOI CETTE ROUTE
+    NIMM démarre en fenêtre cachée : sa sortie technique — les seules traces
+    utiles quand un comportement surprend — était perdue, et de toute façon
+    illisible au lecteur d'écran. Elle est désormais écrite dans `nimm.log`,
+    et cette route la rend consultable depuis l'interface, donc au braille.
+
+    `filtre` accepte une chaîne (ex. « HUB ») pour ne garder que les lignes qui
+    la contiennent : cent vingt lignes de démarrage noient le renseignement.
+    """
+    chemin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nimm.log")
+    if not os.path.isfile(chemin):
+        return {"lignes": [], "fichier": "", "note": (            "Aucun journal technique. Il n'est écrit que si NIMM a été lancé "
+            "par LANCER_NIMM (relance-le pour l'activer).")}
+    try:
+        with open(chemin, encoding="utf-8", errors="replace") as f:
+            toutes = f.read().splitlines()
+    except Exception as e:
+        return {"lignes": [], "fichier": chemin, "note": f"Journal illisible : {e}"}
+    if (filtre or "").strip():
+        f_bas = filtre.strip().lower()
+        toutes = [l for l in toutes if f_bas in l.lower()]
+    n = max(1, min(1000, int(lignes or 120)))
+    return {"lignes": toutes[-n:], "fichier": chemin, "total": len(toutes), "note": ""}
+
 @app.get("/api/diagnostics")
 async def diagnostics_list():
     """Journal de fonctionnement : les décisions techniques de NIMM, en clair.

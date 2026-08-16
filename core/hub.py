@@ -4583,6 +4583,7 @@ async def process_message_stream(
                     # chemin (call_llm_stream) ne sait pas traiter un deuxième tool_calls, d'où
                     # un flux silencieux ou coupé en pleine phrase.
                     _phase2_tools = NIMM_TOOLS if settings['provider'] == 'anthropic' else None
+                    _avant_phase2 = len(full_reply)
                     async for token in call_llm_stream(
                         messages=messages,
                         provider=settings['provider'],
@@ -4592,6 +4593,12 @@ async def process_message_stream(
                         temperature=settings['temperature'],
                         api_keys=settings['api_keys'],
                         tools=_phase2_tools,
+                        # Les outils restent DÉCLARÉS — Anthropic l'exige dès que
+                        # l'historique contient un appel et son résultat — mais leur
+                        # usage est INTERDIT ici : ce chemin ne lit que du texte, et
+                        # un second appel d'outil y passait totalement inaperçu, d'où
+                        # une réponse entièrement muette après une recherche web.
+                        outils_interdits=bool(_phase2_tools),
                     ):
                         if isinstance(token, dict):
                             if token.get('type') == 'usage':
@@ -4609,6 +4616,22 @@ async def process_message_stream(
                         _yield_buf += token
                         for chunk in _flush_buf():
                             yield f"data: {chunk}\n\n"
+
+                    if len(full_reply) == _avant_phase2:
+                        # Une réponse muette est pire qu'une erreur : l'utilisateur
+                        # attend, la synthèse annonce « NIMM t'a répondu », et il n'y a
+                        # rien. On le dit, plutôt que de laisser un silence.
+                        _muet = ("Je n'ai pas réussi à formuler de réponse à partir du "
+                                 "résultat de l'outil. Reformule ta question, ou relance-la "
+                                 "sans la recherche web.")
+                        full_reply += _muet
+                        yield f"data: {_muet}\n\n"
+                        try:
+                            from core.database import add_diagnostic as _ad_muet
+                            _ad_muet('conversation', "Réponse muette après un appel "
+                                     "d'outil : aucun texte en phase 2.")
+                        except Exception:
+                            pass
 
     except Exception as e:
         from core.engine import (classer_erreur_fournisseur, fournisseur_de_secours,
