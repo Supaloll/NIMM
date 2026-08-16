@@ -2119,7 +2119,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
     if _finish_reason == 'length':
         yield {'__truncated__': True}
 
-async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None):
+async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None, outils_interdits=False):
     """Stream tokens via API Anthropic."""
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
@@ -2153,6 +2153,15 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
         payload['system'] = system_prompt
     if tools:
         payload['tools'] = _oai_tools_to_anthropic(tools)
+        if outils_interdits:
+            # Ce chemin ne sait lire QUE du texte : il ignore les blocs d'appel
+            # d'outil. Or Anthropic EXIGE que les outils restent déclarés dès que
+            # l'historique contient un appel et son résultat — on ne peut donc pas
+            # les retirer. On les déclare, mais on en INTERDIT l'usage : le modèle
+            # répond alors en texte avec ce qu'il a déjà obtenu, au lieu de
+            # redemander un outil dans le vide, ce qui produisait une réponse
+            # entièrement MUETTE après une recherche web.
+            payload['tool_choice'] = {'type': 'none'}
     if _anthropic_cache_enabled():
         payload['cache_control'] = {'type': 'ephemeral'}
     async with httpx.AsyncClient(timeout=120) as client:
@@ -2229,6 +2238,7 @@ async def call_llm_stream(
     images: list = None,
     tools: list = None,
     pipeline: str = 'chat',
+    outils_interdits: bool = False,
 ):
     """Stream de tokens — génère les tokens un par un."""
     provider = provider.lower()
@@ -2239,7 +2249,7 @@ async def call_llm_stream(
 
     try:
         if provider == 'anthropic':
-            async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools):
+            async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools, outils_interdits=outils_interdits):
                 if isinstance(token, dict):
                     if token.get('__usage__'):
                         _real_usage = token

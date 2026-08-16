@@ -2473,6 +2473,53 @@ def test_anthropic_parametres_echantillonnage():
     ok("Anthropic : température omise sur les modèles qui la refusent, sur les trois chemins")
 
 
+def test_reponse_muette_apres_outil():
+    """RÉGRESSION VÉCUE : réponse entièrement MUETTE après une recherche web.
+
+    Symptôme rapporté par Fernando : « Content de te retrouver. Je cherche. »,
+    puis « Recherche en cours… », puis « NIMM t'a répondu » — et rien. Aucune
+    erreur affichée, donc aucune exception : le flux s'est terminé sans produire
+    le moindre texte.
+
+    Cause : en phase 2 (après l'exécution de l'outil), NIMM REDÉCLARE les outils
+    à Anthropic — c'est structurellement obligatoire dès que l'historique
+    contient un appel et son résultat. Mais le chemin employé alors ne sait lire
+    QUE du texte : il ignore les blocs d'appel d'outil. Le modèle, ayant le droit
+    de chercher à nouveau, a redemandé l'outil — dans le vide.
+
+    Le commentaire du code tirait déjà cette conclusion pour les autres
+    fournisseurs (on ne leur repasse pas les outils) sans la tirer pour Anthropic.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    eng = open(os.path.join(racine, 'core', 'engine.py'), encoding='utf-8').read()
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+
+    # (1) Le chemin de flux Anthropic sait INTERDIRE l'usage des outils tout en
+    #     les laissant déclarés — les retirer provoquerait un refus de l'API.
+    deb = eng.index('async def _call_anthropic_stream')
+    corps = eng[deb:eng.index('\nasync def ', deb + 10)]
+    assert 'outils_interdits' in corps.split(chr(10))[0], 'option absente de la signature'
+    assert "payload['tool_choice'] = {'type': 'none'}" in corps
+    assert "payload['tools'] = _oai_tools_to_anthropic(tools)" in corps, \
+        'les outils doivent rester DÉCLARÉS : Anthropic les exige'
+
+    # (2) L'option est relayée depuis le point d'entrée du flux
+    assert 'outils_interdits: bool = False,' in eng
+    assert 'outils_interdits=outils_interdits' in eng
+
+    # (3) La phase 2 l'active quand elle redéclare les outils
+    assert 'outils_interdits=bool(_phase2_tools),' in hub
+
+    # (4) GARDE-FOU : un silence ne doit JAMAIS passer inaperçu, quelle qu'en
+    #     soit la cause. Une réponse muette est pire qu'une erreur — la synthèse
+    #     vocale annonce « NIMM t'a répondu » et il n'y a rien à écouter.
+    assert '_avant_phase2 = len(full_reply)' in hub
+    assert 'if len(full_reply) == _avant_phase2:' in hub
+    assert 'add_diagnostic as _ad_muet' in hub, 'le silence doit aussi aller au journal'
+    ok("réponse muette après outil : usage des outils interdit en phase 2, et silence impossible")
+
+
+
 def test_demarrage_a_froid():
     """Ce qui coûte au PREMIER message, et qui ne se voit qu'une fois.
 
@@ -3223,6 +3270,7 @@ if __name__ == '__main__':
                test_erreur_api_explique_la_cause,
                test_reflexion_deepseek,
                test_documentation_a_jour,
-               test_demarrage_a_froid]:
+               test_demarrage_a_froid,
+               test_reponse_muette_apres_outil]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
