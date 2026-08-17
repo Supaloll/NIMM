@@ -2188,12 +2188,15 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                     payload.pop('cache_control', None)
                     async for _tok in _call_anthropic_stream(
                             messages, model, system_prompt, max_tokens, temperature,
-                            api_keys, images, tools=tools):
+                            api_keys, images, tools=tools, outils_interdits=outils_interdits):
                         yield _tok
                     return
             r.raise_for_status()
             _ant_tokens_in  = 0
             _ant_tokens_out = 0
+            _a_du_texte     = False
+            _reflexion_acc  = ''
+            _erreurs_parse  = 0
             async for line in r.aiter_lines():
                 if not line.startswith('data:'):
                     continue
@@ -2218,11 +2221,34 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                             if _avis:
                                 yield _avis
                     elif evt == 'content_block_delta':
-                        token = data.get('delta', {}).get('text', '')
+                        _delta = data.get('delta', {}) or {}
+                        token = _delta.get('text', '')
                         if token:
+                            _a_du_texte = True
                             yield token
-                except Exception:
+                        else:
+                            # Les modèles récents réfléchissent d'office et émettent
+                            # des blocs d'un AUTRE type. Ne lire que `text` revenait
+                            # à les jeter — et si la réflexion consomme tout le
+                            # budget, il ne reste RIEN à afficher : réponse muette.
+                            _pensee = _delta.get('thinking') or _delta.get('partial_json') or ''
+                            if _pensee:
+                                _reflexion_acc += _pensee
+                except Exception as _e_parse:
+                    # Avaler ces erreurs en silence masquait la cause des réponses
+                    # vides. On les compte pour pouvoir le dire.
+                    _erreurs_parse += 1
+                    if _erreurs_parse == 1:
+                        print(f'[ENGINE] Anthropic : ligne de flux illisible ({_e_parse})')
                     continue
+    # Réflexion captée mais aucun texte : la cause la plus fréquente est que la
+    # réflexion a consommé tout le budget de réponse. On la remonte plutôt que
+    # de laisser l'utilisateur devant un silence.
+    if _reflexion_acc and not _a_du_texte:
+        yield {'__raisonnement__': _reflexion_acc[:4000]}
+        print('[ENGINE] Anthropic : réflexion reçue mais AUCUN texte '
+              f'({_ant_tokens_out} jetons de sortie) — budget probablement épuisé.')
+
     # Émettre sentinel usage Anthropic
     if _ant_tokens_in or _ant_tokens_out:
         yield {'__usage__': True, 'tokens_in': _ant_tokens_in, 'tokens_out': _ant_tokens_out}

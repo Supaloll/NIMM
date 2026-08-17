@@ -2516,6 +2516,35 @@ def test_reponse_muette_apres_outil():
     assert '_avant_phase2 = len(full_reply)' in hub
     assert 'if len(full_reply) == _avant_phase2:' in hub
     assert 'add_diagnostic as _ad_muet' in hub, 'le silence doit aussi aller au journal'
+    # (5) Le flux Anthropic ne doit RIEN jeter en silence. Deux défauts trouvés
+    #     en cherchant la cause du silence, tous deux masquants :
+    #     - seuls les blocs de TEXTE étaient lus ; les modèles récents
+    #       réfléchissent d'office et émettent des blocs d'un autre type, jetés ;
+    #     - toute erreur de lecture était avalée par un « except: continue »,
+    #       ce qui rendait la cause introuvable.
+    assert "_delta.get('thinking')" in eng, \
+        "la réflexion doit être captée, pas jetée"
+    assert '_erreurs_parse' in eng, "une ligne illisible doit être signalée, pas avalée"
+    assert "if _reflexion_acc and not _a_du_texte:" in eng, \
+        "réflexion sans texte : le dire, c'est le seul moyen de diagnostiquer"
+    # (6) Le repli après refus du cache relançait sans l'interdiction d'outils
+    assert eng.count('outils_interdits=outils_interdits') == 2, \
+        "les DEUX appels (relais normal et repli après refus du cache) doivent " \
+        "conserver l'interdiction, sinon le silence revient par l'un des chemins"
+    # (7) REPLI SANS OUTILS — dernier recours, et le seul qui ne dépende d'aucune
+    #     subtilité d'API. Après trois correctifs posés sans voir la cause
+    #     (interdiction d'usage, garde-fou, lecture de la réflexion), le parti
+    #     pris change : plutôt que de négocier les options, on change la QUESTION.
+    #     L'historique est reconstruit sans appel d'outil, le résultat fusionné
+    #     dans la question — le modèle n'a alors plus aucun moyen d'en redemander.
+    assert '_hist_plat' in hub and 'tools=None,' in hub
+    assert "if m.get('role') in ('user', 'assistant')" in hub
+    assert "not m.get('tool_calls')" in hub, 'aucun appel d’outil ne doit subsister'
+    # Fusion dans le dernier message plutôt qu'ajout : deux « user » consécutifs
+    # sont une forme que tous les fournisseurs n'acceptent pas.
+    assert "_hist_plat[-1].get('role') == 'user'" in hub
+    # Et si même le repli échoue, on le dit encore.
+    assert 'repli sans outils compris' in hub
     ok("réponse muette après outil : usage des outils interdit en phase 2, et silence impossible")
 
 
