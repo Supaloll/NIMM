@@ -2119,7 +2119,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
     if _finish_reason == 'length':
         yield {'__truncated__': True}
 
-async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None):
+async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=None, outils_interdits=False):
     """Stream tokens via API Anthropic."""
     api_key = get_api_key('anthropic', api_keys)
     if not api_key:
@@ -2153,6 +2153,15 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
         payload['system'] = system_prompt
     if tools:
         payload['tools'] = _oai_tools_to_anthropic(tools)
+        if outils_interdits:
+            # Ce chemin ne sait lire QUE du texte : il ignore les blocs d'appel
+            # d'outil. Or Anthropic EXIGE que les outils restent déclarés dès que
+            # l'historique contient un appel et son résultat — on ne peut donc pas
+            # les retirer. On les déclare, mais on en INTERDIT l'usage : le modèle
+            # répond alors en texte avec ce qu'il a déjà obtenu, au lieu de
+            # redemander un outil dans le vide, ce qui produisait une réponse
+            # entièrement MUETTE après une recherche web.
+            payload['tool_choice'] = {'type': 'none'}
     if _anthropic_cache_enabled():
         payload['cache_control'] = {'type': 'ephemeral'}
     async with httpx.AsyncClient(timeout=120) as client:
@@ -2179,12 +2188,15 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                     payload.pop('cache_control', None)
                     async for _tok in _call_anthropic_stream(
                             messages, model, system_prompt, max_tokens, temperature,
-                            api_keys, images, tools=tools):
+                            api_keys, images, tools=tools, outils_interdits=outils_interdits):
                         yield _tok
                     return
             r.raise_for_status()
             _ant_tokens_in  = 0
             _ant_tokens_out = 0
+            _a_du_texte     = False
+            _reflexion_acc  = ''
+            _erreurs_parse  = 0
             async for line in r.aiter_lines():
                 if not line.startswith('data:'):
                     continue
@@ -2209,11 +2221,34 @@ async def _call_anthropic_stream(messages, model, system_prompt, max_tokens, tem
                             if _avis:
                                 yield _avis
                     elif evt == 'content_block_delta':
-                        token = data.get('delta', {}).get('text', '')
+                        _delta = data.get('delta', {}) or {}
+                        token = _delta.get('text', '')
                         if token:
+                            _a_du_texte = True
                             yield token
-                except Exception:
+                        else:
+                            # Les modèles récents réfléchissent d'office et émettent
+                            # des blocs d'un AUTRE type. Ne lire que `text` revenait
+                            # à les jeter — et si la réflexion consomme tout le
+                            # budget, il ne reste RIEN à afficher : réponse muette.
+                            _pensee = _delta.get('thinking') or _delta.get('partial_json') or ''
+                            if _pensee:
+                                _reflexion_acc += _pensee
+                except Exception as _e_parse:
+                    # Avaler ces erreurs en silence masquait la cause des réponses
+                    # vides. On les compte pour pouvoir le dire.
+                    _erreurs_parse += 1
+                    if _erreurs_parse == 1:
+                        print(f'[ENGINE] Anthropic : ligne de flux illisible ({_e_parse})')
                     continue
+    # Réflexion captée mais aucun texte : la cause la plus fréquente est que la
+    # réflexion a consommé tout le budget de réponse. On la remonte plutôt que
+    # de laisser l'utilisateur devant un silence.
+    if _reflexion_acc and not _a_du_texte:
+        yield {'__raisonnement__': _reflexion_acc[:4000]}
+        print('[ENGINE] Anthropic : réflexion reçue mais AUCUN texte '
+              f'({_ant_tokens_out} jetons de sortie) — budget probablement épuisé.')
+
     # Émettre sentinel usage Anthropic
     if _ant_tokens_in or _ant_tokens_out:
         yield {'__usage__': True, 'tokens_in': _ant_tokens_in, 'tokens_out': _ant_tokens_out}
@@ -2229,6 +2264,7 @@ async def call_llm_stream(
     images: list = None,
     tools: list = None,
     pipeline: str = 'chat',
+    outils_interdits: bool = False,
 ):
     """Stream de tokens — génère les tokens un par un."""
     provider = provider.lower()
@@ -2239,7 +2275,7 @@ async def call_llm_stream(
 
     try:
         if provider == 'anthropic':
-            async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools):
+            async for token in _call_anthropic_stream(messages, model, system_prompt, max_tokens, temperature, api_keys, images, tools=tools, outils_interdits=outils_interdits):
                 if isinstance(token, dict):
                     if token.get('__usage__'):
                         _real_usage = token

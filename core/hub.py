@@ -4583,6 +4583,7 @@ async def process_message_stream(
                     # chemin (call_llm_stream) ne sait pas traiter un deuxième tool_calls, d'où
                     # un flux silencieux ou coupé en pleine phrase.
                     _phase2_tools = NIMM_TOOLS if settings['provider'] == 'anthropic' else None
+                    _avant_phase2 = len(full_reply)
                     async for token in call_llm_stream(
                         messages=messages,
                         provider=settings['provider'],
@@ -4592,6 +4593,12 @@ async def process_message_stream(
                         temperature=settings['temperature'],
                         api_keys=settings['api_keys'],
                         tools=_phase2_tools,
+                        # Les outils restent DÉCLARÉS — Anthropic l'exige dès que
+                        # l'historique contient un appel et son résultat — mais leur
+                        # usage est INTERDIT ici : ce chemin ne lit que du texte, et
+                        # un second appel d'outil y passait totalement inaperçu, d'où
+                        # une réponse entièrement muette après une recherche web.
+                        outils_interdits=bool(_phase2_tools),
                     ):
                         if isinstance(token, dict):
                             if token.get('type') == 'usage':
@@ -4609,6 +4616,73 @@ async def process_message_stream(
                         _yield_buf += token
                         for chunk in _flush_buf():
                             yield f"data: {chunk}\n\n"
+
+                    if len(full_reply) == _avant_phase2:
+                        # REPLI SANS OUTILS — dernier recours, et le plus robuste.
+                        #
+                        # Anthropic exige que les outils restent déclarés tant que
+                        # l'historique contient un appel et son résultat ; on ne peut
+                        # donc pas les retirer. Mais on peut retirer l'APPEL : on
+                        # reconstruit l'historique en remplaçant le couple
+                        # appel/résultat par du texte ordinaire. Plus aucun outil à
+                        # déclarer, donc plus aucun moyen pour le modèle d'en
+                        # redemander un — il ne lui reste qu'à répondre.
+                        #
+                        # Ce repli ne dépend d'aucune subtilité d'API (ni tool_choice,
+                        # ni version d'en-tête) : il change la QUESTION, pas les options.
+                        _hist_plat = [m for m in messages
+                                      if m.get('role') in ('user', 'assistant')
+                                      and not m.get('tool_calls')]
+                        _resultats = chr(10).join(
+                            str(m.get('content', ''))[:6000]
+                            for m in messages if m.get('role') == 'tool')
+                        if _resultats:
+                            _ajout = ("Voici le résultat de la recherche demandée :"
+                                      + chr(10) + chr(10) + _resultats + chr(10) + chr(10)
+                                      + "Réponds maintenant à ma question à partir de "
+                                      + "ces éléments, sans utiliser d'outil.")
+                            # Fusionné DANS le dernier message de l'utilisateur plutôt
+                            # qu'ajouté à la suite : deux messages « user » consécutifs
+                            # sont une forme que tous les fournisseurs n'acceptent pas.
+                            if _hist_plat and _hist_plat[-1].get('role') == 'user':
+                                _hist_plat[-1] = dict(_hist_plat[-1])
+                                _hist_plat[-1]['content'] = (
+                                    str(_hist_plat[-1].get('content', '')) + chr(10) + chr(10) + _ajout)
+                            else:
+                                _hist_plat.append({'role': 'user', 'content': _ajout})
+                        print('[HUB] Phase 2 muette — repli sans outils '
+                              f'({len(_hist_plat)} messages aplatis).')
+                        async for token in call_llm_stream(
+                            messages=_hist_plat,
+                            provider=settings['provider'],
+                            model=settings.get('model'),
+                            system_prompt=system_prompt,
+                            max_tokens=settings['max_tokens'],
+                            temperature=settings['temperature'],
+                            api_keys=settings['api_keys'],
+                            tools=None,
+                        ):
+                            if isinstance(token, dict):
+                                continue
+                            full_reply += token
+                            _yield_buf += token
+                            for chunk in _flush_buf():
+                                yield f"data: {chunk}\n\n"
+
+                    if len(full_reply) == _avant_phase2:
+                        # Même le repli n'a rien donné : on le DIT. Un silence
+                        # laisse l'utilisateur devant une réponse annoncée et vide.
+                        _muet = ("Je n'ai pas réussi à formuler de réponse à partir du "
+                                 "résultat de l'outil, même en reformulant. Relance ta "
+                                 "question sans la recherche web.")
+                        full_reply += _muet
+                        yield f"data: {_muet}\n\n"
+                        try:
+                            from core.database import add_diagnostic as _ad_muet
+                            _ad_muet('conversation', "Réponse muette après un appel "
+                                     "d'outil, repli sans outils compris.")
+                        except Exception:
+                            pass
 
     except Exception as e:
         from core.engine import (classer_erreur_fournisseur, fournisseur_de_secours,
