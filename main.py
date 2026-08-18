@@ -243,6 +243,22 @@ def _sec_host_allowed(host: str) -> bool:
     extra = [x.strip().lower() for x in _os_main.environ.get('NIMM_ALLOWED_HOSTS', '').split(',') if x.strip()]
     return h in extra
 
+def _is_local_host(host: str) -> bool:
+    """True si la requête vient de la machine locale (localhost / 127.0.0.1 / ::1).
+
+    Distingue l'interface PC (`http://localhost:8080`) de l'interface mobile
+    (PWA servie via Tailscale, host en `.ts.net`) — permet de n'autoriser la
+    géolocalisation que sur le téléphone.
+    """
+    if not host:
+        return True  # pas d'en-tête Host : on reste sur le comportement le plus restrictif
+    h = host.strip().lower()
+    if h.startswith('['):
+        h = h[1:].split(']')[0]
+    elif h.count(':') == 1:
+        h = h.split(':')[0]
+    return h in ('127.0.0.1', 'localhost', '::1')
+
 @app.middleware("http")
 async def _security_middleware(request, call_next):
     """Anti DNS-rebinding / CSRF + capture de l'identité Tailscale.
@@ -282,7 +298,13 @@ async def _security_middleware(request, call_next):
     _resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     _resp.headers.setdefault("X-XSS-Protection",       "1; mode=block")
     _resp.headers.setdefault("Referrer-Policy",        "strict-origin-when-cross-origin")
-    _resp.headers.setdefault("Permissions-Policy",     "camera=(), microphone=(), geolocation=()")
+    # Géolocalisation : bloquée sur l'interface locale (PC via localhost), mais
+    # autorisée sur l'interface mobile (PWA via Tailscale) — NIMM l'injecte dans
+    # le system prompt à chaque message (cf. _getLocation() dans app.js).
+    _pp = "camera=(), microphone=(), geolocation=()"
+    if not _is_local_host(request.headers.get('host', '')):
+        _pp = "camera=(), microphone=()"
+    _resp.headers.setdefault("Permissions-Policy", _pp)
     return _resp
 
 # Fichiers statiques
