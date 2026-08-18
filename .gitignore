@@ -232,6 +232,8 @@ piper_voices/
 
 # Logs applicatifs
 nimm.log
+nimm.log.1
+nimm.err.log
 logs/
 
 # Fichier de config local (clés API en fallback)

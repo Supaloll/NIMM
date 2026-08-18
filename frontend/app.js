@@ -3959,6 +3959,21 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
         _updateFloatTTS(finalContent, div);
         const _plan = _planDeLaReponse(bubble);
         _srAnnounce(_plan ? `NIMM t'a répondu — ${_plan}` : "NIMM t'a répondu.");
+        
+        // GARDE-FOU : un flux qui se termine SANS texte ne doit jamais passer
+        // pour une réponse. La synthèse vocale annonce « NIMM t'a répondu »,
+        // les indicateurs d'outil restent affichés, et il n'y a rien à écouter.
+        // Ce contrôle est ici, au plus près de l'affichage : il vaut quelle que
+        // soit la cause côté serveur, y compris celles qu'on n'a pas encore vues.
+        if (!finalContent.trim()) {
+            document.getElementById('web-search-loader')?.remove();
+            document.getElementById('tool-loading')?.remove();
+            const _vide = "Aucune réponse n'est revenue après la consultation des outils. "
+                + "Reformule ta question, ou relance-la sans la recherche web. "
+                + "Le journal de fonctionnement en dit peut-être la raison.";
+            bubble.textContent = _vide;
+            _srAnnounce(_vide);
+        }
 
         // Bouton Continuer si réponse tronquée (max_tokens)
         if (_streamRaisonnement) {
@@ -13508,5 +13523,61 @@ init();
     });
     document.getElementById('studio-modal')?.addEventListener('click', function (e) {
         if (e.target === this) this.classList.add('hidden');
+    });
+})();
+
+// ══════════════════════════════════════════
+// JOURNAL TECHNIQUE — la sortie du serveur, rendue lisible
+// ══════════════════════════════════════════
+// NIMM démarre en fenêtre cachée : sa sortie technique était perdue, et de
+// toute façon inaccessible au lecteur d'écran. Elle est désormais écrite dans
+// un fichier, et affichée ici dans une zone de texte : navigable ligne à ligne,
+// sélectionnable, copiable. Le filtre évite d'avoir à parcourir le démarrage.
+(function () {
+    function _jtMsg(m) {
+        var el = document.getElementById('journal-technique-msg');
+        if (el) el.textContent = m;
+    }
+
+    async function _jtCharger(annoncer) {
+        var zone = document.getElementById('journal-technique-texte');
+        if (!zone) return;
+        var filtre = (document.getElementById('journal-filtre')?.value || '').trim();
+        try {
+            var url = '/api/journal-technique?lignes=200'
+                + (filtre ? '&filtre=' + encodeURIComponent(filtre) : '');
+            var d = await fetch(url).then(function (r) { return r.json(); });
+            if (d.note) { zone.value = ''; _jtMsg(d.note); return; }
+            var lignes = d.lignes || [];
+            zone.value = lignes.join(String.fromCharCode(10));
+            if (annoncer !== false) {
+                _jtMsg(lignes.length + ' ligne' + (lignes.length > 1 ? 's' : '')
+                    + (filtre ? ' contenant « ' + filtre + ' »' : '')
+                    + (d.total ? ' sur ' + d.total + ' au total.' : '.'));
+            }
+        } catch (e) { _jtMsg('Journal indisponible : ' + e.message); }
+    }
+
+    document.getElementById('journal-charger-btn')?.addEventListener('click', function () {
+        _jtMsg('Lecture…');
+        _jtCharger(true);
+    });
+    document.getElementById('journal-filtre')?.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); _jtCharger(true); }
+    });
+    document.getElementById('journal-technique-details')?.addEventListener('toggle', function () {
+        if (this.open) _jtCharger(true);
+    });
+
+    document.getElementById('journal-copier-btn')?.addEventListener('click', async function () {
+        var zone = document.getElementById('journal-technique-texte');
+        if (!zone || !zone.value.trim()) { _jtMsg('Rien à copier : affiche d\'abord le journal.'); return; }
+        try {
+            await navigator.clipboard.writeText(zone.value);
+            _jtMsg('Journal copié dans le presse-papiers.');
+        } catch (e) {
+            zone.focus(); zone.select();
+            _jtMsg('Journal sélectionné : fais Contrôle C pour le copier.');
+        }
     });
 })();

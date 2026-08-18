@@ -684,6 +684,29 @@
             </details>
         </div>
 
+        <div class="setting-group" id="journal-technique-section">
+            <details id="journal-technique-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">📜 Journal technique</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    La sortie brute du serveur : c'est là que se lisent les causes d'un
+                    comportement inattendu. Elle partait dans une fenêtre cachée ; elle est
+                    désormais consultable ici. Le filtre évite de tout parcourir.
+                </p>
+                <div class="setting-item">
+                    <label for="journal-filtre">Ne garder que les lignes contenant</label>
+                    <input type="text" id="journal-filtre" placeholder="HUB, ENGINE, PERF…"
+                        aria-label="Filtrer les lignes du journal technique" style="width:100%;box-sizing:border-box;">
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button type="button" id="journal-charger-btn" class="btn-primary" aria-label="Afficher le journal technique">Afficher</button>
+                    <button type="button" id="journal-copier-btn" class="btn-secondary" aria-label="Copier le journal technique">Copier</button>
+                </div>
+                <div id="journal-technique-msg" role="status" aria-live="polite" style="font-size:0.8rem;margin-top:8px;min-height:1.2em;"></div>
+                <textarea id="journal-technique-texte" rows="16" readonly aria-label="Journal technique du serveur"
+                    style="width:100%;box-sizing:border-box;font-family:monospace;font-size:0.78rem;margin-top:6px;"></textarea>
+            </details>
+        </div>
+
         <!-- ── SERVEURS MCP DISTANTS ── -->
         <div class="setting-group" id="mcp-section" data-needs-key="anthropic">
             <details id="mcp-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
@@ -2224,7 +2247,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260810-reflexion"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260816-repli"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
