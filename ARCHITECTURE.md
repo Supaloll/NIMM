@@ -90,25 +90,32 @@ Pour chaque fil avec `processed_for_memory = 0` : charge 80 messages de contexte
 Tout prédicat produit par le LLM est normalisé vers cette liste avant stockage.
 
 Catégories complètes :
-- **IDENTITÉ** : `prenom` `nom` `age` `date_naissance` `taille_cm` `poids_kg` `sexe` `handicap` `groupe_sanguin` `nationalite`
-- **FAMILLE** : `conjoint` `enfant` `parent` `frere` `soeur` `grand_parent` `petit_enfant` `beau_parent` `statut_relation`
-- **TRAVAIL & ÉTUDES** : `metier` `employeur` `anciennete` `horaire_travail` `diplome` `ecole` `competence` `permis` `recherche_emploi` `etudes`
+- **IDENTITÉ** : `prenom` `nom` `age` `date_naissance` `taille_cm` `poids_kg` `sexe` `handicap` `groupe_sanguin` `nationalite` `lieu_naissance` `origine`
+- **FAMILLE** : `conjoint` `enfant` `parent` `frere` `soeur` `frere_ou_soeur` `grand_parent` `petit_enfant` `beau_parent` `statut_relation`
+- **TRAVAIL & ÉTUDES** : `metier` `employeur` `anciennete` `horaire_travail` `diplome` `ecole` `competence` `permis` `recherche_emploi` `etudes` `lieu_etude` `identifiant_professionnel` `tarif_consultation`
 - **SANTÉ** : `probleme_sante` `traitement` `allergie` `medecin` `operation` `suivi_medical` `addiction` `regime_alimentaire`
 - **GOÛTS** : `aime` `n_aime_pas` `plat_prefere` `aversion_alimentaire` `boisson_preferee` `musique_preferee` `artiste_prefere` `film_prefere` `serie_preferee` `livre_prefere` `auteur_prefere`
-- **LOISIRS** : `sport` `lecture` `jeu_video` `cuisine` `bricolage` `jardinage` `musique_instrument` `danse` `ecriture` `photographie` `art` `loisir` `anciennete_pratique`
-- **POSSESSIONS** : `vehicule` `domicile` `logement` `equipement` `animal`
+- **LOISIRS** : `sport` `lecture` `jeu_video` `cuisine` `bricolage` `jardinage` `musique_instrument` `danse` `ecriture` `photographie` `art` `loisir` `anciennete_pratique` `interet` `personnage_jeu` `progression_jeu` `objet_jeu` `guide_jeu` `valeur_jeu`
+- **POSSESSIONS** : `vehicule` `domicile` `logement` `equipement` `animal` `abonnement`
 - **RELATIONS** : `ami` `collegue` `voisin` `relation_sociale` `mentor`
-- **VALEURS** : `valeur` `croyance` `religion` `politique` `engagement`
+- **VALEURS** : `valeur` `croyance` `religion` `politique` `engagement` `questionnement` `theorie`
 - **OPINIONS** : `stance` `opinion`
 - **PROJETS** : `objectif` `reve` `intention` `projet` `envie` `apprentissage`
 - **ÉVÉNEMENTS** : `evenement_vie` `deuil` `accident` `demenagement` `anecdote`
-- **FINANCES** : `budget` `salaire` `patrimoine` `credit` `epargne`
+- **FINANCES** : `budget` `salaire` `patrimoine` `credit` `epargne` `compte_joint` `mutuelle`
 - **TECHNOLOGIE** : `ordinateur` `tel_portable` `logiciel_prefere` `reseau_social` `habitude_num`
 - **LANGUE & CULTURE** : `langue_maternelle` `langue_parlee` `culture_origine`
 - **CARACTÈRE** : `trait` `force` `faiblesse` `peur` `qualite`
 - **HABITUDES** : `habitude` `rituel` `sommeil` `fumeur`
 - **BIEN-ÊTRE** : `moral` `stress` `bien_etre` `humeur`
 - **ORIENTATION** : `orientation_sexuelle`
+
+**Liste fermée** : un prédicat inconnu produit par le LLM est désormais **rejeté**
+(triplet ignoré, trace console `⛔ Prédicat inconnu rejeté`) plutôt que stocké brut —
+il n'existe plus de repli « prédicat libre » à la sauvegarde. `normalize_predicat()`
+mappe les variantes vers la liste ci-dessus (ex. `medecin_traitant` → `medecin`,
+`telephone` → `tel_portable`, `possession` → `equipement`,
+`etablissement_scolaire` → `ecole`, `comportement` → `trait`, `benevolat` → `engagement`).
 
 ### Prédicats protégés (`PREDICATS_PROTEGES`)
 
@@ -168,6 +175,12 @@ Les souvenirs édités manuellement depuis l'UI (bouton 🧠) sont verrouillés.
 Un souvenir verrouillé n'est **jamais écrasé** par l'extraction LLM — ni renforcé, ni corrigé.
 Stocké dans les settings DB (`memory_locks` = liste JSON de clés).
 
+Depuis l'onglet Triplets, chaque ligne dispose d'un bouton 🔒/🔓 pour verrouiller ou
+déverrouiller n'importe quel souvenir à la main (routes `POST /api/memory/{key}/lock`
+et `/api/memory/{key}/unlock`, fonctions `lock_memory()` / `unlock_memory()`).
+Les faits confirmés (ex. structure familiale) peuvent ainsi être protégés durablement
+de l'extraction.
+
 ### Alias de prénoms (`ALIASES`)
 
 Résolution automatique avant déduplication : `Meï` / `Mei` / `Meïssane` → `Maïssane`.
@@ -195,7 +208,7 @@ Seuil minimum : `poids >= 1.5` pour qu'un fait soit utilisé comme source d'inf�
 1. **Symétrie** — répare les inverses manquants sur données antérieures
 2. **Transitivité** — `parent(A,B)` + `parent(B,C)` → `grand_parent(A,C)` + `petit_enfant(C,A)`
 3. **Fratrie** — A et B partagent le même parent → `frere_ou_soeur(A,B)` (bidirectionnel)
-4. **Âge dynamique** — `date_naissance(A, YYYY…)` → calcule et met à jour `age(A, N ans)`
+4. **Âge dynamique** — `date_naissance(A, JJ mois AAAA)` → calcule et met à jour `age(A, N ans)` avec précision jour/mois (`_parse_date_naissance` / `_age_depuis_naissance`) : l'âge ne progresse qu'après l'anniversaire.
 
 Garde : ne pas inférer de fratrie si l'un est déjà parent de l'autre.
 Pseudo-entités exclues : `filles` `papa` `maman` `enfants` `innes_maissane_maya`…
@@ -300,12 +313,12 @@ Le prompt du worker (`extract_memories_from_window`) utilise ce format en intern
 
 | Champ | Valeurs |
 |---|---|
-| type | `trait` · `relation` · `activite` |
+| type | `trait` · `relation` · `evenement` |
 | sujet | prénom réel — jamais "utilisateur", "je", "moi" |
 | prédicat | NOM canonique — jamais verbe conjugué ni infinitif |
 | objet | valeur courte (3-5 mots max) |
 | contexte | fil thématique libre |
-| memoire_type | `identite` · `activite` |
+| memoire_type | `identite` (en-tête de fiche) · autre (section par catégorie) |
 | profondeur | 1 (identité stable) … 5 (anecdotique) |
 | temporal | `permanent` · `persistant` · `episodique` |
 
@@ -949,3 +962,4 @@ Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les p
 | 16/08/2026 | **La sortie technique de NIMM était perdue — et de toute façon inaccessible**. Question de Fernando pendant le diagnostic du silence : « comment je fais avec mon lecteur d'écran pour trouver les infos que tu me demandes ? ». Constat : `LANCER_NIMM.bat` démarre uvicorn avec `-WindowStyle Hidden` et **sans aucune redirection** — toute la sortie (`[HUB]`, `[ENGINE]`, `[PERF]`, traces d'erreur) partait dans une fenêtre cachée et disparaissait. Même un utilisateur voyant ne pouvait pas la lire ; au lecteur d'écran, une console défilante est de toute façon impraticable. **Le seul canal de diagnostic du projet était donc inutilisable par son utilisateur principal.** CORRIGÉ : `LANCER_NIMM.bat` redirige vers `nimm.log` (et `nimm.err.log`), avec rotation d'un cran au démarrage ; déjà couvert par `.gitignore`. Route `GET /api/journal-technique?lignes=&filtre=` (bornée à 1000 lignes, filtre insensible à la casse, message explicite si le fichier n'existe pas encore). Panneau « 📜 Journal technique » dans les Réglages, à côté du journal de fonctionnement : champ de filtre (Entrée valide), boutons Afficher et Copier, et surtout une **zone de texte** — navigable ligne à ligne, sélectionnable, copiable au braille, là où une console ne l'est pas. NB : le « Journal de fonctionnement » existant (`add_diagnostic`) reste complémentaire — il consigne les DÉCISIONS expliquées en clair (document écarté, panne de fournisseur, coût, veille, sauvegarde), pas la sortie brute. Son silence depuis le 01/08 avait été pris à tort pour un bug : il n'écrit que sur événement, et aucun ne s'était produit. Vérifié au passage, contre une crainte de ma part : `asyncio.to_thread` **propage** les ContextVar (donc le profil utilisateur) — c'est `threading.Thread` qui les perd, le bug que Laurent avait corrigé dans le préchauffage. Mon passage de `_match_documents` en fil séparé est donc sain. 75 scénarios. |
 | 16/08/2026 (2) | **Silence Anthropic, suite : le flux JETAIT la réflexion et AVALAIT ses erreurs**. Le garde-fou posé plus tôt a fait son travail (message à l'écran + trois entrées au journal : « aucun texte en phase 2 »), mais le silence persistait. Retour au parsing du flux Anthropic, et deux défauts MASQUANTS y ont été trouvés — tous deux empêchaient de diagnostiquer. (1) **Seuls les blocs de TEXTE étaient lus** : `data['delta']['text']`, rien d'autre. Or Sonnet 5 et Opus 5 ont la **réflexion adaptative toujours active** et émettent des blocs d'un autre type (`thinking`), purement et simplement jetés. Si la réflexion consomme le budget, il ne reste RIEN à afficher — exactement le défaut que Laurent avait trouvé chez DeepSeek, mais côté Anthropic et sans réglage pour le couper. La réflexion est désormais captée et, si aucun texte n'est sorti, remontée en `__raisonnement__` (que NIMM sait déjà afficher) avec une trace explicite. (2) **`except Exception: continue`** sur chaque ligne du flux : toute erreur de lecture disparaissait sans laisser de trace, ce qui rendait la cause introuvable. Les erreurs sont maintenant comptées et la première est journalisée. (3) Bug annexe : le repli après refus du `cache_control` **rappelait `_call_anthropic_stream` sans transmettre `outils_interdits`** — le silence pouvait donc revenir par ce chemin. Le test ancre les DEUX appels. MÉTHODE : après trois correctifs posés sans jamais voir la cause, le parti pris a changé — rendre le comportement OBSERVABLE plutôt que deviner une quatrième fois. C'est ce que permettent désormais le journal technique (16/08) et ces traces. 75 scénarios. |
 | 16/08/2026 (3) | **Silence Anthropic : REPLI SANS OUTILS, après trois correctifs posés à l'aveugle**. Le garde-fou et la lecture de la réflexion n'ont rien changé : toujours aucun texte en phase 2, et pas même de bloc de réflexion. Conclusion : `tool_choice: {'type':'none'}` est vraisemblablement **ignoré** par l'en-tête `anthropic-version: 2023-06-01`, donc le modèle continue de redemander un outil dans un flux qui ne sait pas les lire. CHANGEMENT DE MÉTHODE : cesser de négocier les OPTIONS de l'API et changer la QUESTION. Si la phase 2 reste muette, l'historique est **reconstruit sans aucun appel d'outil** — les messages de rôle `tool` et les `tool_calls` sont retirés, et les résultats obtenus sont **fusionnés dans le dernier message utilisateur** (« Voici le résultat de la recherche… réponds sans utiliser d'outil »). Plus aucun outil n'est alors déclaré (`tools=None`), donc le modèle n'a plus AUCUN moyen d'en redemander : il ne lui reste qu'à répondre. Ce repli ne dépend d'aucune subtilité d'API — ni `tool_choice`, ni version d'en-tête, ni fournisseur. Fusion dans le dernier message plutôt qu'ajout à la suite : deux messages `user` consécutifs sont une forme que tous les fournisseurs n'acceptent pas. Vérifié en simulation : aucun rôle `tool` ni `tool_calls` résiduel, résultats préservés, historique bien formé. Si même ce repli échoue, le message le dit — et le journal aussi. LEÇON : quatre correctifs sur ce seul défaut, dont trois posés sans jamais avoir vu la cause. Le tournant a été d'admettre que je devinais, et de préférer une solution qui ne suppose RIEN du comportement de l'API à une solution élégante qui suppose beaucoup. 75 scénarios. |
+| 25/08/2026 | **Mémoire : uniformisation des données, taxonomie fermée, verrous UI, âges précis**. Laurent a demandé une passe d'uniformisation de la vue 🧠 Mémoire. Diagnostic : la base cumulait plusieurs générations de formats — 14 valeurs `type` au lieu de 3, des prédicats hors taxonomie stockés bruts (`normalize_predicat` renvoyait l'inconnu tel quel), des fiches « personnes » factices (`[F]`, pays de la Coupe du Monde, camion de Laurent), des triplés dupliqués (`mere`/`prenom_mere`/`parent` Jeannette), des relations dans le bloc identité, des âges figés et faux (Maïssane « 18 ans » au lieu de 17 — la Règle 4 ne calculait que par année). [modules/memory.py] `normalize_predicat()` devient une LISTE FERMÉE : un prédicat inconnu est rejeté (triplet ignoré, log `⛔`) au lieu d'être stocké brut. Taxonomie étendue (`lieu_naissance`, `origine`, `lieu_etude`, `identifiant_professionnel`, `tarif_consultation`, `abonnement`, `compte_joint`, `mutuelle`, `interet`, `questionnement`, `theorie`, `frere_ou_soeur`, prédicats PoE) et nouvelles normalisations (`medecin_traitant`→`medecin`, `telephone`→`tel_portable`, `possession`→`equipement`, `etablissement_scolaire`→`ecole`, `comportement`→`trait`, `benevolat`→`engagement`). Règle 4 corrigée : âge calculé avec précision jour/mois (`_parse_date_naissance`/`_age_depuis_naissance`), l'âge ne progresse qu'après l'anniversaire. `_add()` accepte type/memoire_type (âges/anciennetés inférés en `trait`). Nouvelle fonction `unlock_memory()`. [main.py] `/api/memory/triplets` expose `locked` ; routes `POST /api/memory/{key}/lock` et `/unlock`. [frontend/app.js] bouton 🔒/🔓 sur chaque ligne mémoire (verrouiller/déverrouiller à la main) ; libellés de catégories `croyances` (🕯️) et `amities` (🤝) ajoutés. [frontend/index.html] cache-busting `20260825-memoire`. NETTOYAGE DES BASES (profils laurent, nadia, maya, mei, innes) : sujets parasites et personnalités publiques sans lien supprimés, `type` reclassé en 3 valeurs, relations sorties du bloc identité, `date_naissance`/`lieu_naissance`/`age` en tête de fiche, âges recalculés, structure familiale réécrite avec les vrais prénoms (Nadia → enfant Innès/Maïssane/Maya, Laurent conjoint Nadia) + nuance belles-filles (`beau_parent`, contexte explicite) et `origine = né sous X` restaurée après erreur de purge ; faits familiaux confirmés verrouillés 🔒 (14 dans la base de Laurent, 9 dans celle de Nadia, via `settings.memory_locks`). Sauvegardes avant nettoyage conservées dans `data/*.bak-20260825*`. |

@@ -311,13 +311,14 @@ PREDICATS_INVERSES = {
 PREDICATS_CANONIQUES = {
     # IDENTITÉ
     'prenom', 'nom', 'age', 'date_naissance', 'taille_cm', 'poids_kg',
-    'sexe', 'handicap', 'groupe_sanguin', 'nationalite',
+    'sexe', 'handicap', 'groupe_sanguin', 'nationalite', 'lieu_naissance', 'origine',
     # FAMILLE
-    'conjoint', 'enfant', 'parent', 'frere', 'soeur', 'grand_parent',
+    'conjoint', 'enfant', 'parent', 'frere', 'soeur', 'frere_ou_soeur', 'grand_parent',
     'petit_enfant', 'beau_parent', 'statut_relation',
     # TRAVAIL & ÉTUDES
     'metier', 'employeur', 'anciennete', 'anciennete_debut', 'horaire_travail', 'diplome',
     'ecole', 'competence', 'permis', 'recherche_emploi', 'etudes',
+    'lieu_etude', 'identifiant_professionnel', 'tarif_consultation',
     # SANTÉ
     'probleme_sante', 'traitement', 'allergie', 'medecin', 'operation',
     'suivi_medical', 'addiction', 'regime_alimentaire',
@@ -328,13 +329,16 @@ PREDICATS_CANONIQUES = {
     # LOISIRS
     'sport', 'lecture', 'jeu_video', 'cuisine', 'bricolage', 'jardinage',
     'musique_instrument', 'danse', 'ecriture', 'photographie', 'art', 'loisir',
-    'anciennete_pratique',
+    'anciennete_pratique', 'interet', 'personnage_jeu', 'progression_jeu',
+    'objet_jeu', 'guide_jeu', 'valeur_jeu',
     # POSSESSIONS
-    'vehicule', 'domicile', 'logement', 'equipement', 'animal',
+    'vehicule', 'domicile', 'logement', 'equipement', 'animal', 'abonnement',
     # RELATIONS SOCIALES
     'ami', 'collegue', 'voisin', 'relation_sociale', 'mentor',
     # VALEURS & CROYANCES
     'valeur', 'croyance', 'religion', 'politique', 'engagement',
+    # RÉFLEXIONS — curiosités et théories personnelles récurrentes
+    'questionnement', 'theorie',
     # OPINIONS
     'stance', 'opinion',
     # PROJETS & INTENTIONS
@@ -342,7 +346,7 @@ PREDICATS_CANONIQUES = {
     # ÉVÉNEMENTS MARQUANTS
     'evenement_vie', 'deuil', 'accident', 'demenagement', 'anecdote',
     # FINANCES
-    'budget', 'salaire', 'patrimoine', 'credit', 'epargne',
+    'budget', 'salaire', 'patrimoine', 'credit', 'epargne', 'compte_joint', 'mutuelle',
     # TECHNOLOGIE
     'ordinateur', 'tel_portable', 'logiciel_prefere', 'reseau_social', 'habitude_num',
     # LANGUE & CULTURE
@@ -409,8 +413,18 @@ PREDICAT_NORMALISATION = {
     'diagnostic': 'probleme_sante', 'pathologie': 'probleme_sante',
     'sante': 'probleme_sante', 'maladie': 'probleme_sante',
     'probleme_de_sante': 'probleme_sante',
+    'medecin_traitant': 'medecin', 'medecin_generaliste': 'medecin',
     # Taille / poids
     'taille': 'taille_cm', 'poids': 'poids_kg',
+    # Téléphone / équipement
+    'telephone': 'tel_portable', 'portable': 'tel_portable', 'smartphone': 'tel_portable', 'gsm': 'tel_portable',
+    'possession': 'equipement',
+    # École
+    'etablissement': 'ecole', 'etablissement_scolaire': 'ecole', 'college': 'ecole',
+    # Caractère / comportement
+    'comportement': 'trait',
+    # Engagement
+    'benevolat': 'engagement',
     # Loisirs
     'hobby': 'loisir', 'passion': 'loisir', 'loisir_principal': 'loisir',
     'activite_principale': 'loisir', 'pratique_sportive': 'sport',
@@ -547,9 +561,11 @@ def normalize_predicat(predicat: str) -> str:
                 print(f"[MEMORY] 🔀 Verbe reduit : '{predicat}' -> '{candidate}'")
                 return candidate
 
-    # 10. Inconnu — retour brut nettoyé (log uniquement)
-    print(f"[MEMORY] Predicat libre : '{predicat}' -> '{p}'")
-    return p
+    # 10. Inconnu — rejeté : la taxonomie est une liste fermée. Un prédicat non
+    #     reconnu polluerait l'index thématique et le rappel — mieux vaut refuser
+    #     le triplet (le log permet d'étendre la liste si besoin).
+    print(f"[MEMORY] ⛔ Prédicat inconnu rejeté : '{predicat}' -> '{p}'")
+    return None
 
 # ── Groupes de synonymes — déduplication résiduelle après normalisation ───────
 PREDICAT_SYNONYMES = {
@@ -818,6 +834,8 @@ def _save_symmetric(record: dict, existing: list):
         _purger_partenaires_concurrents(objet, sujet, existing)
 
     pred_sym = normalize_predicat(PREDICATS_INVERSES[predicat])
+    if not pred_sym:
+        return
     # Réciproque de fratrie concernant l'utilisateur → genrer selon le genre défini par la personne.
     if pred_sym == 'frere_ou_soeur' and _est_utilisateur(objet):
         pred_sym = _genrer_fratrie(pred_sym)
@@ -982,6 +1000,15 @@ def lock_memory(key: str):
     _add_lock(key)
     print(f"[MEMORY] 🔒 Verrouillé : {key}")
 
+def unlock_memory(key: str):
+    """Déverrouille un souvenir — de nouveau renforçable/corrigeable par l'extraction."""
+    from core.database import set_setting
+    locks = _get_locks()
+    if key in locks:
+        locks.discard(key)
+        set_setting('memory_locks', json.dumps(list(locks)))
+        print(f"[MEMORY] 🔓 Déverrouillé : {key}")
+
 
 def save_inline_memory(record: dict, user_msg: str = '', existing: list = None):
     """
@@ -1017,6 +1044,9 @@ def save_inline_memory(record: dict, user_msg: str = '', existing: list = None):
 
     # Normalisation du predicat vers la taxonomie canonique
     record['predicat'] = normalize_predicat(record.get('predicat', ''))
+    if not record['predicat']:
+        print(f"[MEMORY] ⛔ Triplet ignoré (prédicat non reconnu) : {record.get('sujet')} / {record.get('predicat')}")
+        return
     # Garantie registre — valeur par défaut si absent (anciens chemins, %%MEM%% legacy)
     record.setdefault('registre', 'neutre')
     duplicate = _find_duplicate(record, existing)
@@ -1379,6 +1409,48 @@ def apply_decay_on_startup(user_id: str = None) -> int:
         return supprimes
 
 
+# ── Aide au calcul d'âge dynamique (Règle 4) ──────────────────────────────
+_MOIS_FR = {
+    'janvier': 1, 'fevrier': 2, 'février': 2, 'mars': 3, 'avril': 4,
+    'mai': 5, 'juin': 6, 'juillet': 7, 'aout': 8, 'août': 8,
+    'septembre': 9, 'octobre': 10, 'novembre': 11, 'decembre': 12, 'décembre': 12,
+}
+
+def _parse_date_naissance(objet: str):
+    """Extrait (jour, mois, annee) d'une date de naissance libre.
+    Gère '24 mars 2004', '5 juillet' (sans année → ignoré), '1881' (année seule).
+    Retourne None si aucune année exploitable."""
+    if not objet:
+        return None
+    texte = objet.lower().strip()
+    m = re.search(r'(\d{1,2})\s+([a-zà-ÿ]+)\s+(\d{4})', texte)
+    if m:
+        jour = int(m.group(1))
+        mois = _MOIS_FR.get(m.group(2))
+        annee = int(m.group(3))
+        if mois and 1 <= jour <= 31 and 1900 <= annee <= 2100:
+            return (jour, mois, annee)
+    m = re.search(r'\b(\d{4})\b', texte)
+    if m:
+        return (None, None, int(m.group(1)))
+    return None
+
+def _age_depuis_naissance(objet: str):
+    """Âge actuel depuis une date de naissance libre, ou None si inexploitable.
+    Précision jour/mois : l'âge ne progresse qu'après l'anniversaire."""
+    parsed = _parse_date_naissance(objet)
+    if not parsed:
+        return None
+    jour, mois, annee = parsed
+    now = datetime.now()
+    age = now.year - annee
+    if jour and mois and (now.month, now.day) < (mois, jour):
+        age -= 1
+    if not (0 < age < 130):
+        return None
+    return age
+
+
 def run_inference_engine(user_id: str = None):
     """
     Parcourt les triplets existants et applique des règles logiques
@@ -1431,7 +1503,7 @@ def run_inference_engine(user_id: str = None):
             objs = idx.get((_normalize(sujet), predicat), [])
             return any(_normalize(o) == _normalize(objet) for o in objs)
 
-        def _add(sujet, predicat, objet, src):
+        def _add(sujet, predicat, objet, src, mtype='relation', mmemoire='inferee'):
             nonlocal added
             if not sujet or not objet:
                 return
@@ -1442,7 +1514,7 @@ def run_inference_engine(user_id: str = None):
                 return
             rec = {
                 'key':             f"inf_{uuid.uuid4().hex[:8]}",
-                'type':            'relation',
+                'type':            mtype,
                 'sujet':           sujet,
                 'predicat':        predicat,
                 'objet':           objet,
@@ -1459,7 +1531,7 @@ def run_inference_engine(user_id: str = None):
                 'repetitions':     0,
                 'poids':           1.0,
                 'embedding':       None,
-                'memoire_type':    'inferee',
+                'memoire_type':    mmemoire,
                 'last_reinforced': None,
                 'contexte':        '',
                 'registre':        'neutre',
@@ -1533,12 +1605,8 @@ def run_inference_engine(user_id: str = None):
             if not subj or len(objet) < 4:
                 continue
             try:
-                _m = re.search(r'\b(\d{4})\b', objet)
-                if not _m:
-                    continue
-                annee   = int(_m.group(1))
-                age_val = datetime.now().year - annee
-                if not (0 < age_val < 130):
+                age_val = _age_depuis_naissance(objet)
+                if age_val is None:
                     continue
                 age_str = f"{age_val} ans"
                 age_rec = next(
@@ -1549,10 +1617,12 @@ def run_inference_engine(user_id: str = None):
                 )
                 if age_rec:
                     if age_rec.get('objet', '') != age_str:
-                        save_memory({**age_rec, 'objet': age_str, 'valeur': age_str})
+                        save_memory({**age_rec, 'objet': age_str, 'valeur': age_str,
+                                     'type': 'trait', 'memoire_type': 'identite',
+                                     'categorie': 'quotidien'})
                         print(f"[INFERENCE] 📅 Âge recalculé : {subj} → {age_str}")
                 else:
-                    _add(subj, 'age', age_str, r)
+                    _add(subj, 'age', age_str, r, mtype='trait', mmemoire='identite')
             except Exception:
                 pass
 
@@ -1581,10 +1651,10 @@ def run_inference_engine(user_id: str = None):
                 )
                 if anc_rec:
                     if anc_rec.get('objet', '') != duree_str:
-                        save_memory({**anc_rec, 'objet': duree_str, 'valeur': duree_str})
+                        save_memory({**anc_rec, 'objet': duree_str, 'valeur': duree_str, 'type': 'trait'})
                         print(f"[INFERENCE] ⏱️ Ancienneté recalculée : {subj} → {duree_str}")
                 else:
-                    _add(subj, 'anciennete', duree_str, r)
+                    _add(subj, 'anciennete', duree_str, r, mtype='trait')
             except Exception:
                 pass
 
