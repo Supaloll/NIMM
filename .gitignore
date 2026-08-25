@@ -203,6 +203,7 @@ data/nimm.db-wal
 data/nimm_*.db
 data/nimm_*.db-shm
 data/nimm_*.db-wal
+data/nimm_*.db.bak-*
 data/nimm_global.json
 data/users.json
 data/.nimm_unlock_secret

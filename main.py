@@ -913,7 +913,7 @@ async def toggle_ghost_mode(thread_id: str):
 @app.get("/api/memory/triplets")
 async def memory_triplets():
     memories = get_all_memory()
-    from modules.memory import sujets_relies, _normalize
+    from modules.memory import sujets_relies, _normalize, is_locked
     relies = sujets_relies(memories)
     # Formater pour le frontend
     result = []
@@ -932,6 +932,7 @@ async def memory_triplets():
             'poids':         m.get('poids', 1.0),
             'memoire_type':  m.get('memoire_type', 'identite'),
             'relie':         _normalize(sujet) in relies,
+            'locked':        is_locked(m.get('key')),
         })
     return result
 
@@ -941,6 +942,18 @@ async def edit_memory(key: str, req: MemoryEdit):
     from modules.memory import lock_memory
     lock_memory(key)
     return {"status": "ok"}
+
+@app.post("/api/memory/{key}/lock")
+async def lock_memory_route(key: str):
+    from modules.memory import lock_memory
+    lock_memory(key)
+    return {"status": "ok", "locked": True}
+
+@app.post("/api/memory/{key}/unlock")
+async def unlock_memory_route(key: str):
+    from modules.memory import unlock_memory
+    unlock_memory(key)
+    return {"status": "ok", "locked": False}
 
 @app.post("/api/memory/audit")
 async def audit_memory_route():

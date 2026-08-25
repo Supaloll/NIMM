@@ -7649,9 +7649,11 @@ function renderMemory(memories) {
         'profession': '💼 Travail',
         'quotidien':  '🏡 Vie quotidienne',
         'sante':      '🏥 Santé',
+        'croyances':  '🕯️ Croyances',
+        'amities':    '🤝 Amitiés',
         'autre':      '📌 Divers',
     };
-    const CATEGORIE_ORDER = ['famille', 'profession', 'loisirs', 'quotidien', 'sante', 'autre'];
+    const CATEGORIE_ORDER = ['famille', 'profession', 'loisirs', 'quotidien', 'sante', 'croyances', 'amities', 'autre'];
 
     function sortByProfondeur(items) {
         return items.slice().sort((a, b) => (a.profondeur || 5) - (b.profondeur || 5));
@@ -7669,6 +7671,7 @@ function renderMemory(memories) {
         const row = document.createElement('div');
         row.className   = 'memory-row';
         row.dataset.key = m.key;
+        row.dataset.locked = m.locked ? 'true' : 'false';
         row.setAttribute('aria-label', rowLabel);
         row.innerHTML = `
             <span class="mem-prof" aria-hidden="true" title="Profondeur ${m.profondeur || 5}">${profIcon}</span>
@@ -7677,6 +7680,7 @@ function renderMemory(memories) {
             <span class="memory-predicat">${escapeHtml(m.predicat || '')}</span>
             <span class="memory-valeur">${escapeHtml(m.valeur || '')}</span>
             <div class="memory-row-actions">
+                <button aria-label="${m.locked ? 'Déverrouiller' : 'Verrouiller'} ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" title="${m.locked ? 'Déverrouiller' : 'Verrouiller'}" onclick="toggleLockMemory('${m.key}')">${m.locked ? '🔒' : '🔓'}</button>
                 <button aria-label="Modifier ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="editMemory('${m.key}', '${escapeAttr(m.valeur)}')">✏️</button>
                 <button aria-label="Supprimer ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="deleteMemory('${m.key}')">🗑️</button>
             </div>`;
@@ -7742,6 +7746,13 @@ function renderMemory(memories) {
         list.appendChild(sep);
         sujetsOrphelins.forEach(sujet => list.appendChild(buildPersonCard(sujet, parSujet[sujet])));
     }
+}
+
+async function toggleLockMemory(key) {
+    const row = document.querySelector(`.memory-row[data-key="${key}"]`);
+    const locked = row?.dataset.locked === 'true';
+    const res = await fetch(`/api/memory/${key}/${locked ? 'unlock' : 'lock'}`, { method: 'POST' });
+    if (res.ok) loadMemory();
 }
 
 async function editMemory(key, currentVal) {
