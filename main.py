@@ -4532,7 +4532,12 @@ async def clos_rappel(rappel_id: int):
 
 @app.get("/api/masks")
 async def list_masks():
-    """Retourne la liste des masques disponibles depuis modules/masks/."""
+    """Retourne la liste des masques disponibles depuis modules/masks/.
+
+    Un masque privé (champ `owner` = id de profil) n'est visible que par son
+    propriétaire — il disparaît du sélecteur pour les autres comptes."""
+    from core.database import get_current_user
+    uid = (get_current_user() or '').strip().lower()
     masks_dir = os.path.join(os.path.dirname(__file__), 'modules', 'masks')
     result = []
     try:
@@ -4544,6 +4549,9 @@ async def list_masks():
             try:
                 with open(fpath, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                owner = (data.get('owner') or '').strip().lower()
+                if owner and owner != uid:
+                    continue  # masque privé d'un autre compte
                 name  = data.get('name',  mask_id.capitalize())
                 emoji = data.get('emoji', '')
                 label = f"{name} {emoji}".strip()

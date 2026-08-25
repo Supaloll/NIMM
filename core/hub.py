@@ -498,10 +498,23 @@ def _add_session_bilan(thread_id: str, texte: str) -> None:
 _mask_cache: dict = {}
 
 def load_mask(mask_id: str) -> dict:
+    """Charge un masque depuis modules/masks/.
+
+    Un masque peut être privé via le champ `owner` (id de profil) : il n'est alors
+    servi qu'à son propriétaire — les autres profils retombent sur lia.json.
+    Le cache est indexé par (mask_id, utilisateur) pour ne jamais servir à un
+    profil le masque privé d'un autre."""
     import os
     global _mask_cache
-    if mask_id in _mask_cache:
-        return _mask_cache[mask_id]
+    uid = ''
+    try:
+        from core.database import get_current_user
+        uid = (get_current_user() or '').strip().lower()
+    except Exception:
+        uid = ''
+    cache_key = (mask_id, uid)
+    if cache_key in _mask_cache:
+        return _mask_cache[cache_key]
     mask_dir = os.path.join(os.path.dirname(__file__), '..', 'modules', 'masks')
     path = os.path.join(mask_dir, f'{mask_id}.json')
     if not os.path.exists(path):
@@ -509,14 +522,21 @@ def load_mask(mask_id: str) -> dict:
     try:
         with open(path, 'r', encoding='utf-8') as f:
             mask = json.load(f)
-            _mask_cache[mask_id] = mask
-            return mask
+        # Masque privé : réservé à son propriétaire — sinon repli sur lia.json
+        owner = (mask.get('owner') or '').strip().lower()
+        if owner and owner != uid:
+            print(f"[HUB] 🔒 Masque '{mask_id}' réservé à '{owner}' — repli lia.json")
+            path = os.path.join(mask_dir, 'lia.json')
+            with open(path, 'r', encoding='utf-8') as f:
+                mask = json.load(f)
+        _mask_cache[cache_key] = mask
+        return mask
     except (json.JSONDecodeError, OSError) as e:
         print(f"[HUB] ⚠️ Masque '{mask_id}' illisible ({e}) — fallback lia.json")
         fallback = os.path.join(mask_dir, 'lia.json')
         with open(fallback, 'r', encoding='utf-8') as f:
             mask = json.load(f)
-            _mask_cache[mask_id] = mask
+            _mask_cache[cache_key] = mask
             return mask
 
 
