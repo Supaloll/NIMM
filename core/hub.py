@@ -3373,14 +3373,28 @@ def _create_bg_task(coro) -> asyncio.Task:
 
 def _is_ghost_thread(thread_id: str) -> bool:
     """Le fil est-il en mode confidentiel (« fantôme ») ? Aucune trace dérivée
-    (mémoire, carnet de bord) n'est produite pour ces fils."""
+    (mémoire, carnet de bord) n'est produite pour ces fils.
+    Actif si le fil est dans la liste ghost_threads, OU si son masque déclare
+    `ghost: true` (masque de rôle dont les échanges ne doivent rien mémoriser)."""
     if not thread_id:
         return False
     try:
         import json as _gj
-        return thread_id in set(_gj.loads(get_setting('ghost_threads', '[]')))
+        if thread_id in set(_gj.loads(get_setting('ghost_threads', '[]'))):
+            return True
     except Exception:
-        return False
+        pass
+    # Masque du fil déclarant le mode confidentiel (champ "ghost": true)
+    try:
+        thread = get_thread(thread_id)
+        mask_id = (thread or {}).get('mask_id', '')
+        if mask_id:
+            mask = load_mask(mask_id)
+            if mask.get('ghost'):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _add_msg(thread_id: str, role: str, content: str) -> None:
@@ -3711,13 +3725,8 @@ async def _worker_process_user(user_id: str):
         except Exception as e:
             print(f"[WORKER] ⚠️ Settings introuvables fil {thread_id[:8]} [{user_id}] : {e}")
             continue
-        try:
-            import json as _gj
-            _ghost_raw = get_setting('ghost_threads', '[]')
-            _ghost_set = set(_gj.loads(_ghost_raw))
-        except Exception:
-            _ghost_set = set()
-        if thread_id in _ghost_set:
+        # Mode confidentiel : liste ghost_threads OU masque du fil déclarant ghost: true
+        if _is_ghost_thread(thread_id):
             mark_messages_processed(unprocessed_ids)
             continue
         count = await extract_memories_from_window(messages, settings)

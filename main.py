@@ -880,17 +880,32 @@ async def set_thread_mode(thread_id: str, mode: str):
 
 @app.get("/api/threads/{thread_id}/ghost")
 async def get_ghost_mode(thread_id: str):
-    import json as _j
-    raw = get_setting('ghost_threads', '[]')
+    """État du mode confidentiel — liste ghost_threads OU masque déclarant ghost: true."""
+    from core.hub import _is_ghost_thread
     try:
-        ghosts = _j.loads(raw)
+        return {"ghost": _is_ghost_thread(thread_id)}
     except Exception:
-        ghosts = []
-    return {"ghost": thread_id in ghosts}
+        import json as _j
+        raw = get_setting('ghost_threads', '[]')
+        try:
+            ghosts = _j.loads(raw)
+        except Exception:
+            ghosts = []
+        return {"ghost": thread_id in ghosts}
 
 @app.post("/api/threads/{thread_id}/ghost")
 async def toggle_ghost_mode(thread_id: str):
     import json as _j
+    # Masque imposant le mode confidentiel (ghost: true) → impossible à désactiver
+    try:
+        from core.database import get_thread
+        from core.hub import load_mask
+        _row = get_thread(thread_id)
+        _mask_id = (_row or {}).get('mask_id', '')
+        if _mask_id and load_mask(_mask_id).get('ghost'):
+            return {"ghost": True}
+    except Exception:
+        pass
     raw = get_setting('ghost_threads', '[]')
     try:
         ghosts = set(_j.loads(raw))
