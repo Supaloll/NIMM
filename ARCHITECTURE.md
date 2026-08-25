@@ -325,8 +325,8 @@ Le prompt du worker (`extract_memories_from_window`) utilise ce format en intern
 ### Modes de personnalité
 
 **Masque** (`personality_mode='mask'`) : fichier JSON dans `modules/masks/`.
-- Champs : `name` `emoji` `id` `system_prompt` — et éventuellement `owner` (id de profil) pour un **masque privé** : il n'apparaît alors que pour ce compte (`list_masks` le filtre) et `load_mask` le refuse aux autres profils (repli sur `lia.json`, cache indexé par utilisateur).
-- Champ `ghost` (booléen) : **mode confidentiel automatique** — tout fil utilisant ce masque est traité en mode fantôme (aucun message persisté, aucune note de carnet, aucune extraction mémoire ; le bouton 👻 l'affiche actif et ne peut pas le désactiver).
+- Champs : `name` `emoji` `id` `system_prompt` — et éventuellement `owner` (id de profil) pour un **masque privé** : il n'apparaît alors que pour ce compte (`list_masks` le filtre) et `load_mask` le refuse aux autres profils (repli sur `lia.json`, cache indexé par utilisateur). Champ optionnel `voice` : voix TTS par défaut de ce masque (ex. `edge:fr-CH-ArianeNeural`) — appliquée par le frontend tant que l'utilisateur n'a pas choisi de voix explicitement dans le sélecteur TTS (`_resolveVoice()` dans `app.js`).
+- Champ `ghost` (booléen) : **mode confidentiel automatique** — tout fil utilisant ce masque est traité en mode fantôme (aucun message persisté, aucune note de carnet, aucune extraction mémoire ; le bouton 👻 l'affiche actif et ne peut pas le désactiver). L'historique de conversation est conservé **en mémoire vive** pendant la session serveur (`_get_llm_history` dans `core/hub.py`) : l'assistant garde le fil de l'échange en cours sans qu'aucune trace ne soit écrite sur disque — le cache disparaît au redémarrage ou à la suppression du fil.
 **Potards** (`personality_mode='potards'`) : prompt généré depuis curseurs.
 - Curseurs normaux (0/1/2) : `serieux` `formel` `expressif` `direct` `metaphorique` `bienveillant` `collaboratif` `emojis`
 - Curseurs WTF (0=off, 1=modéré, 2=à fond) : `wtf_cafe` `wtf_jargon` `wtf_ado` `wtf_theatral` `wtf_metaphores` `wtf_tension`
