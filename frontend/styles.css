@@ -697,6 +697,7 @@ body {
     display: flex;
     flex-direction: column;
     max-width: 72%;
+    min-width: 0;
     animation: fadeIn 0.15s ease;
 }
 
@@ -740,6 +741,7 @@ body {
     font-size: 0.93rem;
     line-height: 1.5;
     word-break: break-word;
+    min-width: 0;
     position: relative;
 }
 
@@ -2615,6 +2617,7 @@ body {
     overflow-x: auto;
     margin: 0.6em 0;
     max-width: 100%;
+    min-width: 0;
     box-sizing: border-box;
     white-space: pre;
     word-break: normal;
