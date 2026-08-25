@@ -2576,6 +2576,37 @@ function _renderBubble(bubble, rawText) {
 
     bubble.innerHTML = html;
     _attachQuizListeners(bubble);
+    _addCodeCopyButtons(bubble);
+}
+
+function _addCodeCopyButtons(container) {
+    // Bouton « copier » sur chaque bloc de code rendu (pre) — le code est capturé
+    // AVANT d'insérer le bouton, pour ne pas copier son propre texte.
+    container.querySelectorAll('pre').forEach(pre => {
+        if (pre.dataset.codeCopy) return;
+        pre.dataset.codeCopy = '1';
+        const code = (pre.textContent || '').replace(/\s+$/, '');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'code-copy-btn';
+        btn.textContent = '📋';
+        btn.setAttribute('aria-label', 'Copier le code');
+        btn.addEventListener('click', () => {
+            const done = () => {
+                btn.textContent = '✓';
+                btn.setAttribute('aria-label', 'Code copié');
+                setTimeout(() => {
+                    btn.textContent = '📋';
+                    btn.setAttribute('aria-label', 'Copier le code');
+                }, 1600);
+            };
+            const copie = (navigator.clipboard && navigator.clipboard.writeText)
+                ? navigator.clipboard.writeText(code).catch(() => _copyFallback(code))
+                : _copyFallback(code);
+            copie.then(done).catch(() => {});
+        });
+        pre.appendChild(btn);
+    });
 }
 
 function _attachQuizListeners(bubble) {
@@ -3617,6 +3648,7 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
                     span.style.removeProperty('--gx');
                     span.style.removeProperty('--gy');
                     span.innerHTML = finalHtml;
+                    _addCodeCopyButtons(span);
                     span.style.opacity = '1';
                     span.style.transition = 'opacity 0.15s ease';
                 }

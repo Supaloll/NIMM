@@ -2622,6 +2622,32 @@ body {
     white-space: pre;
     word-break: normal;
     overflow-wrap: normal;
+    position: relative;
+}
+
+/* Bouton copier sur les blocs de code */
+.code-copy-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    line-height: 1;
+    padding: 3px 7px;
+    cursor: pointer;
+    opacity: 0.85;
+    transition: opacity 0.2s ease, color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+.code-copy-btn:hover,
+.code-copy-btn:focus-visible {
+    opacity: 1;
+    color: var(--text);
+    border-color: var(--accent);
+    background: var(--bg-hover);
 }
 
 /* Forcer la bulle assistant a ne jamais depasser son conteneur */
