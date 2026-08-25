@@ -2499,8 +2499,8 @@ async def _vibe_stream(thread_id: str, user_message: str, settings: dict, images
     _mkey = (settings.get('api_keys', {}).get('mistral') or '').strip()
     _model = (settings.get('model') or '').strip() or 'mistral-medium-latest'
 
-    # Historique local → inputs (le fil complet est renvoyé à chaque tour)
-    _history = get_messages(thread_id, limit=40)
+    # Historique local -> inputs (le fil complet est renvoye a chaque tour)
+    _history = _get_llm_history(thread_id, limit=40)
     _inputs = [
         {'role': m['role'], 'content': m['content']}
         for m in _sanitize_history([{'role': m['role'], 'content': m['content']} for m in _history])
@@ -3397,10 +3397,59 @@ def _is_ghost_thread(thread_id: str) -> bool:
     return False
 
 
+# Historique de SESSION (memoire vive uniquement) pour les fils fantomes.
+# Un fil fantome ne persiste RIEN en base (confidentialite) mais doit quand meme
+# garder le fil de la conversation en cours : sans cela, l'assistant rejoue la
+# premiere rencontre a chaque message. Ce cache disparait au redemarrage du
+# serveur — aucune trace durable.
+_GHOST_SESSION_HISTORY: dict = {}
+_GHOST_SESSION_LIMIT = 200
+
+
+def _ghost_session_push(thread_id: str, role: str, content: str) -> None:
+    """Ajoute un message a l'historique de session d'un fil fantome (RAM)."""
+    try:
+        if content is None:
+            return
+        hist = _GHOST_SESSION_HISTORY.setdefault(thread_id, [])
+        hist.append({'role': role, 'content': content})
+        if len(hist) > _GHOST_SESSION_LIMIT:
+            del hist[:len(hist) - _GHOST_SESSION_LIMIT]
+    except Exception as e:
+        print(f"[HUB] Erreur cache session fantome : {e}")
+
+
+def _ghost_session_messages(thread_id: str, limit: int = 60) -> list:
+    """Derniers messages de session d'un fil fantome (memoire vive)."""
+    try:
+        hist = _GHOST_SESSION_HISTORY.get(thread_id, [])
+        if limit and limit > 0 and len(hist) > limit:
+            return list(hist[-limit:])
+        return list(hist)
+    except Exception:
+        return []
+
+
+def _clear_ghost_session(thread_id: str) -> None:
+    """Purge l'historique de session en memoire d'un fil (suppression de fil)."""
+    _GHOST_SESSION_HISTORY.pop(thread_id, None)
+
+
+def _get_llm_history(thread_id: str, limit: int = 60) -> list:
+    """Historique pour l'appel LLM : base SQLite pour les fils normaux,
+    cache de session en memoire vive pour les fils fantomes."""
+    if _is_ghost_thread(thread_id):
+        return _ghost_session_messages(thread_id, limit)
+    return get_messages(thread_id, limit=limit)
+
+
 def _add_msg(thread_id: str, role: str, content: str) -> None:
     """Sauvegarde le message SAUF si le fil est en mode fant\xc3\xb4me (confidentiel).
-    En mode fant\xc3\xb4me, aucune trace n'est persist\xc3\xa9e en base."""
+    En mode fant\xc3\xb4me, aucune trace n'est persist\xc3\xa9e en base, mais l'echange
+    est conserve en MEMOIRE VIVE (cache de session) pour que l'assistant garde le
+    fil de la conversation en cours sans rien ecrire sur disque."""
     if _is_ghost_thread(thread_id):
+        _ghost_session_push(thread_id, role, content)
         return
     add_message(thread_id, role, content)
 
@@ -4036,7 +4085,7 @@ async def process_message(
     # 7. Construire le system prompt
     biblio_context = _match_bibliotheque(user_message)
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
-    recent_focus = get_messages(thread_id, limit=5)
+    recent_focus = _get_llm_history(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
     # Un document ATTACHÉ au fil l'emporte sur la base de connaissances : quand
     # l'utilisateur a désigné son document, deviner en plus n'apporte que du bruit.
@@ -4054,7 +4103,7 @@ async def process_message(
                                     doc_fil=_doc_fil, doc_fil_titre=_doc_fil_titre)
 
     # 7. Historique recent (60 derniers messages)
-    history = get_messages(thread_id, limit=60)
+    history = _get_llm_history(thread_id, limit=60)
     messages = _sanitize_history([{'role': m['role'], 'content': m['content']} for m in history])
 
     # 8. Recherche web — pré-enrichissement uniquement si bouton web activé explicitement.
@@ -4414,7 +4463,7 @@ async def process_message_stream(
     # Mood — signal entrant en priorité, sinon dominant du tour précédent
     last_dominant  = _detect_user_mood(user_message) or get_setting(f'dominant_{thread_id}', '')
     force_mem = any(p in user_message.lower() for p in _FORCE_MEM_PATTERNS)
-    recent_focus = get_messages(thread_id, limit=5)
+    recent_focus = _get_llm_history(thread_id, limit=5)
     session_bilans = _get_session_bilans(thread_id)
     _perf("carnet+mood+bilans")
     # Un document ATTACHÉ au fil l'emporte sur la base de connaissances : quand
@@ -4435,7 +4484,7 @@ async def process_message_stream(
     _perf("system_prompt")
 
     # 4. Historique
-    history  = get_messages(thread_id, limit=60)
+    history  = _get_llm_history(thread_id, limit=60)
     messages = _sanitize_history([{'role': m['role'], 'content': m['content']} for m in history])
     _perf("historique")
 

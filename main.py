@@ -37,7 +37,7 @@ from core.database import (
     list_presets, save_preset, delete_preset, apply_preset,
     list_prompts, save_prompt, delete_prompt
 )
-from core.hub import process_message, memory_worker
+from core.hub import process_message, memory_worker, _clear_ghost_session
 
 
 # ══════════════════════════════════════════
@@ -723,6 +723,7 @@ async def remove_thread(thread_id: str):
     delete_thread(thread_id)
     set_setting(f'session_bilan_{thread_id}', '')
     set_setting('ghost_threads', _remove_from_ghost_list(thread_id))
+    _clear_ghost_session(thread_id)
     return {"status": "ok"}
 
 def _remove_from_ghost_list(thread_id: str) -> str:
@@ -4570,7 +4571,7 @@ async def list_masks():
                 name  = data.get('name',  mask_id.capitalize())
                 emoji = data.get('emoji', '')
                 label = f"{name} {emoji}".strip()
-                result.append({'id': mask_id, 'label': label})
+                result.append({'id': mask_id, 'label': label, 'voice': data.get('voice', '')})
             except Exception:
                 result.append({'id': mask_id, 'label': mask_id.capitalize()})
     except Exception:

@@ -257,11 +257,26 @@ function _splitSentences(text) {
     return parts.filter(s => s.length > 1);
 }
 
+function _resolveVoice() {
+    // Choix explicite de l'utilisateur -> comportement actuel (voix globale)
+    const custom = localStorage.getItem('nimm-voice');
+    if (custom) return custom;
+    // Sinon : voix par defaut du masque du fil courant si le masque en declare une
+    const tid = currentTabId || currentThreadId;
+    if (tid) {
+        const thread = threads.find(t => t.thread_id === tid);
+        if (thread && thread.mask_id && thread.personality_mode === 'mask' && _maskVoice[thread.mask_id]) {
+            return _maskVoice[thread.mask_id];
+        }
+    }
+    return 'ff_siwis';
+}
+
 async function _fetchAudio(sentence) {
     const r = await fetch('/api/tts/speak', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ text: sentence, voice: _selectedVoice })
+        body:    JSON.stringify({ text: sentence, voice: _resolveVoice() })
     });
     if (!r.ok) return null;
     const blob = await r.blob();
@@ -539,12 +554,16 @@ async function _ensureUnlocked(userId) {
     });
 }
 
-// Cache masques : id → label (ex: "Glaude 🐺")
+// Cache masques : id → label (ex: "Glaude 🐺") + voix par defaut (par masque)
 let _maskCache = {};
+let _maskVoice = {};
 (async function _loadMaskCache() {
     try {
         const masks = await fetch('/api/masks').then(r => r.json());
-        masks.forEach(m => { _maskCache[m.id] = m.label; });
+        masks.forEach(m => {
+            _maskCache[m.id] = m.label;
+            if (m.voice) _maskVoice[m.id] = m.voice;
+        });
     } catch(e) {}
 })();
 let _ttsQueue       = [];
