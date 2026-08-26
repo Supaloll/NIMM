@@ -497,11 +497,45 @@ def _add_session_bilan(thread_id: str, texte: str) -> None:
 
 _mask_cache: dict = {}
 
+def _masque_de_repli(mask_dir: str, sauf: str = '') -> dict:
+    """Le masque servi quand celui demandé est absent, illisible ou privé.
+
+    POURQUOI CETTE FONCTION EXISTE
+    Les trois replis de `load_mask` visaient `lia.json` — un masque PERSONNEL,
+    exclu du dépôt. Sur toute machine où il n'a pas été créé (un clone neuf,
+    la machine de Laurent), les trois menaient à un fichier absent. Le pire
+    des trois était celui du `except` : il ouvrait le fichier manquant HORS
+    de tout rattrapage, et NIMM ne répondait alors plus du tout.
+
+    On prend donc le premier masque réellement présent, et à défaut un masque
+    minimal écrit en dur : NIMM doit pouvoir parler même quand tous les
+    fichiers de caractère sont abîmés.
+    """
+    import glob as _glob
+    try:
+        for chemin in sorted(_glob.glob(os.path.join(mask_dir, '*.json'))):
+            if sauf and os.path.basename(chemin) == sauf:
+                continue
+            try:
+                with open(chemin, 'r', encoding='utf-8') as f:
+                    m = json.load(f)
+                # Ne pas se replier sur un masque privé : ce serait remplacer
+                # une gêne par une fuite.
+                if not (m.get('owner') or '').strip():
+                    return m
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return {'id': 'secours', 'nom': 'NIMM', 'name': 'NIMM', 'emoji': '\U0001f916',
+            'system_prompt': 'Tu es NIMM. Tu r\u00e9ponds simplement et honn\u00eatement.'}
+
+
 def load_mask(mask_id: str) -> dict:
     """Charge un masque depuis modules/masks/.
 
     Un masque peut être privé via le champ `owner` (id de profil) : il n'est alors
-    servi qu'à son propriétaire — les autres profils retombent sur lia.json.
+    servi qu'à son propriétaire — les autres profils reçoivent le masque de repli.
     Le cache est indexé par (mask_id, utilisateur) pour ne jamais servir à un
     profil le masque privé d'un autre."""
     import os
@@ -518,26 +552,24 @@ def load_mask(mask_id: str) -> dict:
     mask_dir = os.path.join(os.path.dirname(__file__), '..', 'modules', 'masks')
     path = os.path.join(mask_dir, f'{mask_id}.json')
     if not os.path.exists(path):
-        path = os.path.join(mask_dir, 'lia.json')
+        mask = _masque_de_repli(mask_dir)
+        _mask_cache[cache_key] = mask
+        return mask
     try:
         with open(path, 'r', encoding='utf-8') as f:
             mask = json.load(f)
-        # Masque privé : réservé à son propriétaire — sinon repli sur lia.json
+        # Masque privé : réservé à son propriétaire.
         owner = (mask.get('owner') or '').strip().lower()
         if owner and owner != uid:
-            print(f"[HUB] 🔒 Masque '{mask_id}' réservé à '{owner}' — repli lia.json")
-            path = os.path.join(mask_dir, 'lia.json')
-            with open(path, 'r', encoding='utf-8') as f:
-                mask = json.load(f)
+            print(f"[HUB] \U0001f512 Masque '{mask_id}' r\u00e9serv\u00e9 \u00e0 '{owner}' \u2014 repli")
+            mask = _masque_de_repli(mask_dir, sauf=f'{mask_id}.json')
         _mask_cache[cache_key] = mask
         return mask
     except (json.JSONDecodeError, OSError) as e:
-        print(f"[HUB] ⚠️ Masque '{mask_id}' illisible ({e}) — fallback lia.json")
-        fallback = os.path.join(mask_dir, 'lia.json')
-        with open(fallback, 'r', encoding='utf-8') as f:
-            mask = json.load(f)
-            _mask_cache[cache_key] = mask
-            return mask
+        print(f"[HUB] \u26a0\ufe0f Masque '{mask_id}' illisible ({e}) \u2014 repli")
+        mask = _masque_de_repli(mask_dir, sauf=f'{mask_id}.json')
+        _mask_cache[cache_key] = mask
+        return mask
 
 
 # ══════════════════════════════════════════

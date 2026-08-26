@@ -3026,25 +3026,43 @@ def test_contrat_interface_serveur():
     assert len(routes) > 300, 'garde-fou : %d routes relevées, c’est trop peu' % len(routes)
     assert any("'" in l for l in src.split('@app.')[1:3]) or True
 
-    def _rx(chemin):
-        bouts = ['[^/]+' if s.startswith('{') else re.escape(s)
-                 for s in chemin.strip('/').split('/')]
-        return re.compile('^/' + '/'.join(bouts) + '/?$')
-    motifs = [_rx(c) for _, c, _ in routes]
+    # Comparaison SEGMENT PAR SEGMENT plutôt que par expression régulière.
+    # Pourquoi : une adresse peut contenir une expression complète, y compris
+    # un choix entre deux mots — `/api/memory/${key}/${verrou ? 'unlock' : 'lock'}`.
+    # L'ancienne version coupait l'adresse au premier espace et signalait une
+    # route inexistante alors que les deux existent. Un segment calculé peut
+    # valoir n'importe quoi à l'exécution : on le traite donc comme un joker,
+    # exactement comme un {paramètre} côté serveur.
+    def _segs_route(c):
+        return [None if s.startswith('{') else s for s in c.strip('/').split('/')]
+
+    def _segs_appel(u):
+        u = u.split('?')[0].strip('/')
+        return [None if ('${' in s or '+' in s) else s for s in u.split('/')]
+
+    def _compatible(appel, route):
+        if len(appel) != len(route):
+            # Une adresse finissant par un segment calculé peut aussi désigner
+            # la route sans ce segment (`/api/x/${''}` → `/api/x`).
+            if len(appel) - 1 == len(route) and appel and appel[-1] is None:
+                appel = appel[:-1]
+            elif len(appel) + 1 == len(route) and route and route[-1] is None:
+                route = route[:-1]
+            else:
+                return False
+        return all(a is None or r is None or a == r for a, r in zip(appel, route))
+
+    segs_routes = [_segs_route(c) for _, c, _ in routes]
 
     # ── SENS 1 : l'interface appelle-t-elle des routes inexistantes ? ──
-    def _formes(u):
-        u = u.split('?')[0]
-        u = re.sub(r'\$\{[^}]*\}', 'zzz', u)          # `${variable}`
-        u = re.sub(r"['\"]\s*\+.*$", 'zzz', u)          # '...' + variable
-        u = u.rstrip('/')
-        yield u
-        if not u.endswith('zzz'):
-            yield u + '/zzz'
-    appels = {m.group(1) for m in re.finditer(r"""['\"`](/api/[^'\"`\s]*)""", front)}
+    # Les gabarits entre accents graves peuvent contenir des espaces et des
+    # apostrophes : ils se relisent jusqu'à leur accent fermant, pas jusqu'au
+    # premier blanc.
+    appels = {m.group(1) for m in re.finditer(r"""['\"](/api/[^'\"\s]*)""", front)}
+    appels |= {m.group(1) for m in re.finditer(r'`(/api/[^`]*)`', front)}
     appels.discard('/api/')                             # fragment, pas un appel
     orphelins = [u for u in sorted(appels)
-                 if not any(rx.match(f) for f in _formes(u) for rx in motifs)]
+                 if not any(_compatible(_segs_appel(u), r) for r in segs_routes)]
     assert not orphelins, ("l'interface appelle des routes qui n'existent pas : "
                            + ', '.join(orphelins))
 
@@ -3257,6 +3275,375 @@ def test_video_veo():
     ok("vidéo : règles de Google appliquées avant l'attente, rapatriement immédiat, suivi qui survit au rechargement")
 
 
+
+def test_fantome_a_la_creation():
+    """Le mode fantôme se règle AVANT le premier mot, plus après coup.
+
+    Constat de Fernando après usage : le bouton de la barre du haut ne pouvait
+    être actionné qu'une fois le fil ouvert — donc, en pratique, après que les
+    premiers échanges avaient déjà été écrits. La promesse « aucune trace » ne
+    tenait pas. Le réglage descend dans la création du fil.
+
+    Ce test vérifie les quatre points où cela pouvait casser, et un cinquième
+    qui n'est pas une mécanique mais une décision d'interface.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) Le serveur accepte la demande à la création, et l'honore.
+    assert 'ghost:            Optional[bool] = False' in main, \
+        'ThreadCreate doit accepter ghost'
+    assert 'if req.ghost:' in main and '_add_to_ghost_list(thread_id)' in main, \
+        'la création doit inscrire le fil dans la liste fantôme'
+
+    # (2) L'ajout ne doit ni perdre les autres fils, ni créer de doublon.
+    #     Vérifié sur une SOURCE SIMULÉE, jamais sur les fichiers du projet.
+    espace = {'json': json, 'get_setting': lambda k, d='': '["a", "b"]'}
+    corps = main[main.index('def _add_to_ghost_list'):]
+    corps = corps[:corps.index(chr(10) + 'def ', 10)]
+    exec(compile(corps, 'simule', 'exec'), espace)
+    ajoute = espace['_add_to_ghost_list']
+    assert json.loads(ajoute('c')) == ['a', 'b', 'c'], 'les autres fils sont perdus'
+    assert json.loads(ajoute('a')) == ['a', 'b'], 'doublon créé'
+    espace['get_setting'] = lambda k, d='': 'ceci nest pas du json'
+    assert json.loads(ajoute('z')) == ['z'], 'une liste illisible doit être reconstruite'
+
+    # (3) L'interface transmet le choix, et la case repart décochée.
+    assert 'ghost = false' in js, 'createThread doit accepter le mode fantôme'
+    assert "body.ghost            = true" in js
+    assert "result.ghost" in js, "l'appelant doit transmettre la case"
+    assert "_ghostBox0.checked = false" in js, \
+        'la case doit repartir décochée : ne rien conserver reste un choix explicite'
+
+    # (4) Le bouton de la barre a bien disparu, partout.
+    assert 'ghost-toggle' not in js and 'ghost-toggle' not in html, \
+        'le bouton fantôme subsiste dans la barre'
+    assert "getElementById('live-toggle')" in js, 'Alt+F doit désigner le mode Live'
+
+    # (5) DÉCISION D'INTERFACE : la case n'est PAS dans « Options avancées ».
+    #     Une décision de confidentialité ne se cache pas derrière un repli —
+    #     surtout au lecteur d'écran, qui doit alors déplier pour la trouver.
+    avant = html.index('id="new-thread-ghost"')
+    replis = [m.start() for m in re.finditer(r'<details', html) if m.start() < avant]
+    fins = [m.start() for m in re.finditer(r'</details>', html) if m.start() < avant]
+    assert len(replis) == len(fins), \
+        'la case fantôme est enfermée dans un bloc « Options avancées »'
+    assert 'aria-describedby="new-thread-ghost-aide"' in html, \
+        'la case doit porter son explication'
+
+    # (6) Un fil déjà ouvert reste basculable, et le texte le dit honnêtement.
+    assert '_ghostBoxP.checked !== _ghostAvant' in js, \
+        'la route est une bascule : ne l’appeler que si l’état a changé'
+    assert 'd\\u00e9j\\u00e0 \\u00e9t\\u00e9 enregistr\\u00e9 avant reste en place' in js, \
+        'il faut dire qu’activer après coup n’efface pas le passé'
+    ok("mode fantôme : réglé à la création, plus de bouton dans la barre")
+
+
+def test_live_configuration():
+    """Le premier message d'une session Live — celui qu'on ne peut pas corriger.
+
+    La configuration d'une session Live n'est pas modifiable une fois la
+    connexion ouverte. Une faute ici ne coûte pas un message : elle coûte la
+    session entière. D'où un test sur la fonction PURE qui la construit,
+    plutôt qu'une découverte au micro.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from modules import live as L
+
+    s = L.construire_setup(voix='Kore', consigne='sois bref', langue='fr-FR')['setup']
+
+    # Le modèle porte son préfixe : sans « models/ », Google refuse.
+    assert s['model'].startswith('models/'), 'préfixe models/ manquant'
+    assert s['model'] == 'models/' + L.MODELE_DEFAUT
+
+    # LES DEUX transcriptions, toujours. C'est ce qui rend la conversation
+    # lisible au braille ; sans elles le mode Live serait inutilisable.
+    assert s['inputAudioTranscription'] == {}, 'transcription de MA voix non demandée'
+    assert s['outputAudioTranscription'] == {}, 'transcription de NIMM non demandée'
+
+    # L'interruption est écrite, pas seulement supposée par défaut.
+    assert s['realtimeInputConfig']['activityHandling'] == 'START_OF_ACTIVITY_INTERRUPTS'
+    assert s['realtimeInputConfig']['automaticActivityDetection']['disabled'] is False
+    muet = L.construire_setup(interruption=False)['setup']
+    assert muet['realtimeInputConfig']['activityHandling'] == 'NO_INTERRUPTION'
+
+    # Audio en sortie, voix et langue au bon endroit.
+    g = s['generationConfig']
+    assert g['responseModalities'] == ['AUDIO']
+    assert g['speechConfig']['voiceConfig']['prebuiltVoiceConfig']['voiceName'] == 'Kore'
+    assert g['speechConfig']['languageCode'] == 'fr-FR'
+
+    # Une voix inconnue ne doit PAS tuer la session : on retombe sur la voix
+    # par défaut plutôt que d'échouer à la connexion.
+    assert L.voix_valide('Machin') == L.VOIX_DEFAUT
+    assert L.voix_valide('kore') == 'Kore', 'la casse ne doit pas compter'
+
+    # La consigne est celle d'une conversation PARLÉE, pas d'un chat écrit.
+    c = L.consigne_vocale(user_name='Fernando', memoire='- il aime le braille',
+                          masque='Tu es taquin.')
+    for exigence in ('phrases courtes', 'Aucune mise en forme', 'tu t\'arrêtes'):
+        assert exigence in c, 'consigne vocale incomplète : %s' % exigence
+    assert 'Fernando' in c and 'braille' in c and 'taquin' in c
+    # Page blanche : aucune fuite de contexte.
+    vide = L.consigne_vocale(user_name='Fernando', memoire='- secret', se_souvient=False)
+    assert 'Fernando' not in vide and 'secret' not in vide, \
+        'la page blanche laisse fuir du contexte'
+
+    # Les identifiants de modèle ne se déduisent pas de la prose : celui-ci
+    # vient du tutoriel officiel. La leçon du « Veo 3.1 Fast » inventé.
+    assert 'live' in L.MODELE_DEFAUT, 'le modèle Live doit être un modèle Live'
+    ok("session Live : configuration complète, transcriptions et interruption écrites")
+
+
+def test_live_interprete_le_flux():
+    """Traduire Google en événements plats — et ne jamais rester muet.
+
+    Le format de Google est imbriqué et son ordre n'est PAS garanti : la
+    documentation le dit explicitement pour les transcriptions. Un seul
+    message peut porter à la fois une interruption, une transcription et du
+    son. L'interface ne doit pas avoir à le savoir.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from modules import live as L
+
+    evts = L.interpreter({'serverContent': {
+        'interrupted': True,
+        'inputTranscription': {'text': 'attends'},
+        'outputTranscription': {'text': 'je disais'},
+        'modelTurn': {'parts': [{'inlineData': {'data': 'QUFB'}}]},
+        'turnComplete': True,
+    }})
+    types = [e['type'] for e in evts]
+
+    # L'INTERRUPTION D'ABORD : l'interface doit vider sa file de lecture avant
+    # tout le reste, sinon on entend la fin d'une phrase déjà annulée.
+    assert types[0] == 'interrompu', 'l’interruption doit passer en premier : %s' % types
+    assert 'audio' in types and types.count('transcription') == 2
+    assert types[-1] == 'tour_fini'
+    qui = [e['qui'] for e in evts if e['type'] == 'transcription']
+    assert qui == ['moi', 'nimm'], 'les deux locuteurs doivent être distingués'
+
+    # Un message illisible produit une ERREUR, jamais un silence. C'est la
+    # leçon de la réponse muette : ce qui n'est pas dit coûte trois séances.
+    assert L.interpreter('{ceci nest pas du json')[0]['type'] == 'erreur'
+
+    # Aucun outil n'est déclaré : si Google en demande un, on le signale.
+    assert L.interpreter({'toolCall': {'functionCalls': []}})[0]['type'] == 'erreur'
+
+    # Un message vide ne doit pas lever, ni inventer d'événement.
+    assert L.interpreter({}) == [] and L.interpreter(None) == []
+    assert L.interpreter({'setupComplete': {}})[0]['type'] == 'prete'
+
+    # Sans clé Gemini, le moteur natif est FERMÉ, et le repli proposé.
+    o = L.options({})
+    natif = [m for m in o['moteurs'] if m['nom'] == 'gemini'][0]
+    assert natif['ouvert'] is False and o['moteur_defaut'] == 'chaine'
+    assert L.options({'gemini': 'k'})['moteur_conseille'] == 'gemini'
+    ok("flux Live : interruption prioritaire, aucun silence, repli sans clé")
+
+
+def test_live_accessible():
+    """Une conversation vocale doit rester lisible SANS voix.
+
+    Point contre-intuitif, et c'est le cœur du sujet : la transcription ne
+    doit PAS s'annoncer toute seule. Un aria-live la ferait lire par le
+    lecteur d'écran pendant que NIMM parle — deux voix simultanées, et plus
+    rien de compréhensible. Elle vit donc dans un champ de texte qu'on
+    parcourt, relit et copie quand on veut, au braille, en silence.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    # (1) La transcription est un CHAMP DE TEXTE : parcourable et copiable.
+    bloc = html[html.index('id="live-transcript"'):]
+    bloc = bloc[:bloc.index('</textarea>') + 11]
+    assert '<textarea' in html[html.index('id="live-transcript"') - 200:], \
+        'la transcription doit être un textarea, pour être copiable'
+    assert 'readonly' in bloc, 'la transcription ne doit pas être éditable'
+    assert 'aria-live' not in bloc, \
+        'un aria-live ici couvrirait la voix de NIMM : interdit'
+
+    # (2) SEUL l'état s'annonce : c'est court, et ça se glisse entre deux phrases.
+    etat = html[html.index('id="live-etat"'):]
+    etat = etat[:etat.index('</p>')]
+    assert 'aria-live="polite"' in etat and 'role="status"' in etat, \
+        'l’état doit être annoncé : c’est la seule chose qu’on ne peut pas voir'
+
+    # (3) Chaque commande porte un nom accessible et non ambigu.
+    for ident in ('live-transcript', 'live-ecrire', 'live-moteur', 'live-voix'):
+        assert ('for="%s"' % ident) in html or ('aria-label' in html[html.index('id="%s"' % ident):][:400]), \
+            'commande sans étiquette : %s' % ident
+    assert 'aria-describedby="live-moteur-aide"' in html
+    assert 'aria-describedby="live-transcript-aide"' in html
+
+    # (4) Les deux modales sont de vraies boîtes de dialogue.
+    for ident in ('live-modal', 'live-panel'):
+        seg = html[html.index('id="%s"' % ident):][:600]
+        assert 'role="dialog"' in seg and 'aria-modal="true"' in seg, \
+            '%s n’est pas une boîte de dialogue' % ident
+        assert 'aria-labelledby' in seg, '%s sans titre annoncé' % ident
+
+    # (5) On doit pouvoir sortir au clavier, sans chercher un bouton.
+    assert "e.key === 'Escape'" in js and '_liveRaccrocher()' in js, \
+        'Échap doit raccrocher'
+    assert "aria-keyshortcuts=\"Alt+M\"" in html, 'Alt+M doit être annoncé sur le bouton'
+
+    # (6) Le focus revient d'où il venait — sinon on est perdu dans la page.
+    assert '_liveFocusAvant' in js and '_liveFocusAvant?.focus()' in js
+
+    # (7) Le curseur de lecture ne saute PAS si l'on est en train de relire.
+    assert 'document.activeElement !== zone' in js, \
+        'la transcription ne doit pas défiler sous le doigt pendant la relecture'
+    ok("Live accessible : transcription copiable et silencieuse, état annoncé")
+
+
+def test_live_confidentialite():
+    """Une session Live n'écrit rien — sauf si on le demande, à la fin."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    livepy = open(os.path.join(racine, 'modules', 'live.py'), encoding='utf-8').read()
+
+    # (1) Le module Live n'importe AUCUNE fonction d'écriture : la garantie
+    #     est structurelle, pas seulement promise dans un commentaire.
+    for interdit in ('add_message', 'save_memory', 'set_setting'):
+        assert interdit not in livepy, \
+            'modules/live.py ne doit pas pouvoir écrire (%s)' % interdit
+
+    # (2) La clé ne quitte JAMAIS le serveur : l'interface parle à NIMM, NIMM
+    #     parle à Google. Une connexion directe du navigateur mettrait la clé
+    #     dans la page, donc dans toute extension installée.
+    assert 'generativelanguage.googleapis.com' not in js, \
+        'l’interface ne doit pas connaître l’adresse de Google : la clé fuirait'
+    assert "/api/live/ws" in js and 'url_gemini' in livepy
+
+    # (3) L'écriture n'a lieu qu'après une question explicite, et le défaut
+    #     est de ne rien garder.
+    assert 'confirmModal(' in js[js.index('_liveRaccrocher'):], \
+        'la conservation doit être demandée'
+    assert 'if (garder)' in js
+    conserver = main[main.index('async def live_conserver'):]
+    conserver = conserver[:conserver.index(chr(10) + '@app') if chr(10) + '@app' in conserver else len(conserver)]
+    assert 'add_message' in conserver, 'la route de conservation doit écrire'
+    assert 'create_thread' in conserver
+
+    # (4) Le fil support du moteur « chaîne » est fantôme, PUIS détruit.
+    assert "ghost: true" in js, 'le fil support doit être fantôme'
+    assert "method: 'DELETE'" in js[js.index('_liveFilEphemere'):], \
+        'le fil support doit être détruit au raccroché'
+
+    # (5) Un incident Live est ÉCRIT quelque part de lisible.
+    assert '_live_diag(' in main and "add_diagnostic('live'" in main, \
+        'un incident Live doit laisser une trace consultable au braille'
+    ok("Live confidentiel : rien n’est écrit sans un oui, la clé reste au serveur")
+
+
+def test_tout_est_utf8():
+    """Chaque fichier source doit se lire en UTF-8. Sans exception.
+
+    Ce test existe parce qu'il a immédiatement attrapé un défaut réel : deux
+    caractères écrits en latin-1 dans une greffe binaire de app.js. Le
+    contrôle de syntaxe JavaScript passait, la page se chargeait, et deux mots
+    d'un commentaire étaient illisibles — jusqu'au jour où un outil lisant le
+    fichier en UTF-8 aurait échoué sans expliquer pourquoi.
+
+    C'est le genre de faute qu'une relecture ne voit pas et qu'une machine
+    voit en une seconde.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    exts = ('.py', '.js', '.html', '.css', '.json', '.md', '.txt')
+    sautes = {'.git', '__pycache__', 'node_modules', 'venv', '.venv', 'backups'}
+    fautifs, examines = [], 0
+    for dossier, sous, fichiers in os.walk(racine):
+        sous[:] = [d for d in sous if d not in sautes]
+        for f in fichiers:
+            if not f.endswith(exts):
+                continue
+            chemin = os.path.join(dossier, f)
+            examines += 1
+            try:
+                open(chemin, 'rb').read().decode('utf-8')
+            except UnicodeDecodeError as e:
+                fautifs.append('%s (octet %d)' % (os.path.relpath(chemin, racine), e.start))
+    assert not fautifs, 'fichiers non UTF-8 : %s' % ', '.join(fautifs[:5])
+    assert examines > 50, 'le balayage n’a presque rien examiné (%d)' % examines
+    ok("encodage : %d fichiers sources, tous en UTF-8" % examines)
+
+
+def test_live_contrat_interface_serveur():
+    """Chaque route Live appelée par la page existe côté serveur, et chaque
+    élément cherché par le script existe dans la page.
+
+    Même contrôle que pour le reste de NIMM, appliqué au nouveau lot : c'est
+    la classe de défaut qui a le plus coûté ici (six listes de fournisseurs
+    oubliées dans app.js, trouvées par Fernando et non par moi).
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    appelees = set(re.findall(r"/api/live/[a-z_]+", js))
+    declarees = set(re.findall(r"@app\.(?:get|post|websocket)\(\"(/api/live/[a-z_]+)\"", main))
+    assert appelees, 'aucune route Live appelée : le test ne vérifie rien'
+    assert not (appelees - declarees), \
+        'routes Live appelées mais absentes du serveur : %s' % sorted(appelees - declarees)
+
+    # `live-toggle` est créé par le script lui-même : c'est le seul admis.
+    cherches = set(re.findall(r"getElementById\('(live-[a-z-]+)'\)", js))
+    presents = set(re.findall(r'id="(live-[a-z-]+)"', html)) | {'live-toggle'}
+    assert not (cherches - presents), \
+        'éléments cherchés mais absents de la page : %s' % sorted(cherches - presents)
+    assert len(cherches) >= 10, 'contrôle trop maigre (%d éléments)' % len(cherches)
+
+    # La dépendance ajoutée est déclarée : sans elle, la passerelle tombe avec
+    # une erreur d'import au premier essai, sur la machine de quelqu'un d'autre.
+    req = open(os.path.join(racine, 'requirements.txt'), encoding='utf-8').read()
+    assert 'websockets' in req, 'websockets absent de requirements.txt'
+
+    # Le numéro de version du script a changé : sans cela, le navigateur sert
+    # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
+    assert 'app.js?v=20260826-live' in html, 'cache-bust non mis à jour'
+    ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
+
+
+def test_masque_illisible_ne_bloque_pas():
+    """Le repli de `load_mask` visait un fichier qui n'existe plus.
+
+    Trouvé en passant, en cherchant comment donner son caractère à NIMM en
+    mode Live : le repli ouvrait `lia.json`, absent de modules/masks depuis un
+    moment. Un masque abîmé levait donc une SECONDE fois, hors du rattrapage —
+    et NIMM ne répondait plus du tout.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    corps = hub[hub.index('def _masque_de_repli'):]
+    corps = corps[:corps.index('# MODE POTARDS')]
+    # On ignore les commentaires et les chaînes de documentation : ils PARLENT
+    # de 'lia.json' pour expliquer le défaut. C'est le CODE qui ne doit plus
+    # le désigner — sans quoi le test interdirait d'écrire la leçon.
+    code = chr(10).join(l.split('#')[0] for l in corps.split(chr(10)))
+    code = re.sub(r'\"\"\".*?\"\"\"', '', code, flags=re.S)
+    assert "'lia.json'" not in code, 'un repli vise encore un fichier absent'
+    assert code.count('_masque_de_repli(') >= 3, \
+        'les TROIS replis doivent passer par la même porte (absent, privé, illisible)'
+    assert 'system_prompt' in corps, 'le masque de secours doit être exploitable'
+    # Un masque privé ne doit pas servir de repli : ce serait remplacer une
+    # gêne par une fuite.
+    assert "m.get('owner')" in corps, 'le repli peut servir un masque privé'
+
+    # Et le fichier visé par le repli doit exister pour de bon.
+    dossier = os.path.join(racine, 'modules', 'masks')
+    dispo = [f for f in os.listdir(dossier) if f.endswith('.json')]
+    assert dispo, 'aucun masque disponible'
+    ok("masque illisible : repli sur un masque réellement présent")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -3300,6 +3687,10 @@ if __name__ == '__main__':
                test_reflexion_deepseek,
                test_documentation_a_jour,
                test_demarrage_a_froid,
-               test_reponse_muette_apres_outil]:
+               test_reponse_muette_apres_outil,
+               test_fantome_a_la_creation, test_live_configuration,
+               test_live_interprete_le_flux, test_live_accessible,
+               test_live_confidentialite, test_live_contrat_interface_serveur,
+               test_masque_illisible_ne_bloque_pas, test_tout_est_utf8]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
