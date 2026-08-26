@@ -2760,14 +2760,35 @@ async def _vibe_stream(thread_id: str, user_message: str, settings: dict, images
     yield 'data: [DONE]\n\n'
 
 
+def _outils_exigeant_query() -> set:
+    """Les outils dont le paramètre principal s'appelle vraiment `query`."""
+    noms = set()
+    for t in NIMM_TOOLS:
+        f = (t or {}).get('function') or {}
+        props = ((f.get('parameters') or {}).get('properties') or {})
+        if 'query' in props and f.get('name'):
+            noms.add(f['name'])
+    return noms
+
+
+_OUTILS_A_QUERY = _outils_exigeant_query()
+
+
 async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     """
     Exécute un outil demandé par le LLM et retourne le résultat en texte.
     Appelé par process_message_stream() pendant la phase tool calling.
     Retourne toujours une chaîne — jamais None.
     """
-    query = args.get('query', '').strip()
-    if not query:
+    # DIX des vingt-cinq outils n'ont PAS de paramètre `query` : get_weather
+    # prend `city`, write_file prend `filename`, geocode_address prend
+    # `address`… Le garde d'origine était inconditionnel et placé avant tout
+    # aiguillage : ces dix outils étaient déclarés au modèle, appelés par lui,
+    # et répondaient invariablement « paramètre query vide » sans jamais
+    # atteindre leur branche. La liste se déduit des DÉCLARATIONS plutôt que
+    # d'être écrite à la main : ajouter un outil ne peut plus la périmer.
+    query = (args.get('query') or '').strip()
+    if not query and name in _OUTILS_A_QUERY:
         return '[Aucun résultat — paramètre query vide]'
 
     if name == 'search_memory':

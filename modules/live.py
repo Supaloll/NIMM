@@ -146,7 +146,7 @@ def consigne_vocale(user_name='', memoire='', masque='', se_souvient=True):
 
 
 def construire_setup(modele=None, voix=None, consigne='', langue='fr-FR',
-                     interruption=True):
+                     interruption=True, outils=None):
     """Le premier message du WebSocket — celui qui décide de tout le reste.
 
     Fonction PURE, donc vérifiable par un test sans jamais ouvrir de socket.
@@ -189,6 +189,10 @@ def construire_setup(modele=None, voix=None, consigne='', langue='fr-FR',
     }
     if (consigne or '').strip():
         setup['systemInstruction'] = {'parts': [{'text': consigne.strip()}]}
+    if outils:
+        # Une SEULE entrée qui rassemble toutes les déclarations : Google
+        # attend une liste d'objets `Tool`, pas un objet par fonction.
+        setup['tools'] = [{'functionDeclarations': list(outils)}]
     return {'setup': setup}
 
 
@@ -276,12 +280,22 @@ def interpreter(brut):
         evts.append({'type': 'bientot_fini', 'texte': str(reste)})
 
     if 'toolCall' in brut:
-        # Aucun outil n'est déclaré dans notre configuration : si Google en
-        # demande un, c'est que quelque chose a changé de son côté. On le
-        # signale au lieu de rester muet — la leçon de la réponse muette.
-        evts.append({'type': 'erreur',
-                     'texte': "Le modèle a demandé un outil alors qu'aucun "
-                              "n'est déclaré en mode Live."})
+        # Un appel d'outil. Chacun est remonté séparément : le modèle peut en
+        # demander plusieurs d'un coup, et chacun doit recevoir SA réponse,
+        # appariée par son identifiant.
+        for fc in ((brut.get('toolCall') or {}).get('functionCalls') or []):
+            if not isinstance(fc, dict):
+                continue
+            evts.append({'type': 'outil', 'nom': fc.get('name') or '',
+                         'id': fc.get('id') or '',
+                         'args': fc.get('args') or {}})
+
+    if 'toolCallCancellation' in brut:
+        # Le modèle a été coupé pendant qu'un outil tournait : sa réponse ne
+        # sert plus à rien. Le dire évite de la renvoyer dans le vide, et de
+        # laisser croire que l'outil a échoué.
+        ids = ((brut.get('toolCallCancellation') or {}).get('ids') or [])
+        evts.append({'type': 'outil_annule', 'ids': list(ids)})
     return evts
 
 
@@ -311,6 +325,73 @@ def options(api_keys=None, moteur_defaut='gemini'):
                             "fermes pas, et tu décides à la fin de la garder "
                             "ou non."),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  OUTILS — ce qui sépare « un Gemini qui te connaît » de « NIMM »
+# ══════════════════════════════════════════════════════════════════════
+#
+# Sans outils, une session Live donne un modèle rapide, coupé de la recherche
+# web, de la base de connaissances, du carnet et de l'agenda. Le déclarer, lui,
+# donne le vrai NIMM à la vitesse du direct : Gemini demande, NIMM exécute,
+# la conversation ne s'arrête pas.
+
+# CE QUI EST ÉCARTÉ, ET POURQUOI CE N'EST PAS UN OUBLI
+# Les outils qui ÉCRIVENT ou qui EXÉCUTENT restent dehors :
+#   - une session Live ne conserve rien ; y produire un effet durable sur le
+#     disque serait contradictoire, et invisible dans la transcription ;
+#   - CoaNIMM demande l'accord capacité par capacité, dans une fenêtre qu'on
+#     ne peut ni lire ni atteindre au milieu d'une conversation parlée.
+# On ne bricole pas une approbation à la voix : on ferme la porte, et on le dit.
+OUTILS_ECARTES = {'run_code', 'write_file'}
+
+
+def outils_pour_live(nimm_tools, ecartes=None):
+    """Traduit les outils de NIMM vers le format attendu par la Live API.
+
+    Fonction PURE, donc vérifiable sans réseau — et il le faut : une
+    déclaration mal formée est refusée à l'ouverture de la session, pas au
+    moment de l'appel, et emporte donc toute la conversation.
+
+    NIMM déclare ses outils au format OpenAI (`{'type':'function',
+    'function':{...}}`) ; Google attend une liste de `functionDeclarations`
+    à plat. Les types restent en minuscules : c'est la forme employée par la
+    documentation REST de Google, et déjà celle de NIMM.
+
+    Rend (declarations, noms_retenus) — le second sert à refuser un appel
+    portant un nom qu'on n'a jamais déclaré.
+    """
+    ecartes = set(ecartes if ecartes is not None else OUTILS_ECARTES)
+    declarations, noms = [], []
+    for t in (nimm_tools or []):
+        f = ((t or {}).get('function') or {})
+        nom = (f.get('name') or '').strip()
+        if not nom or nom in ecartes:
+            continue
+        params = f.get('parameters') or {'type': 'object', 'properties': {}}
+        props = params.get('properties') or {}
+        d = {'name': nom, 'description': (f.get('description') or '')[:1000]}
+        if props:
+            # Un objet SANS propriété fait échouer la déclaration chez Google :
+            # on n'envoie le schéma que s'il décrit vraiment quelque chose.
+            d['parameters'] = {
+                'type': params.get('type', 'object'),
+                'properties': props,
+            }
+            requis = [r for r in (params.get('required') or []) if r in props]
+            if requis:
+                d['parameters']['required'] = requis
+        declarations.append(d)
+        noms.append(nom)
+    return declarations, noms
+
+
+def reponse_outil(nom, identifiant, resultat):
+    """Le résultat d'un outil, renvoyé à Google pour que la phrase continue."""
+    msg = {'name': nom, 'response': {'result': (resultat or '')[:60000]}}
+    if identifiant:
+        msg['id'] = identifiant
+    return {'toolResponse': {'functionResponses': [msg]}}
 
 
 # ══════════════════════════════════════════════════════════════════════

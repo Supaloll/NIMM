@@ -3431,8 +3431,15 @@ def test_live_interprete_le_flux():
     # leçon de la réponse muette : ce qui n'est pas dit coûte trois séances.
     assert L.interpreter('{ceci nest pas du json')[0]['type'] == 'erreur'
 
-    # Aucun outil n'est déclaré : si Google en demande un, on le signale.
-    assert L.interpreter({'toolCall': {'functionCalls': []}})[0]['type'] == 'erreur'
+    # RÈGLE RÉÉCRITE le 26/08 : un appel d'outil n'est plus une anomalie,
+    # depuis que NIMM déclare les siens dans la session. Ce qui reste vrai,
+    # c'est qu'il ne doit jamais disparaître en silence : il remonte à plat,
+    # avec son identifiant, et c'est le serveur qui refuse un nom inconnu.
+    _ap = L.interpreter({'toolCall': {'functionCalls': [
+        {'name': 'search_web', 'id': 'z1', 'args': {'query': 'x'}}]}})
+    assert _ap[0]['type'] == 'outil' and _ap[0]['id'] == 'z1'
+    # Une demande vide ne doit ni lever, ni inventer d'événement.
+    assert L.interpreter({'toolCall': {'functionCalls': []}}) == []
 
     # Un message vide ne doit pas lever, ni inventer d'événement.
     assert L.interpreter({}) == [] and L.interpreter(None) == []
@@ -3644,6 +3651,217 @@ def test_masque_illisible_ne_bloque_pas():
     ok("masque illisible : repli sur un masque réellement présent")
 
 
+
+def test_outils_tous_atteignables():
+    """DIX outils sur vingt-cinq étaient morts, et personne ne le savait.
+
+    Trouvé en voulant réutiliser `_execute_tool` pour le mode Live : la
+    fonction commençait par
+
+        query = args.get('query', '').strip()
+        if not query:
+            return '[Aucun résultat — paramètre query vide]'
+
+    Ce garde était INCONDITIONNEL et placé avant tout aiguillage. Or dix
+    outils n'ont pas de paramètre `query` : get_weather prend `city`,
+    write_file prend `filename`, geocode_address prend `address`… Ils étaient
+    déclarés au modèle, appelés par lui, et répondaient invariablement
+    « paramètre query vide » sans jamais atteindre leur branche.
+
+    Le modèle, lui, ne se plaint pas : il enchaîne sur autre chose. C'est
+    exactement le genre de défaut qu'aucune relecture ne voit, parce qu'il n'y
+    a rien à voir — seulement quelque chose qui n'arrive jamais.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+
+    # (1) Relever les DÉCLARATIONS, et les branches réellement écrites.
+    arbre = ast.parse(hub)
+    declares = {}
+    for n in ast.walk(arbre):
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') in (
+                'NIMM_TOOLS', '_COANIMM_OPS_TOOLS', '_COANIMM_ASYNC_TOOLS'):
+            try:
+                val = ast.literal_eval(n.value)
+            except Exception:
+                continue
+            if not isinstance(val, list):
+                continue
+            for t in val:
+                f = (t or {}).get('function') or {}
+                if f.get('name'):
+                    props = ((f.get('parameters') or {}).get('properties') or {})
+                    declares[f['name']] = set(props)
+    assert len(declares) >= 20, 'relevé trop maigre (%d outils)' % len(declares)
+
+    corps = hub[hub.index('async def _execute_tool'):]
+    corps = corps[:corps.index(chr(10) + 'async def ', 10)]
+    branches = set(re.findall(r"name == '([a-z_0-9]+)'", corps))
+    manquantes = set(declares) - branches
+    assert not manquantes, 'outils déclarés sans branche : %s' % sorted(manquantes)
+
+    # (2) Le garde ne doit plus renvoyer les outils qui n'ont pas de `query`.
+    assert "if not query and name in _OUTILS_A_QUERY:" in corps, \
+        'le garde est redevenu inconditionnel : les outils sans query sont morts'
+
+    # (3) La liste se DÉDUIT des déclarations : l'écrire à la main la ferait
+    #     vieillir au premier outil ajouté.
+    assert 'def _outils_exigeant_query' in hub
+    espace = {'NIMM_TOOLS': [{'function': {'name': n,
+                                           'parameters': {'properties': {p: {} for p in ps}}}}
+                             for n, ps in declares.items()]}
+    src = hub[hub.index('def _outils_exigeant_query'):]
+    src = src[:src.index(chr(10) + chr(10) + chr(10))]
+    exec(compile(src, 'simule', 'exec'), espace)
+    calcule = espace['_outils_exigeant_query']()
+    attendu = {n for n, ps in declares.items() if 'query' in ps}
+    assert calcule == attendu, 'déduction fausse : %s' % sorted(calcule ^ attendu)
+    sans_query = sorted(set(declares) - attendu)
+    assert len(sans_query) >= 8, \
+        'le test ne prouve rien si presque tous les outils ont un query (%d)' % len(sans_query)
+    ok("outils : les %d outils sans paramètre query sont enfin atteignables"
+       % len(sans_query))
+
+
+def test_outils_en_live():
+    """Donner à NIMM ses outils pendant qu'on lui parle — et pas n'importe lesquels.
+
+    Sans outils, une session Live donne un Gemini rapide qui te connaît, mais
+    coupé de la recherche web, de la base de connaissances, du carnet et de
+    l'agenda. Question de Fernando, le jour même : « tout se fera via Gemini,
+    les recherches, le raisonnement ? » Oui — et c'était le compromis non dit.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from modules import live as L
+
+    faux = [
+        {'type': 'function', 'function': {
+            'name': 'get_weather', 'description': 'la météo',
+            'parameters': {'type': 'object',
+                           'properties': {'city': {'type': 'string'}},
+                           'required': ['city', 'inexistant']}}},
+        {'type': 'function', 'function': {
+            'name': 'run_code', 'description': 'exécute du code',
+            'parameters': {'type': 'object', 'properties': {'code': {'type': 'string'}}}}},
+        {'type': 'function', 'function': {
+            'name': 'write_file', 'description': 'écrit un fichier',
+            'parameters': {'type': 'object', 'properties': {'filename': {'type': 'string'}}}}},
+        {'type': 'function', 'function': {
+            'name': 'sans_parametre', 'description': 'rien à passer',
+            'parameters': {'type': 'object', 'properties': {}}}},
+    ]
+    decl, noms = L.outils_pour_live(faux)
+
+    # (1) Les outils qui ÉCRIVENT ou EXÉCUTENT restent dehors. Ce n'est pas un
+    #     oubli : une session Live ne conserve rien, et l'accord capacité par
+    #     capacité de CoaNIMM ne peut pas se donner au milieu d'une phrase.
+    assert 'run_code' not in noms and 'write_file' not in noms, \
+        'un outil qui agit sur le disque est passé en Live'
+    assert L.OUTILS_ECARTES == {'run_code', 'write_file'}
+
+    # (2) Format de Google : une liste plate de functionDeclarations.
+    par_nom = {d['name']: d for d in decl}
+    assert set(par_nom) == {'get_weather', 'sans_parametre'}
+    assert 'type' not in par_nom['get_weather'], \
+        "l'enveloppe OpenAI ne doit pas passer telle quelle"
+
+    # (3) Un `required` qui nomme un paramètre inexistant fait refuser la
+    #     déclaration : on ne garde que ceux qui existent vraiment.
+    assert par_nom['get_weather']['parameters']['required'] == ['city']
+
+    # (4) Un objet SANS propriété fait échouer la session entière chez Google :
+    #     mieux vaut ne pas envoyer de schéma du tout.
+    assert 'parameters' not in par_nom['sans_parametre'], \
+        'un schéma vide part quand même : la session sera refusée'
+
+    # (5) Le setup range tout dans UNE entrée `tools`.
+    s = L.construire_setup(outils=decl)['setup']
+    assert len(s['tools']) == 1 and len(s['tools'][0]['functionDeclarations']) == 2
+    assert 'tools' not in L.construire_setup()['setup'], \
+        'sans outils, aucune clé tools ne doit être envoyée'
+
+    # (6) Un appel remonte à plat, avec son identifiant — c'est lui qui apparie
+    #     la réponse à la demande.
+    e = L.interpreter({'toolCall': {'functionCalls': [
+        {'name': 'get_weather', 'id': 'a1', 'args': {'city': 'Angers'}},
+        {'name': 'search_web', 'id': 'a2', 'args': {'query': 'x'}}]}})
+    assert [x['type'] for x in e] == ['outil', 'outil'], 'les deux appels doivent remonter'
+    assert e[0]['id'] == 'a1' and e[1]['nom'] == 'search_web'
+    r = L.reponse_outil('get_weather', 'a1', 'il pleut')
+    assert r['toolResponse']['functionResponses'][0]['id'] == 'a1'
+    assert r['toolResponse']['functionResponses'][0]['response']['result'] == 'il pleut'
+
+    # (7) Une annulation est un événement à part : couper NIMM pendant qu'un
+    #     outil tourne ne doit pas relancer la phrase interrompue.
+    assert L.interpreter({'toolCallCancellation': {'ids': ['a1']}})[0]['type'] == 'outil_annule'
+    ok("outils en Live : lecture seule, format Google respecté, appels appariés")
+
+
+def test_outils_en_live_cables():
+    """Le câblage bout en bout : déclaration, exécution, annonce."""
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) La passerelle exécute vraiment, et refuse ce qu'elle n'a pas déclaré.
+    assert '_honorer_outil' in main and 'from core.hub import _execute_tool' in main
+    assert 'if nom not in _noms_outils:' in main, \
+        'un nom non déclaré ne doit jamais s’exécuter'
+    assert 'reponse_outil(' in main, 'le résultat doit repartir vers Google'
+
+    # (2) L'outil tourne dans une TÂCHE À PART : l'attendre dans la boucle de
+    #     réception arrêterait la lecture des paquets audio, donc la voix.
+    passerelle = main[main.index('async def _honorer_outil'):]
+    passerelle = passerelle[:passerelle.index('async def live_conserver')
+                            if 'async def live_conserver' in passerelle else len(passerelle)]
+    assert 'create_task(' in passerelle, "l'outil bloque la boucle audio"
+    assert 't.cancel()' in passerelle, \
+        'un outil qui survit à la session écrirait dans une connexion fermée'
+
+    # (3) Une annulation empêche la réponse de repartir.
+    assert 'ident in _annules' in passerelle
+
+    # (4) L'interface ANNONCE le passage par un outil. Sans cela, NIMM se tait
+    #     une à deux secondes sans raison visible — et dans une conversation
+    #     parlée, un silence inexpliqué ressemble à une panne.
+    assert "case 'outil':" in js and '_liveNomOutil(' in js
+    assert 'LIVE_NOMS_OUTILS' in js, 'les noms techniques ne se disent pas à l’oral'
+    assert '_liveNoterOutil(' in js, 'le passage doit aussi être ÉCRIT, pour le braille'
+
+    # (5) Les lignes d'outil sont distinguables à la relecture.
+    assert "'[' + t.texte.trim() + ']'" in js, \
+        'on doit distinguer ce que NIMM a dit de ce qu’il est allé chercher'
+
+    # (6) Débrayable, et le réglage est ENREGISTRÉ AVANT l'ouverture : le
+    #     serveur le lit au moment de configurer la session.
+    assert 'id="live-outils"' in html and 'aria-describedby="live-outils-aide"' in html
+    assert "await fetch('/api/live/options'" in js, \
+        'réglage envoyé sans attendre : il arrivait parfois après l’ouverture'
+    assert "set_setting('live_outils'" in main
+
+    # (7) Chaque outil déclaré a une étiquette en français, sauf ceux qu'on
+    #     écarte exprès. Un outil ajouté sans étiquette serait annoncé sous son
+    #     nom technique : le test le signale plutôt que de le laisser passer.
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    noms = set()
+    for n in ast.walk(ast.parse(hub)):
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') in (
+                'NIMM_TOOLS', '_COANIMM_OPS_TOOLS', '_COANIMM_ASYNC_TOOLS'):
+            try:
+                val = ast.literal_eval(n.value)
+            except Exception:
+                continue
+            if isinstance(val, list):
+                noms |= {(t.get('function') or {}).get('name') for t in val
+                         if (t.get('function') or {}).get('name')}
+    table = set(re.findall(r'^\s{4}([a-z_0-9]+):\s+\'', js, re.M))
+    oublies = sorted((noms - {'run_code', 'write_file'}) - table)
+    assert not oublies, 'outils sans étiquette française : %s' % oublies
+    ok("outils en Live : exécutés hors de la boucle audio, annoncés et écrits")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -3691,6 +3909,8 @@ if __name__ == '__main__':
                test_fantome_a_la_creation, test_live_configuration,
                test_live_interprete_le_flux, test_live_accessible,
                test_live_confidentialite, test_live_contrat_interface_serveur,
-               test_masque_illisible_ne_bloque_pas, test_tout_est_utf8]:
+               test_masque_illisible_ne_bloque_pas, test_tout_est_utf8,
+               test_outils_tous_atteignables, test_outils_en_live,
+               test_outils_en_live_cables]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
