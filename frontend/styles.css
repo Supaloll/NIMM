@@ -1841,6 +1841,10 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 #mic-btn:hover { border-color: var(--accent); }
 
@@ -1911,6 +1915,10 @@ body {
     justify-content: center;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 #mic-panel-btn:active { transform: scale(0.93); }
 #mic-panel-btn.recording {

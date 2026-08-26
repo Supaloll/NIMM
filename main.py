@@ -301,9 +301,9 @@ async def _security_middleware(request, call_next):
     # Géolocalisation : bloquée sur l'interface locale (PC via localhost), mais
     # autorisée sur l'interface mobile (PWA via Tailscale) — NIMM l'injecte dans
     # le system prompt à chaque message (cf. _getLocation() dans app.js).
-    _pp = "camera=(), microphone=(), geolocation=()"
+    _pp = "camera=(), microphone=(self), geolocation=()"
     if not _is_local_host(request.headers.get('host', '')):
-        _pp = "camera=(), microphone=()"
+        _pp = "camera=(), microphone=(self)"
     _resp.headers.setdefault("Permissions-Policy", _pp)
     return _resp
 
