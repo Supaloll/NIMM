@@ -1607,7 +1607,7 @@ function renderSidebar() {
         const result = await promptNewThreadModal();
         if (result) {
             if (isMobile()) closeSidebar();
-            createThread('💬 Nouveau fil', result.maskId, result.mode);
+            createThread('💬 Nouveau fil', result.maskId, result.mode, result.ghost);
         }
     });
     newChatRow.appendChild(newChatBtn);
@@ -2004,6 +2004,10 @@ async function promptNewThreadModal() {
             };
         });
 
+        // Jamais cochée par défaut : ne rien conserver doit rester un choix
+        // explicite, jamais un reste de la fois précédente.
+        const _ghostBox0 = document.getElementById('new-thread-ghost');
+        if (_ghostBox0) _ghostBox0.checked = false;
         modal.classList.remove('hidden');
 
         // Focus accessible : sur l'élément pertinent selon le mode pré-sélectionné
@@ -2058,7 +2062,8 @@ async function promptNewThreadModal() {
                 _selectedVoice = ttsSel.value;
             }
 
-            cleanup({ maskId, mode: selectedMode });
+            const _ghostBox = document.getElementById('new-thread-ghost');
+            cleanup({ maskId, mode: selectedMode, ghost: !!(_ghostBox && _ghostBox.checked) });
         };
         cancelBtn.onclick = () => cleanup(null);
     });
@@ -2124,6 +2129,28 @@ async function promptThreadParamsModal() {
     // Déplier toutes les sections
     modal.querySelectorAll('details.settings-section-details').forEach(d => d.open = true);
 
+    // La case « Ne rien conserver » sert aussi ICI : c'est le seul endroit qui
+    // reste pour basculer un fil déjà ouvert, depuis que le bouton de la barre
+    // a disparu. Le texte d'aide change, parce que la promesse n'est pas la
+    // même : on ne peut pas effacer rétroactivement ce qui est déjà écrit.
+    const _ghostBoxP = document.getElementById('new-thread-ghost');
+    const _ghostAideP = document.getElementById('new-thread-ghost-aide');
+    const _ghostAide0 = _ghostAideP ? _ghostAideP.textContent : '';
+    let _ghostAvant = false;
+    if (_ghostBoxP && currentThreadId) {
+        try {
+            const _rg = await fetch(`/api/threads/${currentThreadId}/ghost`);
+            _ghostAvant = !!(await _rg.json()).ghost;
+        } catch (e) { _ghostAvant = false; }
+        _ghostBoxP.checked = _ghostAvant;
+        if (_ghostAideP) {
+            _ghostAideP.textContent = 'Mode fant\u00f4me : \u00e0 partir de maintenant, plus aucun '
+                + 'message, m\u00e9moire ni note de carnet ne sera enregistr\u00e9 pour ce fil. '
+                + 'Ce qui a d\u00e9j\u00e0 \u00e9t\u00e9 enregistr\u00e9 avant reste en place : pour ne rien '
+                + 'laisser du tout, cr\u00e9e plut\u00f4t un nouveau fil avec la case coch\u00e9e.';
+        }
+    }
+
     const _paramsPrevFocus = document.activeElement;
     return new Promise(resolve => {
         const cleanup = () => {
@@ -2132,6 +2159,7 @@ async function promptThreadParamsModal() {
             if (origTitle) origTitle.textContent = savedTitle;
             modeRows.forEach(r => { r.style.display = r._savedDisplay !== undefined ? r._savedDisplay : ''; });
             okBtn.textContent = savedOkText;
+            if (_ghostAideP) _ghostAideP.textContent = _ghostAide0;
             modal.querySelectorAll('details.settings-section-details').forEach(d => d.open = false);
             resolve();
         };
@@ -2151,6 +2179,20 @@ async function promptThreadParamsModal() {
                 localStorage.setItem('nimm-voice', ttsSel.value);
                 _selectedVoice = ttsSel.value;
             }
+            // Bascule du mode fantôme. La route côté serveur est une bascule,
+            // pas une affectation : on ne l'appelle donc QUE si l'état a changé,
+            // sinon on remettrait le fil dans l'état inverse de celui demandé.
+            if (_ghostBoxP && currentThreadId && _ghostBoxP.checked !== _ghostAvant) {
+                try {
+                    const _rp = await fetch(`/api/threads/${currentThreadId}/ghost`, { method: 'POST' });
+                    _ghostMode = !!(await _rp.json()).ghost;
+                    const _mg = _ghostMode
+                        ? 'Mode fant\u00f4me activ\u00e9 : \u00e0 partir de maintenant, rien n\u2019est conserv\u00e9.'
+                        : 'Mode fant\u00f4me d\u00e9sactiv\u00e9 : les messages sont \u00e0 nouveau enregistr\u00e9s.';
+                    if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_mg);
+                    if (typeof showToast === 'function') showToast(_mg, _ghostMode ? 'warning' : 'info');
+                } catch (e) {}
+            }
             // Sauvegarder le modèle sélectionné
             const modelSel = document.getElementById('new-thread-model-select');
             if (modelSel && modelSel.value) {
@@ -2166,7 +2208,7 @@ async function promptThreadParamsModal() {
     });
 }
 
-async function createThread(name, maskId = null, personalityMode = null) {
+async function createThread(name, maskId = null, personalityMode = null, ghost = false) {
     // Passe mémoire silencieuse sur le fil courant avant d'en ouvrir un nouveau
     if (currentThreadId) {
         fetch(`/api/threads/${currentThreadId}/memorize`, { method: 'POST' })
@@ -2175,6 +2217,10 @@ async function createThread(name, maskId = null, personalityMode = null) {
     const body = { name, mode: 'chat' };
     if (maskId)          body.mask_id          = maskId;
     if (personalityMode) body.personality_mode = personalityMode === 'mask' ? 'mask' : 'potards';
+    // Le mode fantôme part AVEC la création : le serveur inscrit le fil dans la
+    // liste avant que le moindre message existe. C'est la seule façon de tenir
+    // la promesse « aucune trace » du premier échange au dernier.
+    if (ghost)           body.ghost            = true;
     const r = await fetch('/api/threads', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2183,6 +2229,12 @@ async function createThread(name, maskId = null, personalityMode = null) {
     const t = await r.json();
     await loadThreads();
     await selectThread(t.thread_id);
+    if (ghost) {
+        _ghostMode = true;
+        const _m = 'Fil fant\u00f4me cr\u00e9\u00e9 : rien de cet \u00e9change ne sera conserv\u00e9.';
+        if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_m);
+        if (typeof showToast === 'function') showToast(_m, 'warning');
+    }
 }
 
 // ══════════════════════════════════════════
@@ -4637,9 +4689,11 @@ document.addEventListener('keydown', (e) => {
                 document.getElementById('autotts-toggle')?.click();
                 break;
             }
-            case 'f': {   // Alt+F : mode fantôme
+            case 'f': {   // Alt+F : conversation Live
+                // Le mode fantôme se règle maintenant à la création du fil ;
+                // le raccourci sert la fonction qui a pris sa place dans la barre.
                 e.preventDefault();
-                document.getElementById('ghost-toggle')?.click();
+                document.getElementById('live-toggle')?.click();
                 break;
             }
         }
@@ -6514,38 +6568,20 @@ async function _loadGhostMode(threadId) {
         const d = await r.json();
         _ghostMode = d.ghost || false;
     } catch(e) { _ghostMode = false; }
-    const btn = document.getElementById('ghost-toggle');
-    if (btn) { btn.classList.toggle('active', _ghostMode); btn.setAttribute('aria-pressed', _ghostMode ? 'true' : 'false'); }
+    // Plus de bouton à rafraîchir : l'état sert à renseigner la case des
+    // Paramètres du fil, et à l'annoncer à l'ouverture d'un fil fantôme.
+    if (_ghostMode && typeof _coanimmAnnounce === 'function') {
+        _coanimmAnnounce('Fil fant\u00f4me : rien de cet \u00e9change n\u2019est conserv\u00e9.');
+    }
 }
 
-(function setupGhostToggle() {
-    const btn = document.createElement('button');
-    btn.id        = 'ghost-toggle';
-    btn.title     = 'Mode fantôme (Alt+F) — aucun message, mémoire ou carnet conservé';
-    btn.className = 'topbar-icon-btn';
-    btn.innerHTML = '<span aria-hidden="true">👻</span>';
-    btn.setAttribute('aria-label', 'Mode fantôme : aucune trace conservée. Alt+F pour activer ou désactiver.');
-    btn.setAttribute('aria-keyshortcuts', 'Alt+F');
-    btn.setAttribute('aria-pressed', 'false');
-    btn.addEventListener('click', async () => {
-        if (!currentThreadId) return;
-        try {
-            const r = await fetch(`/api/threads/${currentThreadId}/ghost`, { method: 'POST' });
-            const d = await r.json();
-            _ghostMode = d.ghost;
-            btn.classList.toggle('active', _ghostMode);
-            btn.setAttribute('aria-pressed', _ghostMode ? 'true' : 'false');
-            const _msg = _ghostMode
-                ? 'Mode fantôme activé — aucun message, mémoire ou carnet ne sera conservé pour ce fil.'
-                : 'Mode fantôme désactivé — les messages seront à nouveau sauvegardés.';
-            if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_msg);
-            // Toast visible
-            if (typeof showToast === 'function') showToast(_msg, _ghostMode ? 'warning' : 'info');
-        } catch(e) {}
-    });
-    const topRight = document.getElementById('top-right');
-    if (topRight) topRight.insertBefore(btn, topRight.firstChild);
-})();
+// Le bouton « fantôme » a QUITTÉ la barre du haut, et c'est volontaire.
+// À cet endroit, il ne pouvait être actionné qu'APRÈS coup — donc après que
+// les premiers échanges avaient déjà été écrits. La promesse « aucune trace »
+// ne tient que si elle est faite avant le premier mot : le réglage vit
+// désormais dans la modale de création du fil (case « Ne rien conserver »),
+// et reste modifiable ensuite dans les Paramètres du fil.
+// La place libérée dans la barre, et le raccourci Alt+F, vont au mode Live.
 
 // ============================================
 // AGENDA
@@ -13643,3 +13679,615 @@ init();
         }
     });
 })();
+
+// ══════════════════════════════════════════════════════════════════════
+// CONVERSATION LIVE — parler à NIMM, et pouvoir le couper
+// ══════════════════════════════════════════════════════════════════════
+//
+// CE QUI A ÉTÉ TRANCHÉ ICI, ET POURQUOI
+//
+// 1. La transcription ne s'annonce PAS toute seule.
+//    Un aria-live sur la transcription ferait lire chaque bribe par le lecteur
+//    d'écran PENDANT que NIMM parle. Deux voix simultanées, et plus rien de
+//    compréhensible. Seul l'état — qui a la parole — est annoncé : c'est court,
+//    et ça se glisse entre deux phrases. La transcription, elle, vit dans un
+//    champ de texte qu'on parcourt, relit et copie quand on veut, au braille,
+//    sans un mot de synthèse.
+//
+// 2. Le son sortant est joué dans un contexte audio SÉPARÉ du micro.
+//    L'entrée est à 16 kHz, la sortie à 24 kHz : ce sont deux horloges. Les
+//    mélanger obligerait à rééchantillonner à la main, avec le grésillement
+//    qui va avec.
+//
+// 3. Couper la parole vide la file de lecture, ne la met pas en pause.
+//    Une pause laisserait la fin d'une phrase déjà annulée repartir plus tard,
+//    hors contexte. On jette.
+//
+// 4. Rien n'est écrit tant qu'on n'a pas dit oui.
+//    La transcription reste en mémoire du navigateur. Elle ne touche le disque
+//    qu'après une question explicite, au raccroché.
+
+let _liveWS        = null;   // passerelle vers le serveur
+let _liveMicCtx    = null;   // contexte audio d'ENTRÉE (16 kHz)
+let _liveOutCtx    = null;   // contexte audio de SORTIE (24 kHz)
+let _liveFlux      = null;   // MediaStream du micro
+let _liveNoeud     = null;   // noeud de capture
+let _liveSources   = [];     // morceaux de son programmés, pour pouvoir les jeter
+let _liveProchain  = 0;      // horloge de lecture
+let _liveTours     = [];     // transcription accumulée, en mémoire seulement
+let _liveMicCoupe  = false;
+let _liveActif     = false;
+let _liveMoteur    = 'gemini';
+let _liveFocusAvant = null;
+let _liveFilEphemere = null; // moteur « chaîne » : fil fantôme, détruit à la fin
+let _liveDernierQui  = '';
+
+const LIVE_TAUX_ENTREE = 16000;
+const LIVE_TAUX_SORTIE = 24000;
+
+function _liveEtat(texte) {
+    const el = document.getElementById('live-etat');
+    if (el && el.textContent !== texte) el.textContent = texte;
+}
+
+/**
+ * Ajoute du texte à la transcription.
+ * Les bribes successives du même locuteur sont RECOLLÉES sur la même ligne :
+ * la Live API envoie la transcription par morceaux, parfois mot à mot. Une
+ * ligne par mot rendrait la relecture au braille inutilisable.
+ */
+function _liveTranscrire(qui, texte) {
+    if (!texte) return;
+    const zone = document.getElementById('live-transcript');
+    const etiquette = qui === 'moi' ? 'Moi' : 'NIMM';
+    if (qui === _liveDernierQui && _liveTours.length) {
+        _liveTours[_liveTours.length - 1].texte += texte;
+    } else {
+        _liveTours.push({ qui, texte });
+        _liveDernierQui = qui;
+    }
+    if (zone) {
+        zone.value = _liveTours
+            .map(t => (t.qui === 'moi' ? 'Moi : ' : 'NIMM : ') + t.texte.trim())
+            .join('\n\n');
+        // Ne pas déplacer le curseur si l'utilisateur est en train de relire :
+        // il perdrait sa place à chaque mot reçu.
+        if (document.activeElement !== zone) zone.scrollTop = zone.scrollHeight;
+    }
+    void etiquette;
+}
+
+// ── Conversion des formats audio ─────────────────────────────────────────
+function _liveVersPCM16(float32) {
+    const out = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+        // Bornage avant conversion : au-delà de 1 le repliage produit un
+        // craquement très audible, et le modèle entend mal.
+        const v = Math.max(-1, Math.min(1, float32[i]));
+        out[i] = v < 0 ? v * 0x8000 : v * 0x7FFF;
+    }
+    return out;
+}
+
+function _liveVersBase64(int16) {
+    const octets = new Uint8Array(int16.buffer);
+    let s = '';
+    // Par tranches : String.fromCharCode sur un tableau de 100 000 éléments
+    // dépasse la pile d'appels du navigateur.
+    const pas = 0x8000;
+    for (let i = 0; i < octets.length; i += pas) {
+        s += String.fromCharCode.apply(null, octets.subarray(i, i + pas));
+    }
+    return btoa(s);
+}
+
+function _liveDeBase64(b64) {
+    const bin = atob(b64);
+    const octets = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) octets[i] = bin.charCodeAt(i);
+    return new Int16Array(octets.buffer);
+}
+
+// ── Lecture du son reçu ──────────────────────────────────────────────────
+function _liveJouer(b64) {
+    if (!_liveOutCtx) return;
+    let pcm;
+    try { pcm = _liveDeBase64(b64); } catch (e) { return; }
+    if (!pcm.length) return;
+    const buf = _liveOutCtx.createBuffer(1, pcm.length, LIVE_TAUX_SORTIE);
+    const canal = buf.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) canal[i] = pcm[i] / 0x8000;
+    const src = _liveOutCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(_liveOutCtx.destination);
+    // Les morceaux arrivent plus vite qu'ils ne se jouent : on les met bout à
+    // bout sur une horloge, sinon ils se superposeraient tous à l'instant zéro.
+    const maintenant = _liveOutCtx.currentTime;
+    if (_liveProchain < maintenant) _liveProchain = maintenant + 0.02;
+    src.start(_liveProchain);
+    _liveProchain += buf.duration;
+    _liveSources.push(src);
+    src.onended = () => {
+        const i = _liveSources.indexOf(src);
+        if (i >= 0) _liveSources.splice(i, 1);
+    };
+}
+
+function _liveViderLecture() {
+    // On JETTE, on ne met pas en pause : reprendre plus tard la fin d'une
+    // phrase que l'on a coupée n'aurait aucun sens dans un dialogue.
+    _liveSources.forEach(s => { try { s.stop(); } catch (e) {} });
+    _liveSources = [];
+    _liveProchain = _liveOutCtx ? _liveOutCtx.currentTime : 0;
+}
+
+// ── Capture du micro ─────────────────────────────────────────────────────
+const _LIVE_WORKLET = `
+class CaptureNimm extends AudioWorkletProcessor {
+  process(entrees) {
+    const c = entrees[0] && entrees[0][0];
+    if (c && c.length) this.port.postMessage(new Float32Array(c));
+    return true;
+  }
+}
+registerProcessor('capture-nimm', CaptureNimm);
+`;
+
+async function _liveDemarrerMicro(surMorceau) {
+    _liveFlux = await navigator.mediaDevices.getUserMedia({
+        audio: {
+            channelCount: 1,
+            echoCancellation: true,   // sans elle, NIMM s'entend parler et se coupe lui-même
+            noiseSuppression: true,
+            autoGainControl: true,
+        }
+    });
+    _liveMicCtx = new (window.AudioContext || window.webkitAudioContext)(
+        { sampleRate: LIVE_TAUX_ENTREE });
+    const source = _liveMicCtx.createMediaStreamSource(_liveFlux);
+
+    try {
+        // AudioWorklet chargé depuis une URL de données : NIMM tient en un
+        // seul fichier de script, on ne va pas en ajouter un pour douze lignes.
+        const url = URL.createObjectURL(new Blob([_LIVE_WORKLET],
+                                                { type: 'application/javascript' }));
+        await _liveMicCtx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        _liveNoeud = new AudioWorkletNode(_liveMicCtx, 'capture-nimm');
+        _liveNoeud.port.onmessage = (e) => surMorceau(e.data);
+        source.connect(_liveNoeud);
+        // Le worklet ne produit pas de son : on le relie quand même à la
+        // sortie, sinon certains navigateurs suspendent le graphe.
+        _liveNoeud.connect(_liveMicCtx.destination);
+    } catch (e) {
+        // Repli sur l'ancien procédé, déprécié mais universel. Mieux vaut un
+        // avertissement dans la console qu'un micro qui ne marche pas.
+        console.warn('[LIVE] AudioWorklet indisponible, repli ScriptProcessor :', e);
+        _liveNoeud = _liveMicCtx.createScriptProcessor(4096, 1, 1);
+        _liveNoeud.onaudioprocess = (ev) => {
+            surMorceau(new Float32Array(ev.inputBuffer.getChannelData(0)));
+        };
+        source.connect(_liveNoeud);
+        _liveNoeud.connect(_liveMicCtx.destination);
+    }
+}
+
+function _liveArreterMicro() {
+    try { if (_liveNoeud) _liveNoeud.disconnect(); } catch (e) {}
+    try { if (_liveFlux) _liveFlux.getTracks().forEach(t => t.stop()); } catch (e) {}
+    try { if (_liveMicCtx) _liveMicCtx.close(); } catch (e) {}
+    _liveNoeud = null; _liveFlux = null; _liveMicCtx = null;
+}
+
+// ── Moteur 1 : Gemini Live (vrai dialogue) ───────────────────────────────
+async function _liveGemini(reglages) {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    _liveWS = new WebSocket(`${proto}//${location.host}/api/live/ws`);
+
+    _liveWS.onopen = () => {
+        _liveWS.send(JSON.stringify({ demarrer: reglages }));
+    };
+
+    _liveWS.onmessage = async (ev) => {
+        let evt;
+        try { evt = JSON.parse(ev.data); } catch (e) { return; }
+        switch (evt.type) {
+            case 'connectee':
+                _liveOutCtx = new (window.AudioContext || window.webkitAudioContext)(
+                    { sampleRate: LIVE_TAUX_SORTIE });
+                _liveProchain = 0;
+                try {
+                    await _liveDemarrerMicro((f32) => {
+                        if (_liveMicCoupe || !_liveWS || _liveWS.readyState !== 1) return;
+                        _liveWS.send(JSON.stringify(
+                            { audio: _liveVersBase64(_liveVersPCM16(f32)) }));
+                    });
+                } catch (e) {
+                    _liveEtat('Micro refusé : ' + e.message);
+                    _liveTranscrire('nimm',
+                        '[Le micro n’a pas pu être ouvert : ' + e.message +
+                        '. Tu peux quand même écrire dans le champ ci-dessous.]');
+                    return;
+                }
+                _liveEtat('À toi de parler.');
+                break;
+            case 'prete':
+                break;
+            case 'audio':
+                _liveEtat('NIMM parle — coupe-le quand tu veux.');
+                _liveJouer(evt.donnees);
+                break;
+            case 'transcription':
+                _liveTranscrire(evt.qui, evt.texte);
+                break;
+            case 'interrompu':
+                _liveViderLecture();
+                _liveEtat('Tu as coupé NIMM. À toi.');
+                break;
+            case 'tour_fini':
+                _liveEtat('À toi de parler.');
+                break;
+            case 'bientot_fini':
+                _liveEtat('La session va se fermer côté serveur.');
+                break;
+            case 'erreur':
+                _liveEtat('Incident : ' + (evt.texte || ''));
+                _liveTranscrire('nimm', '[' + (evt.texte || 'incident') + ']');
+                break;
+        }
+    };
+
+    _liveWS.onerror = () => { _liveEtat('La liaison vocale a échoué.'); };
+    _liveWS.onclose  = () => {
+        if (_liveActif) _liveEtat('Liaison fermée. Tu peux raccrocher.');
+    };
+}
+
+// ── Moteur 2 : Whisper + ton LLM + voix NIMM (le repli) ──────────────────
+//
+// Il n'atteint PAS la fluidité du premier, et le dire est plus utile que de
+// le laisser croire : chaque tour attend la fin du précédent. Il existe pour
+// que quelqu'un sans clé Gemini puisse tout de même parler à NIMM.
+let _liveRec = null, _liveAnalyse = null, _liveAudioTTS = null;
+
+async function _liveChaine() {
+    // Un fil fantôme sert de support : il n'enregistre aucun message (c'est
+    // la définition du mode fantôme), et il est détruit au raccroché.
+    try {
+        const r = await fetch('/api/threads', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: '🎙️ Live', mode: 'chat', ghost: true })
+        });
+        _liveFilEphemere = (await r.json()).thread_id;
+    } catch (e) {
+        _liveEtat('Impossible de préparer la session : ' + e.message);
+        return;
+    }
+
+    _liveFlux = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true }
+    });
+    _liveMicCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = _liveMicCtx.createMediaStreamSource(_liveFlux);
+    _liveAnalyse = _liveMicCtx.createAnalyser();
+    _liveAnalyse.fftSize = 512;
+    src.connect(_liveAnalyse);
+
+    _liveEtat('À toi de parler.');
+    _liveChaineTour();
+}
+
+function _liveNiveau() {
+    if (!_liveAnalyse) return 0;
+    const buf = new Uint8Array(_liveAnalyse.fftSize);
+    _liveAnalyse.getByteTimeDomainData(buf);
+    let somme = 0;
+    for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        somme += v * v;
+    }
+    return Math.sqrt(somme / buf.length);
+}
+
+async function _liveChaineTour() {
+    if (!_liveActif || _liveMoteur !== 'chaine') return;
+    const morceaux = [];
+    _liveRec = new MediaRecorder(_liveFlux);
+    _liveRec.ondataavailable = (e) => { if (e.data.size) morceaux.push(e.data); };
+
+    let aParle = false, silence = 0;
+    const SEUIL = 0.02, SILENCE_MAX = 900;   // ~0,9 s de silence = fin de tour
+    _liveRec.start(200);
+
+    await new Promise(resolve => {
+        const tic = setInterval(() => {
+            if (!_liveActif) { clearInterval(tic); resolve(); return; }
+            if (_liveMicCoupe) { silence = 0; return; }
+            const n = _liveNiveau();
+            if (n > SEUIL) {
+                aParle = true; silence = 0;
+                // Barge-in approximatif : si NIMM parle et qu'on se met à
+                // parler, on le coupe. Approximatif parce qu'il faut d'abord
+                // détecter la voix — un vrai dialogue coupe plus tôt.
+                if (_liveAudioTTS && !_liveAudioTTS.paused) {
+                    try { _liveAudioTTS.pause(); } catch (e) {}
+                    _liveEtat('Tu as coupé NIMM. À toi.');
+                }
+            } else if (aParle) {
+                silence += 120;
+                if (silence >= SILENCE_MAX) { clearInterval(tic); resolve(); }
+            }
+        }, 120);
+    });
+
+    try { _liveRec.stop(); } catch (e) {}
+    if (!_liveActif || !aParle) { if (_liveActif) _liveChaineTour(); return; }
+
+    _liveEtat('NIMM écoute et réfléchit…');
+    await new Promise(r => setTimeout(r, 250));   // laisse le dernier morceau arriver
+
+    let texte = '';
+    try {
+        const fd = new FormData();
+        fd.append('file', new Blob(morceaux, { type: 'audio/webm' }), 'live.webm');
+        if (_liveFilEphemere) fd.append('thread_id', _liveFilEphemere);
+        const r = await fetch('/api/stt/transcribe', { method: 'POST', body: fd });
+        texte = ((await r.json()).text || '').trim();
+    } catch (e) { texte = ''; }
+
+    if (!texte) { _liveEtat('Je n’ai rien compris. Reprends.'); _liveChaineTour(); return; }
+    _liveTranscrire('moi', texte);
+
+    let reponse = '';
+    try {
+        const r = await fetch('/api/chat/stream', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: texte, thread_id: _liveFilEphemere })
+        });
+        const lecteur = r.body.getReader();
+        const dec = new TextDecoder();
+        let tampon = '';
+        while (true) {
+            const { done, value } = await lecteur.read();
+            if (done) break;
+            tampon += dec.decode(value, { stream: true });
+            const lignes = tampon.split('\n');
+            tampon = lignes.pop();
+            for (const l of lignes) {
+                if (l.startsWith('data: ')) reponse += l.slice(6);
+            }
+        }
+    } catch (e) { reponse = 'Je n’ai pas pu répondre : ' + e.message; }
+
+    reponse = (reponse || '').trim();
+    if (!reponse) { _liveEtat('Pas de réponse. Reprends.'); _liveChaineTour(); return; }
+    _liveTranscrire('nimm', reponse);
+
+    _liveEtat('NIMM parle — coupe-le quand tu veux.');
+    try {
+        const rv = await fetch('/api/tts/speak', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: reponse.slice(0, 4000),
+                                   voice: localStorage.getItem('nimm-voice') || '' })
+        });
+        const blob = await rv.blob();
+        _liveAudioTTS = new Audio(URL.createObjectURL(blob));
+        await new Promise(res => {
+            _liveAudioTTS.onended = res;
+            _liveAudioTTS.onpause = res;     // coupé par la voix : on enchaîne
+            _liveAudioTTS.onerror = res;
+            _liveAudioTTS.play().catch(res);
+        });
+    } catch (e) { /* la transcription reste lisible : on continue */ }
+
+    if (_liveActif) { _liveEtat('À toi de parler.'); _liveChaineTour(); }
+}
+
+// ── Lancement, arrêt, conservation ───────────────────────────────────────
+async function _liveLancer(moteur, voix) {
+    _liveMoteur = moteur;
+    _liveActif  = true;
+    _liveMicCoupe = false;
+    _liveTours = [];
+    _liveDernierQui = '';
+    const zone = document.getElementById('live-transcript');
+    if (zone) zone.value = '';
+    _liveFocusAvant = document.activeElement;
+
+    document.getElementById('live-panel')?.classList.remove('hidden');
+    _liveEtat('Connexion…');
+    document.getElementById('live-voix-row').style.display =
+        moteur === 'gemini' ? '' : 'none';
+    setTimeout(() => { document.getElementById('live-raccrocher')?.focus(); }, 60);
+
+    try {
+        if (moteur === 'gemini') {
+            // « Il te connaît, mais n'écrit rien » : NIMM part avec la mémoire
+            // longue et le prénom, et ne consigne rien de l'échange.
+            await _liveGemini({ voix, se_souvient: true, langue: 'fr-FR',
+                                interruption: true });
+        } else {
+            await _liveChaine();
+        }
+    } catch (e) {
+        _liveEtat('Impossible de démarrer : ' + e.message);
+    }
+}
+
+async function _liveRaccrocher() {
+    if (!_liveActif) return;
+    _liveActif = false;
+    _liveEtat('Terminé.');
+
+    try { if (_liveWS && _liveWS.readyState === 1) _liveWS.send(JSON.stringify({ raccrocher: true })); } catch (e) {}
+    try { if (_liveWS) _liveWS.close(); } catch (e) {}
+    _liveWS = null;
+    try { if (_liveAudioTTS) _liveAudioTTS.pause(); } catch (e) {}
+    try { if (_liveRec && _liveRec.state !== 'inactive') _liveRec.stop(); } catch (e) {}
+    _liveViderLecture();
+    try { if (_liveOutCtx) _liveOutCtx.close(); } catch (e) {}
+    _liveOutCtx = null;
+    _liveArreterMicro();
+
+    // Le fil support du moteur « chaîne » n'a servi qu'à faire transiter les
+    // messages : il n'en a conservé aucun (mode fantôme), et il disparaît.
+    if (_liveFilEphemere) {
+        fetch(`/api/threads/${_liveFilEphemere}`, { method: 'DELETE' }).catch(() => {});
+        _liveFilEphemere = null;
+    }
+
+    const utiles = _liveTours.filter(t => (t.texte || '').trim());
+    document.getElementById('live-panel')?.classList.add('hidden');
+
+    if (utiles.length) {
+        // La question est posée UNE fois, à la fin, et le défaut est de ne
+        // rien garder : une session Live est éphémère par construction.
+        // La modale de NIMM plutôt que confirm() : elle gère le focus et se
+        // lit comme le reste de l'interface.
+        const garder = await confirmModal(
+            'Conversation termin\u00e9e (' + utiles.length + ' prise' +
+            (utiles.length > 1 ? 's' : '') + ' de parole). '
+            + 'Conserver la transcription comme fil normal ? '
+            + 'Annuler : rien n\u2019est gard\u00e9.');
+        if (garder) {
+            try {
+                const r = await fetch('/api/live/conserver', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tours: utiles })
+                });
+                const d = await r.json();
+                if (d.thread_id) {
+                    await loadThreads();
+                    await selectThread(d.thread_id);
+                    if (typeof _notify === 'function') _notify('Transcription conservée.', 'ok');
+                }
+            } catch (e) {
+                if (typeof _notify === 'function') _notify('Conservation impossible : ' + e.message, 'error');
+            }
+        }
+    }
+    _liveTours = [];
+    setTimeout(() => { _liveFocusAvant?.focus(); }, 0);
+}
+
+// ── Modale de lancement ──────────────────────────────────────────────────
+async function _liveOuvrirModale() {
+    const modal = document.getElementById('live-modal');
+    if (!modal) return;
+    let o = {};
+    try { o = await (await fetch('/api/live/options')).json(); } catch (e) { o = {}; }
+
+    const selMoteur = document.getElementById('live-moteur');
+    const selVoix   = document.getElementById('live-voix');
+    const aide      = document.getElementById('live-moteur-aide');
+    const rangVoix  = document.getElementById('live-voix-row');
+
+    selMoteur.innerHTML = (o.moteurs || []).map(m =>
+        `<option value="${m.nom}"${m.ouvert ? '' : ' disabled'}>` +
+        `${m.libelle}${m.ouvert ? '' : ' — indisponible'}</option>`).join('');
+    selMoteur.value = o.moteur_defaut || 'chaine';
+
+    selVoix.innerHTML = (o.voix || []).map(v =>
+        `<option value="${v.nom}">${v.libelle}</option>`).join('');
+    if (o.voix_enregistree) selVoix.value = o.voix_enregistree;
+
+    const majAide = () => {
+        const m = (o.moteurs || []).find(x => x.nom === selMoteur.value);
+        aide.textContent = m ? m.description : '';
+        rangVoix.style.display = selMoteur.value === 'gemini' ? '' : 'none';
+    };
+    selMoteur.onchange = majAide;
+    majAide();
+
+    const prevFocus = document.activeElement;
+    modal.classList.remove('hidden');
+    setTimeout(() => selMoteur.focus(), 50);
+
+    const fermer = () => {
+        modal.classList.add('hidden');
+        setTimeout(() => prevFocus?.focus(), 0);
+    };
+    document.getElementById('live-cancel').onclick = fermer;
+    document.getElementById('live-start').onclick = async () => {
+        const moteur = selMoteur.value, voix = selVoix.value;
+        // On retient le choix : personne n'a envie de le refaire à chaque fois.
+        fetch('/api/live/options', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ moteur, voix })
+        }).catch(() => {});
+        modal.classList.add('hidden');
+        await _liveLancer(moteur, voix);
+    };
+}
+
+// ── Le bouton, à la place laissée par le mode fantôme ────────────────────
+(function setupLiveToggle() {
+    const btn = document.createElement('button');
+    btn.id        = 'live-toggle';
+    btn.className = 'topbar-icon-btn';
+    btn.innerHTML = '<span aria-hidden="true">🎙️</span>';
+    btn.title     = 'Conversation Live (Alt+F) — parler à NIMM, rien n\'est conservé';
+    btn.setAttribute('aria-label',
+        'Conversation Live : parler à NIMM et pouvoir le couper. Rien n\'est conservé. Alt+F.');
+    btn.setAttribute('aria-keyshortcuts', 'Alt+F');
+    btn.setAttribute('aria-haspopup', 'dialog');
+    btn.addEventListener('click', () => {
+        if (_liveActif) { _liveRaccrocher(); return; }
+        _liveOuvrirModale();
+    });
+    const topRight = document.getElementById('top-right');
+    if (topRight) topRight.insertBefore(btn, topRight.firstChild);
+
+    // Pas de DOMContentLoaded ici : app.js est chargé à la fin du corps de la
+    // page, donc l'événement est DÉJÀ passé quand ce code s'exécute — les
+    // gestionnaires ne se seraient jamais installés. On câble tout de suite,
+    // en se contentant d'attendre si, par exception, la page est encore
+    // en cours d'analyse.
+    const _liveCabler = () => {
+        document.getElementById('live-raccrocher')?.addEventListener('click', _liveRaccrocher);
+
+        const micBtn = document.getElementById('live-micro');
+        micBtn?.addEventListener('click', () => {
+            _liveMicCoupe = !_liveMicCoupe;
+            micBtn.setAttribute('aria-pressed', _liveMicCoupe ? 'true' : 'false');
+            micBtn.textContent = _liveMicCoupe ? '🎤 Rouvrir le micro' : '🎤 Couper le micro';
+            _liveEtat(_liveMicCoupe ? 'Micro coupé — NIMM ne t’entend plus.'
+                                    : 'Micro ouvert. À toi de parler.');
+            if (_liveMicCoupe && _liveWS && _liveWS.readyState === 1) {
+                try { _liveWS.send(JSON.stringify({ fin_audio: true })); } catch (e) {}
+            }
+        });
+
+        const champ = document.getElementById('live-ecrire');
+        champ?.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const t = champ.value.trim();
+            if (!t) return;
+            e.preventDefault();
+            champ.value = '';
+            _liveTranscrire('moi', t);
+            if (_liveMoteur === 'gemini' && _liveWS && _liveWS.readyState === 1) {
+                _liveWS.send(JSON.stringify({ texte: t }));
+                _liveEtat('Envoyé. NIMM répond.');
+            } else {
+                _liveEtat('L’envoi de texte n’est possible qu’avec Gemini Live.');
+            }
+        });
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _liveCabler, { once: true });
+    } else {
+        _liveCabler();
+    }
+})();
+
+// Échap raccroche, et Alt+M coupe le micro : au clavier, on doit pouvoir
+// sortir d'une conversation vocale sans chercher un bouton.
+document.addEventListener('keydown', (e) => {
+    if (!_liveActif) return;
+    if (e.key === 'Escape') { e.preventDefault(); _liveRaccrocher(); }
+    else if (e.altKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault();
+        document.getElementById('live-micro')?.click();
+    }
+});

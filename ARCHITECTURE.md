@@ -967,3 +967,149 @@ Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les p
 | 25/08/2026 | **Mémoire : uniformisation des données, taxonomie fermée, verrous UI, âges précis**. Laurent a demandé une passe d'uniformisation de la vue 🧠 Mémoire. Diagnostic : la base cumulait plusieurs générations de formats — 14 valeurs `type` au lieu de 3, des prédicats hors taxonomie stockés bruts (`normalize_predicat` renvoyait l'inconnu tel quel), des fiches « personnes » factices (`[F]`, pays de la Coupe du Monde, camion de Laurent), des triplés dupliqués (`mere`/`prenom_mere`/`parent` Jeannette), des relations dans le bloc identité, des âges figés et faux (Maïssane « 18 ans » au lieu de 17 — la Règle 4 ne calculait que par année). [modules/memory.py] `normalize_predicat()` devient une LISTE FERMÉE : un prédicat inconnu est rejeté (triplet ignoré, log `⛔`) au lieu d'être stocké brut. Taxonomie étendue (`lieu_naissance`, `origine`, `lieu_etude`, `identifiant_professionnel`, `tarif_consultation`, `abonnement`, `compte_joint`, `mutuelle`, `interet`, `questionnement`, `theorie`, `frere_ou_soeur`, prédicats PoE) et nouvelles normalisations (`medecin_traitant`→`medecin`, `telephone`→`tel_portable`, `possession`→`equipement`, `etablissement_scolaire`→`ecole`, `comportement`→`trait`, `benevolat`→`engagement`). Règle 4 corrigée : âge calculé avec précision jour/mois (`_parse_date_naissance`/`_age_depuis_naissance`), l'âge ne progresse qu'après l'anniversaire. `_add()` accepte type/memoire_type (âges/anciennetés inférés en `trait`). Nouvelle fonction `unlock_memory()`. [main.py] `/api/memory/triplets` expose `locked` ; routes `POST /api/memory/{key}/lock` et `/unlock`. [frontend/app.js] bouton 🔒/🔓 sur chaque ligne mémoire (verrouiller/déverrouiller à la main) ; libellés de catégories `croyances` (🕯️) et `amities` (🤝) ajoutés. [frontend/index.html] cache-busting `20260825-memoire`. NETTOYAGE DES BASES (profils laurent, nadia, maya, mei, innes) : sujets parasites et personnalités publiques sans lien supprimés, `type` reclassé en 3 valeurs, relations sorties du bloc identité, `date_naissance`/`lieu_naissance`/`age` en tête de fiche, âges recalculés, structure familiale réécrite avec les vrais prénoms (Nadia → enfant Innès/Maïssane/Maya, Laurent conjoint Nadia) + nuance belles-filles (`beau_parent`, contexte explicite) et `origine = né sous X` restaurée après erreur de purge ; faits familiaux confirmés verrouillés 🔒 (14 dans la base de Laurent, 9 dans celle de Nadia, via `settings.memory_locks`). Sauvegardes avant nettoyage conservées dans `data/*.bak-20260825*`. |
 | 25/08/2026 (masques privés) | **Masques privés par compte** — un masque peut désormais être réservé à un profil avec le champ `owner` (id, ex. `"laurent"`) dans son JSON. [main.py] `list_masks()` filtre : un masque privé disparaît du sélecteur pour les autres comptes. [core/hub.py] `load_mask()` refuse un masque privé aux non-propriétaires (repli `lia.json`, log `🔒`) et indexe son cache par `(mask_id, utilisateur)` pour ne jamais servir le masque d'un profil à un autre. Masque `iris_deepseek.json` passé en privé (`owner: laurent`). ARCHITECTURE.md : section Modes de personnalité documentée. |
  
+
+---
+
+## Conversation Live, et le mode fantôme qui change de place (26/08/2026)
+
+### Le constat qui a lancé le chantier
+
+Fernando, après plusieurs semaines d'usage : le bouton « Mode fantôme » de la
+barre du haut ne pouvait être actionné qu'une fois le fil ouvert — donc, en
+pratique, après que les premiers échanges avaient déjà été écrits. La promesse
+« aucune trace conservée » ne tenait pas à l'endroit où on la faisait.
+
+Deux mouvements, donc :
+1. le réglage **descend** dans la création du fil, là où il peut tenir parole ;
+2. la place libérée dans la barre, et le raccourci **Alt+F**, vont à une
+   fonction qui manquait : **parler à NIMM et pouvoir le couper**.
+
+### Le mode fantôme à la création
+
+- `ThreadCreate` accepte `ghost`. `POST /api/threads` inscrit le fil dans
+  `ghost_threads` **avant** que le moindre message existe.
+- `_add_to_ghost_list()` — symétrique de `_remove_from_ghost_list()` qui
+  existait déjà. Ne perd pas les autres fils, ne crée pas de doublon, et
+  reconstruit une liste illisible plutôt que de ne rien protéger.
+- La case vit dans la modale « Nouveau fil », **hors** du bloc « Options
+  avancées ». Volontairement : une décision de confidentialité ne se cache pas
+  derrière un repli, surtout au lecteur d'écran, qui devrait alors déplier pour
+  la trouver. Un test l'ancre.
+- La case repart **décochée** à chaque ouverture : ne rien conserver reste un
+  choix explicite, jamais un reste de la fois précédente.
+- La même case sert dans « Paramètres du fil » pour basculer un fil déjà
+  ouvert — c'est le seul endroit qui reste depuis que le bouton a disparu. Le
+  texte d'aide y change, parce que la promesse n'est pas la même : activer
+  après coup n'efface pas ce qui est déjà écrit, et le dire vaut mieux que de
+  laisser croire le contraire.
+- La route `/ghost` est une **bascule**, pas une affectation : l'interface ne
+  l'appelle que si l'état a changé, sinon elle mettrait le fil dans l'état
+  inverse de celui demandé.
+
+### La conversation Live — `modules/live.py`
+
+**Ce qui distingue ce mode de `tts.py` + `stt.py`.** La chaîne classique est
+séquentielle : enregistrer, transcrire, interroger, synthétiser, jouer. Chaque
+maillon attend le précédent, et le total tourne autour de cinq secondes. C'est
+utilisable, mais ce n'est pas une conversation : on ne coupe pas la parole à
+quelqu'un qui met cinq secondes à commencer sa phrase.
+
+**Deux moteurs, et le second n'est pas un luxe.**
+
+| Moteur | Comment | Latence | Interruption |
+|---|---|---|---|
+| `gemini` | Live API, audio bidirectionnel natif (WebSocket) | ~1 s | vraie, gérée par Google |
+| `chaine` | Whisper local + LLM du fil + voix TTS de NIMM | 3 à 6 s | approximative |
+
+Le repli existe parce que sans lui, quelqu'un sans clé Gemini n'aurait rien du
+tout. Sa faiblesse est écrite dans l'interface plutôt que masquée.
+
+**Décisions de conception, et leurs raisons.**
+
+- **La clé ne sort pas du serveur.** L'interface parle à NIMM, NIMM parle à
+  Google. Le raccourci « le navigateur se connecte directement » est plus
+  rapide à écrire et met la clé dans la page — donc dans l'historique, dans les
+  outils de développement, et dans toute extension installée. Écarté. Un test
+  vérifie que l'adresse de Google n'apparaît nulle part dans `app.js`.
+- **Les deux transcriptions sont demandées, toujours.** `inputAudioTranscription`
+  et `outputAudioTranscription`, deux objets vides dont c'est la *présence* qui
+  compte. Sans elles, une conversation vocale ne laisse rien de lisible, et
+  devient inutilisable sur un afficheur braille.
+- **`construire_setup()` est une fonction pure**, donc testée sans ouvrir de
+  socket. C'est important : la configuration d'une session Live **n'est pas
+  modifiable une fois la connexion ouverte**. Une faute ici ne coûte pas un
+  message, elle coûte la session entière.
+- **`activityHandling` est écrit** alors que sa valeur est déjà le défaut. Un
+  défaut non écrit est un défaut qui change un jour sans prévenir.
+- **`interpreter()` est pure elle aussi**, et rend toujours une *liste* : un
+  seul message de Google peut porter une interruption, deux transcriptions et
+  du son. Elle place **l'interruption en premier**, quel que soit son rang dans
+  le message d'origine — l'interface doit vider sa file de lecture avant tout
+  le reste, sinon on entend la fin d'une phrase déjà annulée.
+- **Un message illisible produit une erreur, jamais un silence.** Et si Google
+  demande un outil alors qu'aucun n'est déclaré, c'est dit. Leçon directe de la
+  réponse muette : ce qui n'est écrit nulle part coûte trois séances.
+
+### Côté navigateur
+
+- Deux contextes audio **séparés** : entrée à 16 kHz, sortie à 24 kHz. Ce sont
+  deux horloges ; les mélanger obligerait à rééchantillonner à la main, avec le
+  grésillement qui va avec.
+- Les morceaux reçus sont mis **bout à bout sur une horloge** (`_liveProchain`) :
+  ils arrivent plus vite qu'ils ne se jouent, et se superposeraient tous à
+  l'instant zéro.
+- Couper la parole **vide** la file, ne la met pas en pause : reprendre plus
+  tard la fin d'une phrase annulée n'aurait aucun sens dans un dialogue.
+- `echoCancellation` est indispensable — sans elle, NIMM s'entend parler et se
+  coupe lui-même en boucle.
+- Capture par `AudioWorklet` chargé depuis une **URL de données**, pour que NIMM
+  reste en un seul fichier de script ; repli sur `ScriptProcessor`, déprécié
+  mais universel.
+
+### L'accessibilité, et le point contre-intuitif
+
+**La transcription ne s'annonce PAS toute seule.** Un `aria-live` la ferait lire
+par le lecteur d'écran *pendant que NIMM parle* : deux voix simultanées, et plus
+rien de compréhensible. Elle vit donc dans un `<textarea readonly>` que l'on
+parcourt, relit et copie quand on veut — au braille, en silence.
+
+Seul **l'état** (« À toi de parler », « NIMM parle », « Tu as coupé NIMM »)
+est annoncé : c'est court, et ça se glisse entre deux phrases.
+
+Autres points : le curseur de lecture ne défile pas si l'on est en train de
+relire ; Échap raccroche ; Alt+M coupe le micro ; le focus revient d'où il
+venait ; un champ permet d'**écrire au lieu de parler** sans quitter la session,
+pour un nom propre ou une adresse qui passe mal à l'oral.
+
+### Confidentialité
+
+`modules/live.py` n'importe **aucune** fonction d'écriture : la garantie est
+structurelle, pas seulement promise dans un commentaire, et un test l'ancre.
+La transcription reste en mémoire du navigateur ; elle ne touche le disque
+qu'après une question posée **une fois, à la fin**, dont le défaut est de ne
+rien garder. Le moteur `chaine` s'appuie sur un fil **fantôme** (qui n'enregistre
+donc aucun message) détruit au raccroché.
+
+### Deux défauts trouvés en chemin
+
+- **`load_mask()` se repliait sur `lia.json`**, un masque personnel **exclu du
+  dépôt** (il figure dans la liste d'exclusion de synchronisation). Sur toute
+  machine autre que celle où il a été créé — un clone neuf, la machine de
+  Laurent — le repli visait donc un fichier absent, et la seconde ouverture
+  levait **hors** du rattrapage.
+  NIMM ne répondait alors plus du tout. Repli refait sur le premier masque
+  réellement présent, avec un masque minimal en dernier recours.
+- **Deux caractères écrits en latin-1** dans une greffe binaire de `app.js`. Le
+  contrôle de syntaxe JavaScript passait, la page se chargeait, et le fichier
+  n'était plus lisible en UTF-8. D'où un nouveau test qui balaie **tous** les
+  fichiers sources (167 aujourd'hui) et refuse le moindre octet non conforme.
+  C'est le genre de faute qu'une relecture ne voit pas et qu'une machine voit
+  en une seconde — et c'est exactement pour cela qu'il est permanent.
+
+### Ce qui n'a pas été essayé pour de vrai
+
+Ni le moteur Gemini Live, ni le repli Whisper n'ont été éprouvés au micro :
+aucune clé, aucun micro de mon côté. Les parties pures sont testées, le contrat
+interface/serveur est vérifié, le reste attend un vrai essai.
+
+Tests : 83 scénarios (`tests/test_coanimm_agentique.py`).
