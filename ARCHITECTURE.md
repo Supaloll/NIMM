@@ -1113,3 +1113,122 @@ aucune clé, aucun micro de mon côté. Les parties pures sont testées, le cont
 interface/serveur est vérifié, le reste attend un vrai essai.
 
 Tests : 83 scénarios (`tests/test_coanimm_agentique.py`).
+
+---
+
+## Les outils de NIMM dans la conversation Live (26/08/2026, second lot)
+
+### La question qui a lancé le lot
+
+Fernando, juste après le premier lot : « si j'utilise l'option via Gemini Live,
+tout se fera via Gemini — les recherches, le raisonnement ? »
+
+Oui, et c'était le compromis que je n'avais pas assez souligné. Sans outils
+déclarés, une session Live donne **un Gemini rapide qui te connaît**, pas
+**NIMM** : il part avec la mémoire longue, le prénom et le masque, mais il est
+coupé de la recherche web, de la base de connaissances, du carnet, de l'agenda
+et des vingt-cinq outils.
+
+### Ce qui a été trouvé en ouvrant le capot — le vrai sujet du lot
+
+`_execute_tool()` commençait par :
+
+```python
+query = args.get('query', '').strip()
+if not query:
+    return '[Aucun résultat — paramètre query vide]'
+```
+
+Ce garde était **inconditionnel** et placé **avant tout aiguillage**. Or dix des
+vingt-cinq outils n'ont pas de paramètre `query` :
+
+`get_weather` (city), `run_code` (code), `write_file` (filename),
+`geocode_address` (address), `extract_url_content` (url), `describe_image`
+(url), `get_exchange_rate` (amount), `get_jours_feries` (year),
+`get_country_info` (country), `search_acceslibre` (name/city).
+
+Ils étaient déclarés au modèle, appelés par lui, et répondaient invariablement
+« paramètre query vide » **sans jamais atteindre leur branche**. Le modèle, lui,
+ne proteste pas : il enchaîne sur autre chose. Rien dans l'interface, rien dans
+les journaux, rien à voir — seulement quelque chose qui n'arrivait jamais.
+
+C'est le genre de défaut qu'aucune relecture ne trouve. Celui-ci est sorti
+parce qu'il fallait **réutiliser** la fonction ailleurs. Confirmation, encore,
+que le code qu'on exécute en dit plus que le code qu'on relit.
+
+Correction : le garde ne s'applique qu'aux outils qui déclarent vraiment
+`query`, et la liste se **déduit des déclarations** (`_outils_exigeant_query()`)
+au lieu d'être écrite à la main — sans quoi elle vieillirait au premier outil
+ajouté.
+
+### La traduction vers la Live API
+
+`outils_pour_live()` — fonction pure, donc vérifiable sans réseau, et il le
+faut : une déclaration mal formée est refusée **à l'ouverture de la session**,
+pas au moment de l'appel, et emporte donc toute la conversation.
+
+- NIMM déclare au format OpenAI (`{'type':'function','function':{…}}`), Google
+  attend une liste plate de `functionDeclarations` dans **une seule** entrée
+  `tools`.
+- Les types restent en **minuscules** : c'est la forme employée par la
+  documentation REST de Google, et déjà celle de NIMM.
+- Un `required` nommant un paramètre inexistant est nettoyé.
+- Un objet **sans propriété** fait échouer la déclaration : on n'envoie alors
+  aucun schéma plutôt qu'un schéma vide.
+
+### Ce qui est écarté, et pourquoi ce n'est pas un oubli
+
+`run_code` et `write_file` restent dehors :
+
+- une session Live **ne conserve rien** ; y produire un effet durable sur le
+  disque serait contradictoire, et invisible dans la transcription ;
+- CoaNIMM demande l'accord **capacité par capacité**, dans une fenêtre qu'on ne
+  peut ni lire ni atteindre au milieu d'une conversation parlée.
+
+On ne bricole pas une approbation à la voix : on ferme la porte, et on l'écrit.
+Vingt-trois outils en lecture restent disponibles.
+
+### L'exécution, et le piège qu'elle contenait
+
+L'outil tourne dans une **tâche à part** (`create_task`). L'attendre dans la
+boucle de réception arrêterait la lecture des paquets venant de Google — donc
+la voix — pendant toute sa durée. Mieux vaut un silence pendant qu'il travaille
+qu'une parole hachée.
+
+Trois garde-fous :
+
+- **un nom jamais déclaré ne s'exécute pas** — la règle protège autant d'une
+  dérive du modèle que d'un outil écarté exprès ;
+- **`toolCallCancellation`** : si l'on coupe NIMM pendant qu'un outil tourne,
+  sa réponse n'est pas renvoyée — elle relancerait une phrase qu'on venait
+  justement d'interrompre ;
+- **les tâches en cours sont annulées à la fin de la session**, sinon elles
+  écriraient dans une connexion déjà fermée.
+
+### L'annonce, et pourquoi elle est double
+
+Un outil coûte une à deux secondes **au tour qui l'emploie**. Pendant ce temps,
+NIMM se tait. Dans une conversation parlée, un silence inexpliqué ressemble à
+une panne.
+
+Le passage est donc **annoncé dans l'état** (« NIMM consulte le web… ») **et
+écrit dans la transcription**, sur sa propre ligne, entre crochets. En relisant
+au braille, on distingue d'un coup ce que NIMM a **dit** de ce qu'il est allé
+**chercher**. La conservation en fil normal garde cette distinction.
+
+Les noms sont **traduits en français** : `search_acceslibre` ou
+`get_jours_feries` ne veulent rien dire à l'oreille. Un outil absent de la table
+est annoncé sous son nom brut plutôt que passé sous silence — et un test
+signale l'oubli d'étiquette.
+
+### Une course corrigée avant d'être vue
+
+La case « Donner ses outils à NIMM » était envoyée sans attendre
+(`fetch(...).catch()`), puis la session s'ouvrait aussitôt. Le serveur lit ce
+réglage **au moment de configurer la session** : la requête arrivait parfois
+après, et la case était sans effet une fois sur deux. L'enregistrement est
+désormais **attendu**.
+
+Tests : 86 scénarios. Les contrôles de ce lot ont été éprouvés sur des sources
+simulées (garde restauré, outil d'écriture laissé passer, schéma vide, étiquette
+manquante) : les quatre défauts sont bien vus.

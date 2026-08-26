@@ -13748,13 +13748,73 @@ function _liveTranscrire(qui, texte) {
     }
     if (zone) {
         zone.value = _liveTours
-            .map(t => (t.qui === 'moi' ? 'Moi : ' : 'NIMM : ') + t.texte.trim())
+            .map(t => t.qui === 'moi'  ? 'Moi : ' + t.texte.trim()
+                    : t.qui === 'nimm' ? 'NIMM : ' + t.texte.trim()
+                    : '[' + t.texte.trim() + ']')
             .join('\n\n');
         // Ne pas déplacer le curseur si l'utilisateur est en train de relire :
         // il perdrait sa place à chaque mot reçu.
         if (document.activeElement !== zone) zone.scrollTop = zone.scrollHeight;
     }
     void etiquette;
+}
+
+// ── Les outils de NIMM pendant une conversation Live ─────────────────────
+//
+// POURQUOI CE NOMMAGE EN FRANÇAIS
+// Le nom technique d'un outil (`search_acceslibre`, `get_jours_feries`) ne
+// veut rien dire à l'oreille, et encore moins au braille au milieu d'une
+// conversation. On annonce ce que NIMM FAIT, pas comment ça s'appelle dans
+// le code. Un outil inconnu de cette table reste annoncé sous son nom brut
+// plutôt que passé sous silence : mieux vaut une étiquette laide qu'un
+// silence inexpliqué pendant que NIMM se tait.
+const LIVE_NOMS_OUTILS = {
+    search_memory:       'sa mémoire',
+    search_bibliotheque: 'les conversations archivées',
+    search_anecdotes:    'tes anecdotes',
+    search_web:          'le web',
+    search_documents:    'ta base de connaissances',
+    search_carnet:       'le carnet de bord',
+    find_skill:          'ses méthodes enregistrées',
+    search_acceslibre:   'l’accessibilité des lieux',
+    search_food_product: 'la base des produits alimentaires',
+    search_recipe:       'des recettes',
+    get_weather:         'la météo',
+    get_jours_feries:    'les jours fériés',
+    get_exchange_rate:   'les taux de change',
+    geocode_address:     'une adresse',
+    extract_url_content: 'une page web',
+    lookup_book:         'un livre',
+    get_country_info:    'des informations sur un pays',
+    search_commune:      'une commune',
+    search_wikipedia:    'Wikipédia',
+    search_wikidata:     'Wikidata',
+    search_sirene:       'le registre des entreprises',
+    search_datagouv:     'les données publiques',
+    describe_image:      'une image',
+};
+
+function _liveNomOutil(nom) {
+    return LIVE_NOMS_OUTILS[nom] || nom;
+}
+
+/**
+ * Trace un passage par un outil dans la transcription.
+ * Écrit sur SA propre ligne, entre crochets, et ne se recolle jamais à la
+ * parole : en relisant au braille, on doit pouvoir distinguer d'un coup ce
+ * que NIMM a DIT de ce qu'il est allé CHERCHER.
+ */
+function _liveNoterOutil(texte) {
+    _liveTours.push({ qui: 'outil', texte: texte });
+    _liveDernierQui = 'outil';
+    const zone = document.getElementById('live-transcript');
+    if (!zone) return;
+    zone.value = _liveTours
+        .map(t => t.qui === 'moi'   ? 'Moi : ' + t.texte.trim()
+                : t.qui === 'nimm'  ? 'NIMM : ' + t.texte.trim()
+                : '[' + t.texte.trim() + ']')
+        .join('\n\n');
+    if (document.activeElement !== zone) zone.scrollTop = zone.scrollHeight;
 }
 
 // ── Conversion des formats audio ─────────────────────────────────────────
@@ -13929,6 +13989,26 @@ async function _liveGemini(reglages) {
                 break;
             case 'bientot_fini':
                 _liveEtat('La session va se fermer côté serveur.');
+                break;
+            case 'outil': {
+                // Annoncé dans l'état ET écrit dans la transcription : sans
+                // cela, NIMM se tait pendant une à deux secondes sans qu'on
+                // sache pourquoi — et un silence inexpliqué dans une
+                // conversation vocale ressemble à une panne.
+                const _q = _liveNomOutil(evt.nom);
+                _liveEtat('NIMM consulte ' + _q + '\u2026');
+                _liveNoterOutil('NIMM consulte ' + _q);
+                break;
+            }
+            case 'outil_fini':
+                _liveEtat('NIMM a ce qu\u2019il cherchait. Il r\u00e9pond.');
+                break;
+            case 'outil_annule':
+            case 'outil_abandonne':
+                // On a coupé NIMM pendant qu'il cherchait : le dire, sinon le
+                // silence passerait pour un outil en panne.
+                _liveNoterOutil('Recherche abandonn\u00e9e : tu as repris la parole');
+                _liveEtat('\u00c0 toi de parler.');
                 break;
             case 'erreur':
                 _liveEtat('Incident : ' + (evt.texte || ''));
@@ -14181,6 +14261,10 @@ async function _liveOuvrirModale() {
     const selVoix   = document.getElementById('live-voix');
     const aide      = document.getElementById('live-moteur-aide');
     const rangVoix  = document.getElementById('live-voix-row');
+    const caseOutils = document.getElementById('live-outils');
+    const aideOutils = document.getElementById('live-outils-aide');
+    if (caseOutils) caseOutils.checked = o.outils !== false;
+    if (aideOutils) aideOutils.textContent = o.outils_note || '';
 
     selMoteur.innerHTML = (o.moteurs || []).map(m =>
         `<option value="${m.nom}"${m.ouvert ? '' : ' disabled'}>` +
@@ -14195,6 +14279,10 @@ async function _liveOuvrirModale() {
         const m = (o.moteurs || []).find(x => x.nom === selMoteur.value);
         aide.textContent = m ? m.description : '';
         rangVoix.style.display = selMoteur.value === 'gemini' ? '' : 'none';
+        // Les outils ne se déclarent que dans la session Gemini Live ; le
+        // repli Whisper passe par le chat de NIMM, qui les a déjà tous.
+        const _ro = caseOutils ? caseOutils.closest('div') : null;
+        if (_ro) _ro.style.display = selMoteur.value === 'gemini' ? '' : 'none';
     };
     selMoteur.onchange = majAide;
     majAide();
@@ -14210,11 +14298,17 @@ async function _liveOuvrirModale() {
     document.getElementById('live-cancel').onclick = fermer;
     document.getElementById('live-start').onclick = async () => {
         const moteur = selMoteur.value, voix = selVoix.value;
-        // On retient le choix : personne n'a envie de le refaire à chaque fois.
-        fetch('/api/live/options', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ moteur, voix })
-        }).catch(() => {});
+        // On ATTEND l'enregistrement avant d'ouvrir la session : le serveur
+        // lit ces réglages au moment de configurer la session Live, et une
+        // requête lancée sans attendre arrivait parfois après. La case
+        // « outils » aurait alors été sans effet une fois sur deux.
+        try {
+            await fetch('/api/live/options', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ moteur, voix,
+                                       outils: caseOutils ? caseOutils.checked : true })
+            });
+        } catch (e) { /* réglage non retenu : la session s'ouvre quand même */ }
         modal.classList.add('hidden');
         await _liveLancer(moteur, voix);
     };

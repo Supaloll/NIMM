@@ -6369,6 +6369,25 @@ def _live_diag(message: str) -> None:
         pass
 
 
+def _live_outils():
+    """Les outils de NIMM traduits pour la Live API, ou rien s'ils sont coupés.
+
+    Rend (declarations, noms). Ne lève jamais : sans outils, la conversation
+    marche encore — elle est seulement coupée du reste de NIMM. Échouer ici
+    ferait perdre les deux.
+    """
+    if get_setting('live_outils', 'oui') != 'oui':
+        return [], []
+    try:
+        from modules import live as _live
+        from core.hub import NIMM_TOOLS
+        return _live.outils_pour_live(NIMM_TOOLS)
+    except Exception as e:
+        print(f"[LIVE] Outils indisponibles ({e}) \u2014 session sans outils.")
+        _live_diag(f"Outils non d\u00e9clar\u00e9s : {e}")
+        return [], []
+
+
 @app.get("/api/live/options")
 async def live_options():
     """Ce qui est ouvert, et ce qui ne l'est pas — avec la raison."""
@@ -6381,6 +6400,19 @@ async def live_options():
     _o = _live.options(_keys, get_setting('live_moteur', 'gemini'))
     _o['voix_enregistree'] = get_setting('live_voix', _live.VOIX_DEFAUT)
     _o['modele'] = get_setting('live_modele', _live.MODELE_DEFAUT)
+    _o['outils'] = get_setting('live_outils', 'oui') == 'oui'
+    _decl, _noms = _live_outils()
+    _o['outils_noms'] = _noms
+    _o['outils_ecartes'] = sorted(_live.OUTILS_ECARTES)
+    _o['outils_note'] = (
+        "%d outils de NIMM sont \u00e0 sa disposition pendant la conversation "
+        "(recherche web, base de connaissances, carnet, agenda\u2026). "
+        "Ceux qui \u00e9crivent ou ex\u00e9cutent restent dehors : une session Live "
+        "ne conserve rien, et l'accord capacit\u00e9 par capacit\u00e9 de CoaNIMM ne "
+        "peut pas se donner au milieu d'une phrase." % len(_noms)
+        if _noms else
+        "Outils coup\u00e9s : NIMM r\u00e9pondra de m\u00e9moire, sans recherche web ni "
+        "base de connaissances.")
     return _o
 
 
@@ -6388,6 +6420,7 @@ class LiveReglages(BaseModel):
     moteur: Optional[str] = None
     voix:   Optional[str] = None
     modele: Optional[str] = None
+    outils: Optional[bool] = None
 
 
 @app.post("/api/live/options")
@@ -6401,6 +6434,11 @@ async def live_options_set(req: LiveReglages):
         set_setting('live_voix', _live.voix_valide(req.voix))
     if (req.modele or '').strip():
         set_setting('live_modele', req.modele.strip())
+    if req.outils is not None:
+        # Débrayable : les outils enrichissent la conversation mais ajoutent
+        # une à deux secondes AU TOUR qui les emploie. Certains échanges se
+        # passent très bien d'eux.
+        set_setting('live_outils', 'oui' if req.outils else 'non')
     return {"status": "ok"}
 
 
@@ -6446,6 +6484,7 @@ async def live_ws(ws: WebSocket):
             cle = ''
 
         consigne = _live_consigne(bool(reglages.get('se_souvient', True)))
+        _decl_outils, _noms_outils = _live_outils()
         setup = _live.construire_setup(
             modele=(reglages.get('modele')
                     or get_setting('live_modele', _live.MODELE_DEFAUT)),
@@ -6454,6 +6493,7 @@ async def live_ws(ws: WebSocket):
             consigne=consigne,
             langue=reglages.get('langue') or 'fr-FR',
             interruption=bool(reglages.get('interruption', True)),
+            outils=_decl_outils,
         )
 
         conn, err = await _live.ouvrir_gemini(cle, setup)
@@ -6467,7 +6507,8 @@ async def live_ws(ws: WebSocket):
 
         await ws.send_json({'type': 'connectee',
                             'taux_entree': _live.TAUX_ENTREE,
-                            'taux_sortie': _live.TAUX_SORTIE})
+                            'taux_sortie': _live.TAUX_SORTIE,
+                            'outils': _noms_outils})
 
         # ── Sens 1 : l'interface parle, Google écoute ──
         async def _vers_google():
@@ -6486,11 +6527,65 @@ async def live_ws(ws: WebSocket):
                 elif msg.get('raccrocher'):
                     return
 
+        # ── Les outils : Gemini demande, NIMM exécute, la phrase continue ──
+        _annules = set()
+
+        async def _honorer_outil(nom, ident, args):
+            """Exécute un outil et renvoie son résultat, sans bloquer l'audio.
+
+            Lancé dans une tâche à part, à dessein : attendre ici arrêterait la
+            lecture des paquets venant de Google — donc la voix — pendant toute
+            la durée de l'outil. Mieux vaut un silence pendant qu'il tourne
+            qu'une parole hachée.
+            """
+            if nom not in _noms_outils:
+                # Un nom jamais déclaré ne s'exécute pas. La règle protège
+                # autant d'une dérive du modèle que d'un outil écarté exprès
+                # (ceux qui écrivent ou exécutent).
+                resultat = "[Outil indisponible en conversation Live]"
+                _live_diag(f"Outil refusé en Live : {nom}")
+            else:
+                try:
+                    from core.hub import _execute_tool
+                    resultat = await _execute_tool(nom, args or {}, None)
+                except Exception as e:
+                    print(f"[LIVE] Outil {nom} en échec : {e}")
+                    _live_diag(f"Outil {nom} en échec : {e}")
+                    resultat = f"[L'outil {nom} a échoué : {e}]"
+            if ident and ident in _annules:
+                # Le modèle a été coupé pendant que l'outil tournait : sa
+                # réponse ne sert plus à rien, et la renvoyer relancerait une
+                # phrase que l'utilisateur venait justement d'interrompre.
+                await ws.send_json({'type': 'outil_abandonne', 'nom': nom})
+                return
+            try:
+                await conn.send(_jl.dumps(_live.reponse_outil(nom, ident, resultat)))
+                await ws.send_json({'type': 'outil_fini', 'nom': nom,
+                                    'taille': len(resultat or '')})
+            except Exception as e:
+                print(f"[LIVE] Réponse d'outil non remise : {e}")
+
         # ── Sens 2 : Google parle, l'interface écoute ──
         async def _vers_interface():
-            async for recu in conn:
-                for evt in _live.interpreter(recu):
-                    await ws.send_json(evt)
+            _en_cours = set()
+            try:
+                async for recu in conn:
+                    for evt in _live.interpreter(recu):
+                        if evt['type'] == 'outil':
+                            await ws.send_json(evt)
+                            t = _aio_live.create_task(
+                                _honorer_outil(evt['nom'], evt['id'], evt['args']))
+                            _en_cours.add(t)
+                            t.add_done_callback(_en_cours.discard)
+                            continue
+                        if evt['type'] == 'outil_annule':
+                            _annules.update(evt.get('ids') or [])
+                        await ws.send_json(evt)
+            finally:
+                # Ne pas laisser un outil tourner après la fin de la session :
+                # il écrirait dans une connexion déjà fermée.
+                for t in list(_en_cours):
+                    t.cancel()
 
         taches = [_aio_live.create_task(_vers_google()),
                   _aio_live.create_task(_vers_interface())]
@@ -6560,8 +6655,15 @@ async def live_conserver(req: LiveConserver):
     create_thread(thread_id, titre[:120], 'chat')
     gardes = 0
     for t in tours:
-        role = 'user' if t.get('qui') == 'moi' else 'assistant'
-        add_message(thread_id, role, (t.get('texte') or '').strip())
+        qui = t.get('qui')
+        texte = (t.get('texte') or '').strip()
+        if qui == 'outil':
+            # Les passages par un outil sont conservés, mais crochetés : en
+            # relisant le fil plus tard, on doit distinguer ce que NIMM a DIT
+            # de ce qu'il est allé chercher.
+            add_message(thread_id, 'assistant', '[%s]' % texte)
+        else:
+            add_message(thread_id, 'user' if qui == 'moi' else 'assistant', texte)
         gardes += 1
     return {"status": "ok", "thread_id": thread_id, "messages": gardes}
 
