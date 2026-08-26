@@ -12,7 +12,7 @@ import threading
 import time
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -402,6 +402,10 @@ class ThreadCreate(BaseModel):
     mode:             Optional[str] = 'chat'
     mask_id:          Optional[str] = None
     personality_mode: Optional[str] = None
+    # Mode fantôme demandé DÈS la création : c'est le seul instant où la
+    # promesse « aucune trace » peut être tenue entièrement. L'activer après
+    # coup laissait déjà passer les premiers échanges.
+    ghost:            Optional[bool] = False
 
 class ThreadRename(BaseModel):
     name: Optional[str] = None
@@ -693,7 +697,15 @@ async def new_thread(req: ThreadCreate):
         set_thread_mask(thread_id, req.mask_id, 'mask')
     elif req.personality_mode == 'potards':
         set_thread_mask(thread_id, '', 'potards')
-    return get_thread(thread_id)
+    if req.ghost:
+        set_setting('ghost_threads', _add_to_ghost_list(thread_id))
+    _t = get_thread(thread_id)
+    # L'interface a besoin de savoir tout de suite si le fil est fantôme :
+    # elle l'annonce, et n'a pas à poser une seconde question au serveur.
+    if isinstance(_t, dict):
+        _t = dict(_t)
+        _t['ghost'] = bool(req.ghost)
+    return _t
 
 @app.get("/api/threads/{thread_id}")
 async def get_one_thread(thread_id: str):
@@ -725,6 +737,21 @@ async def remove_thread(thread_id: str):
     set_setting('ghost_threads', _remove_from_ghost_list(thread_id))
     _clear_ghost_session(thread_id)
     return {"status": "ok"}
+
+def _add_to_ghost_list(thread_id: str) -> str:
+    """Ajoute un thread_id à ghost_threads, sans doublon ni perte des autres."""
+    raw = get_setting('ghost_threads', '[]')
+    try:
+        ghost_list = json.loads(raw)
+        if not isinstance(ghost_list, list):
+            ghost_list = []
+    except Exception:
+        # Une liste illisible ne doit pas empêcher d'honorer la demande :
+        # mieux vaut repartir d'une liste vide que de ne rien protéger.
+        ghost_list = []
+    if thread_id not in ghost_list:
+        ghost_list.append(thread_id)
+    return json.dumps(ghost_list)
 
 def _remove_from_ghost_list(thread_id: str) -> str:
     """Retire un thread_id de la liste ghost_threads lors de sa suppression."""
@@ -6273,6 +6300,373 @@ async def stt_transcribe(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+# ══════════════════════════════════════════
+# CONVERSATION LIVE — parler à NIMM, et pouvoir le couper
+# ══════════════════════════════════════════
+
+def _live_consigne(se_souvient: bool = True) -> str:
+    """Assemble l'instruction système d'une session Live.
+
+    Lit la mémoire et le masque, mais N'ÉCRIT RIEN : une session Live ne
+    laisse aucune trace, c'est sa raison d'être.
+    """
+    from modules import live as _live
+    if not se_souvient:
+        return _live.consigne_vocale(se_souvient=False)
+    try:
+        from core.hub import load_settings, load_mask
+        _s = load_settings()
+        _user = _s.get('user_name', '')
+        _masque = ''
+        try:
+            _m = load_mask(_s.get('mask_id') or '')
+            _masque = (_m or {}).get('system_prompt', '') or ''
+        except Exception as e:
+            # Un masque illisible ne doit pas empêcher de parler : on continue
+            # sans caractère particulier plutôt que d'échouer au lancement.
+            print(f"[LIVE] Masque indisponible ({e}) — session sans masque.")
+        _memoire = _live_memoire_courte()
+        return _live.consigne_vocale(user_name=_user, memoire=_memoire,
+                                     masque=_masque, se_souvient=True)
+    except Exception as e:
+        print(f"[LIVE] Contexte indisponible ({e}) — session sans mémoire.")
+        return _live.consigne_vocale(se_souvient=False)
+
+
+def _live_memoire_courte(limite: int = 40) -> str:
+    """Un résumé compact de la mémoire longue, en phrases.
+
+    Volontairement court : à l'oral, un contexte de dix mille signes ne rend
+    pas le modèle plus pertinent, il le rend plus lent à démarrer — et la
+    latence est TOUT ce qui compte ici.
+    """
+    try:
+        lignes = []
+        for m in (get_all_memory() or [])[:limite]:
+            sujet = (m.get('sujet') or '').strip()
+            pred = (m.get('predicat') or '').strip()
+            obj = (m.get('objet') or m.get('valeur') or '').strip()
+            if sujet and obj:
+                lignes.append(f"- {sujet} {pred} {obj}".replace('  ', ' '))
+        return "\n".join(lignes[:limite])
+    except Exception as e:
+        print(f"[LIVE] Mémoire indisponible ({e}).")
+        return ''
+
+
+def _live_diag(message: str) -> None:
+    """Consigne un incident Live dans le journal de fonctionnement.
+
+    Le journal est lisible depuis l'interface, donc au braille. C'est la
+    leçon de la réponse muette : un incident qui n'est écrit nulle part
+    coûte trois séances de devinettes.
+    """
+    try:
+        from core.database import add_diagnostic
+        add_diagnostic('live', message[:500])
+    except Exception:
+        pass
+
+
+def _live_outils():
+    """Les outils de NIMM traduits pour la Live API, ou rien s'ils sont coupés.
+
+    Rend (declarations, noms). Ne lève jamais : sans outils, la conversation
+    marche encore — elle est seulement coupée du reste de NIMM. Échouer ici
+    ferait perdre les deux.
+    """
+    if get_setting('live_outils', 'oui') != 'oui':
+        return [], []
+    try:
+        from modules import live as _live
+        from core.hub import NIMM_TOOLS
+        return _live.outils_pour_live(NIMM_TOOLS)
+    except Exception as e:
+        print(f"[LIVE] Outils indisponibles ({e}) \u2014 session sans outils.")
+        _live_diag(f"Outils non d\u00e9clar\u00e9s : {e}")
+        return [], []
+
+
+@app.get("/api/live/options")
+async def live_options():
+    """Ce qui est ouvert, et ce qui ne l'est pas — avec la raison."""
+    from modules import live as _live
+    from core.hub import load_settings
+    try:
+        _keys = load_settings().get('api_keys', {})
+    except Exception:
+        _keys = {}
+    _o = _live.options(_keys, get_setting('live_moteur', 'gemini'))
+    _o['voix_enregistree'] = get_setting('live_voix', _live.VOIX_DEFAUT)
+    _o['modele'] = get_setting('live_modele', _live.MODELE_DEFAUT)
+    _o['outils'] = get_setting('live_outils', 'oui') == 'oui'
+    _decl, _noms = _live_outils()
+    _o['outils_noms'] = _noms
+    _o['outils_ecartes'] = sorted(_live.OUTILS_ECARTES)
+    _o['outils_note'] = (
+        "%d outils de NIMM sont \u00e0 sa disposition pendant la conversation "
+        "(recherche web, base de connaissances, carnet, agenda\u2026). "
+        "Ceux qui \u00e9crivent ou ex\u00e9cutent restent dehors : une session Live "
+        "ne conserve rien, et l'accord capacit\u00e9 par capacit\u00e9 de CoaNIMM ne "
+        "peut pas se donner au milieu d'une phrase." % len(_noms)
+        if _noms else
+        "Outils coup\u00e9s : NIMM r\u00e9pondra de m\u00e9moire, sans recherche web ni "
+        "base de connaissances.")
+    return _o
+
+
+class LiveReglages(BaseModel):
+    moteur: Optional[str] = None
+    voix:   Optional[str] = None
+    modele: Optional[str] = None
+    outils: Optional[bool] = None
+
+
+@app.post("/api/live/options")
+async def live_options_set(req: LiveReglages):
+    """Retient le moteur, la voix et le modèle choisis, pour ne pas les
+    redemander à chaque conversation."""
+    from modules import live as _live
+    if req.moteur in ('gemini', 'chaine'):
+        set_setting('live_moteur', req.moteur)
+    if req.voix:
+        set_setting('live_voix', _live.voix_valide(req.voix))
+    if (req.modele or '').strip():
+        set_setting('live_modele', req.modele.strip())
+    if req.outils is not None:
+        # Débrayable : les outils enrichissent la conversation mais ajoutent
+        # une à deux secondes AU TOUR qui les emploie. Certains échanges se
+        # passent très bien d'eux.
+        set_setting('live_outils', 'oui' if req.outils else 'non')
+    return {"status": "ok"}
+
+
+@app.websocket("/api/live/ws")
+async def live_ws(ws: WebSocket):
+    """Passerelle entre l'interface et le service vocal de Google.
+
+    POURQUOI PASSER PAR LE SERVEUR PLUTÔT QUE DE CONNECTER LE NAVIGATEUR
+    DIRECTEMENT ? Parce que la clé API serait alors dans la page, donc dans
+    l'historique du navigateur, dans les outils de développement, et dans
+    toute extension installée. Le détour par NIMM coûte quelques
+    millisecondes ; il garde la clé sur la machine.
+
+    LE PREMIER MESSAGE de l'interface porte les réglages :
+        {"demarrer": {"voix": "...", "se_souvient": true, "modele": "..."}}
+    ENSUITE, l'interface envoie :
+        {"audio": "<base64 PCM 16 kHz>"} | {"texte": "..."} | {"fin_audio": true}
+    ET REÇOIT des événements plats :
+        {"type": "prete"|"audio"|"transcription"|"interrompu"|"tour_fini"|"erreur"}
+    """
+    import asyncio as _aio_live
+    import json as _jl
+    from modules import live as _live
+
+    await ws.accept()
+    conn = None
+    try:
+        # ── Réglages d'ouverture ──
+        try:
+            premier = await _aio_live.wait_for(ws.receive_text(), timeout=30)
+            reglages = (_jl.loads(premier) or {}).get('demarrer') or {}
+        except Exception as e:
+            await ws.send_json({'type': 'erreur',
+                                'texte': f"Réglages de session illisibles : {e}"})
+            await ws.close()
+            return
+
+        try:
+            from core.hub import load_settings
+            cle = (load_settings().get('api_keys', {}) or {}).get('gemini', '')
+        except Exception as e:
+            print(f"[LIVE] Clés indisponibles : {e}")
+            cle = ''
+
+        consigne = _live_consigne(bool(reglages.get('se_souvient', True)))
+        _decl_outils, _noms_outils = _live_outils()
+        setup = _live.construire_setup(
+            modele=(reglages.get('modele')
+                    or get_setting('live_modele', _live.MODELE_DEFAUT)),
+            voix=(reglages.get('voix')
+                  or get_setting('live_voix', _live.VOIX_DEFAUT)),
+            consigne=consigne,
+            langue=reglages.get('langue') or 'fr-FR',
+            interruption=bool(reglages.get('interruption', True)),
+            outils=_decl_outils,
+        )
+
+        conn, err = await _live.ouvrir_gemini(cle, setup)
+        if err:
+            # Dire la cause, toujours. Une session Live qui se ferme sans un
+            # mot est le pire des cas : rien à lire, rien à corriger.
+            _live_diag(f"Ouverture refusée : {err}")
+            await ws.send_json({'type': 'erreur', 'texte': err})
+            await ws.close()
+            return
+
+        await ws.send_json({'type': 'connectee',
+                            'taux_entree': _live.TAUX_ENTREE,
+                            'taux_sortie': _live.TAUX_SORTIE,
+                            'outils': _noms_outils})
+
+        # ── Sens 1 : l'interface parle, Google écoute ──
+        async def _vers_google():
+            while True:
+                brut = await ws.receive_text()
+                try:
+                    msg = _jl.loads(brut) or {}
+                except Exception:
+                    continue
+                if msg.get('audio'):
+                    await conn.send(_jl.dumps(_live.message_audio(msg['audio'])))
+                elif msg.get('texte'):
+                    await conn.send(_jl.dumps(_live.message_texte(msg['texte'])))
+                elif msg.get('fin_audio'):
+                    await conn.send(_jl.dumps(_live.message_fin_audio()))
+                elif msg.get('raccrocher'):
+                    return
+
+        # ── Les outils : Gemini demande, NIMM exécute, la phrase continue ──
+        _annules = set()
+
+        async def _honorer_outil(nom, ident, args):
+            """Exécute un outil et renvoie son résultat, sans bloquer l'audio.
+
+            Lancé dans une tâche à part, à dessein : attendre ici arrêterait la
+            lecture des paquets venant de Google — donc la voix — pendant toute
+            la durée de l'outil. Mieux vaut un silence pendant qu'il tourne
+            qu'une parole hachée.
+            """
+            if nom not in _noms_outils:
+                # Un nom jamais déclaré ne s'exécute pas. La règle protège
+                # autant d'une dérive du modèle que d'un outil écarté exprès
+                # (ceux qui écrivent ou exécutent).
+                resultat = "[Outil indisponible en conversation Live]"
+                _live_diag(f"Outil refusé en Live : {nom}")
+            else:
+                try:
+                    from core.hub import _execute_tool
+                    resultat = await _execute_tool(nom, args or {}, None)
+                except Exception as e:
+                    print(f"[LIVE] Outil {nom} en échec : {e}")
+                    _live_diag(f"Outil {nom} en échec : {e}")
+                    resultat = f"[L'outil {nom} a échoué : {e}]"
+            if ident and ident in _annules:
+                # Le modèle a été coupé pendant que l'outil tournait : sa
+                # réponse ne sert plus à rien, et la renvoyer relancerait une
+                # phrase que l'utilisateur venait justement d'interrompre.
+                await ws.send_json({'type': 'outil_abandonne', 'nom': nom})
+                return
+            try:
+                await conn.send(_jl.dumps(_live.reponse_outil(nom, ident, resultat)))
+                await ws.send_json({'type': 'outil_fini', 'nom': nom,
+                                    'taille': len(resultat or '')})
+            except Exception as e:
+                print(f"[LIVE] Réponse d'outil non remise : {e}")
+
+        # ── Sens 2 : Google parle, l'interface écoute ──
+        async def _vers_interface():
+            _en_cours = set()
+            try:
+                async for recu in conn:
+                    for evt in _live.interpreter(recu):
+                        if evt['type'] == 'outil':
+                            await ws.send_json(evt)
+                            t = _aio_live.create_task(
+                                _honorer_outil(evt['nom'], evt['id'], evt['args']))
+                            _en_cours.add(t)
+                            t.add_done_callback(_en_cours.discard)
+                            continue
+                        if evt['type'] == 'outil_annule':
+                            _annules.update(evt.get('ids') or [])
+                        await ws.send_json(evt)
+            finally:
+                # Ne pas laisser un outil tourner après la fin de la session :
+                # il écrirait dans une connexion déjà fermée.
+                for t in list(_en_cours):
+                    t.cancel()
+
+        taches = [_aio_live.create_task(_vers_google()),
+                  _aio_live.create_task(_vers_interface())]
+        try:
+            # Le premier des deux sens qui s'arrête met fin à la session :
+            # une passerelle à sens unique n'a aucun intérêt, et laisser
+            # l'autre tâche tourner fuirait une connexion à chaque appel.
+            _fini, _reste = await _aio_live.wait(
+                taches, return_when=_aio_live.FIRST_COMPLETED)
+            for t in _reste:
+                t.cancel()
+            for t in _fini:
+                _e = t.exception()
+                if _e and not isinstance(_e, (WebSocketDisconnect,
+                                              _aio_live.CancelledError)):
+                    print(f"[LIVE] Fin de session sur erreur : {_e}")
+                    _live_diag(f"Session interrompue : {_e}")
+        finally:
+            for t in taches:
+                if not t.done():
+                    t.cancel()
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[LIVE] Erreur inattendue : {e}")
+        _live_diag(f"Erreur inattendue : {e}")
+        try:
+            await ws.send_json({'type': 'erreur', 'texte': f"Incident : {e}"})
+        except Exception:
+            pass
+    finally:
+        # Fermer la session chez Google, toujours. Une session laissée ouverte
+        # continue d'être facturée et compte dans les quotas.
+        if conn is not None:
+            try:
+                await conn.close()
+            except Exception:
+                pass
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+class LiveConserver(BaseModel):
+    tours: List[Dict] = []
+    titre: Optional[str] = None
+
+
+@app.post("/api/live/conserver")
+async def live_conserver(req: LiveConserver):
+    """Transforme une transcription Live en fil normal — sur demande EXPRESSE.
+
+    Rien n'est écrit pendant la conversation : c'est seulement ici, après que
+    l'utilisateur a dit oui, que quoi que ce soit touche le disque. Le fil
+    créé n'est PAS fantôme, puisque son objet est justement d'être gardé.
+    """
+    tours = [t for t in (req.tours or [])
+             if isinstance(t, dict) and (t.get('texte') or '').strip()]
+    if not tours:
+        return {"status": "vide",
+                "message": "Rien à conserver : la transcription est vide."}
+
+    thread_id = str(uuid.uuid4())
+    titre = (req.titre or '').strip() or '🎙️ Conversation Live'
+    create_thread(thread_id, titre[:120], 'chat')
+    gardes = 0
+    for t in tours:
+        qui = t.get('qui')
+        texte = (t.get('texte') or '').strip()
+        if qui == 'outil':
+            # Les passages par un outil sont conservés, mais crochetés : en
+            # relisant le fil plus tard, on doit distinguer ce que NIMM a DIT
+            # de ce qu'il est allé chercher.
+            add_message(thread_id, 'assistant', '[%s]' % texte)
+        else:
+            add_message(thread_id, 'user' if qui == 'moi' else 'assistant', texte)
+        gardes += 1
+    return {"status": "ok", "thread_id": thread_id, "messages": gardes}
+
 
 
 
