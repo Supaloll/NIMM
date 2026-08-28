@@ -449,15 +449,27 @@ class TabCreate(BaseModel):
     thread_id: Optional[str] = None
 
 class ApiKeysSetting(BaseModel):
-    anthropic:     Optional[str] = None
-    deepseek:      Optional[str] = None
-    gemini:        Optional[str] = None
-    openai:        Optional[str] = None
-    openrouter:    Optional[str] = None
-    mistral:       Optional[str] = None
-    stability_ai:  Optional[str] = None
-    brave:         Optional[str] = None
-    tavily:        Optional[str] = None
+    """Les clés que l'on peut enregistrer.
+
+    LE DÉFAUT QUE CE MODÈLE CACHAIT
+    La liste était écrite à la main, et six services du catalogue n'y
+    figuraient pas : groq, cerebras, exa, cohere, voyage, jina. Pydantic
+    IGNORE en silence un champ qu'il ne connaît pas — l'interface envoyait
+    donc la clé Groq, le serveur répondait « ok », et rien n'était enregistré.
+    Groq et Cerebras étaient inutilisables depuis leur câblage du 30/07.
+
+    Le modèle s'appuie désormais sur `core/services.py`, seul catalogue.
+    Ajouter un service ne peut plus laisser sa clé sur le quai.
+    """
+    model_config = {'extra': 'allow'}
+
+    def cles_utiles(self) -> dict:
+        """Les couples service/clé effectivement fournis, catalogue à l'appui."""
+        from core.services import SERVICES as _CATALOGUE
+        connus = {s['id'] for s in _CATALOGUE}
+        brut = self.model_dump() if hasattr(self, 'model_dump') else self.dict()
+        return {k: v for k, v in brut.items()
+                if k in connus and isinstance(v, str) and v.strip()}
 
 class VisionProviderSetting(BaseModel):
     provider: str
@@ -4322,17 +4334,29 @@ async def set_memoire_mode(req: SettingValue):
 
 @app.get("/api/settings/api-keys")
 async def get_api_keys():
+    """Quelles clés sont configurées — jamais leur valeur.
+
+    La liste vient du CATALOGUE, pas d'une énumération recopiée ici. Celle
+    qu'elle remplace omettait groq, cerebras, exa, cohere, voyage et jina :
+    l'interface les croyait donc toujours absentes, et grisait leurs options
+    même quand la clé existait.
+    """
+    from core.services import SERVICES as _CATALOGUE
     keys = _db_get_api_keys()
-    # Retourner seulement si présente (booléen) — jamais la clé elle-même
-    return {p: bool(keys.get(p)) for p in ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily']}
+    return {s['id']: bool(keys.get(s['id'])) for s in _CATALOGUE}
 
 @app.post("/api/settings/api-keys")
 async def save_api_keys(req: ApiKeysSetting):
+    """Enregistre les clés fournies, et DIT lesquelles ont été retenues.
+
+    Rendre la liste plutôt qu'un simple « ok » : c'est exactement ce qui
+    manquait pour s'apercevoir que six services étaient ignorés en silence.
+    """
     existing = _db_get_api_keys()
-    updates = req.dict(exclude_none=True)
-    existing.update({k: v for k, v in updates.items() if v})
+    utiles = req.cles_utiles()
+    existing.update(utiles)
     _db_set_api_keys(existing)
-    return {"status": "ok"}
+    return {"status": "ok", "enregistrees": sorted(utiles)}
 
 
 @app.get("/api/settings/global-keys")
@@ -7576,6 +7600,159 @@ async def musique_supprimer(nom: str):
     if not trouve:
         raise HTTPException(404, "Morceau introuvable.")
     return {"status": "ok"}
+
+
+# ══════════════════════════════════════════
+# MANIPULER UNE IMAGE — exact en local, inventif par le modèle
+# ══════════════════════════════════════════
+
+@app.get("/api/retouche/options")
+async def retouche_options():
+    """Ce que sait faire ce panneau, avec des exemples des deux natures."""
+    from modules import retouche as _ret
+    from core.hub import load_settings
+    try:
+        _keys = load_settings().get('api_keys', {})
+    except Exception:
+        _keys = {}
+    return _ret.options(_keys)
+
+
+class RetoucheAnalyse(BaseModel):
+    consigne: str = ""
+
+
+@app.post("/api/retouche/analyser")
+async def retouche_analyser(req: RetoucheAnalyse):
+    """Dit quelle voie prendrait la consigne, SANS rien exécuter.
+
+    Sert à l'interface pour annoncer, avant même d'envoyer l'image, si la
+    retouche sera exacte ou réinventée. Quelqu'un qui ne voit pas le résultat
+    doit pouvoir le savoir avant de lancer, pas après.
+    """
+    from modules import retouche as _ret
+    a = _ret.analyser(req.consigne or '')
+    return {'voie': a['voie'], 'raison': a['raison'],
+            'operations': [o.get('op') for o in a['operations']]}
+
+
+@app.post("/api/retouche/appliquer")
+async def retouche_appliquer(
+    file:     UploadFile = File(...),
+    consigne: str = Form(""),
+    modele:   str = Form("flash"),
+    decrire:  str = Form("true"),
+):
+    """Applique la consigne à l'image envoyée.
+
+    Rend TOUJOURS de quoi comprendre ce qui s'est passé :
+      - `voie`        : 'local' ou 'modele' — découpée ou redessinée ;
+      - `raison`      : pourquoi cette voie ;
+      - `journal`     : ce qui a vraiment été fait, dimensions comprises ;
+      - `description` : ce que contient l'image OBTENUE ;
+      - `image`       : les octets en base64, ou une erreur en français.
+    """
+    from modules import retouche as _ret
+
+    async def _decrire(octets_res, mime_res):
+        """Décrit l'image OBTENUE — pas celle qu'on avait demandée.
+
+        C'est le cœur du panneau pour quelqu'un qui ne voit pas : sans cette
+        phrase, aucun moyen de savoir si le recadrage a coupé le papillon, ou
+        si le modèle a fait disparaître autre chose au passage. La consigne
+        n'est JAMAIS servie à la place de la description — c'est la règle du
+        texte alternatif honnête, appliquée ici aussi.
+        """
+        if (decrire or '').lower() not in ('true', '1', 'oui'):
+            return ''
+        try:
+            from core.hub import (_vibe_describe_image, _load_provider_routing,
+                                  load_settings as _ls)
+            return await _vibe_describe_image(
+                octets_res, mime_res or 'image/png',
+                {'provider_routing': _load_provider_routing(),
+                 'api_keys': _ls().get('api_keys', {})})
+        except Exception as e:
+            print(f"[RETOUCHE] Description impossible : {e}")
+            return ''
+
+    consigne = (consigne or '').strip()
+    if not consigne:
+        return {"erreur": "Dis ce que tu veux changer : la consigne est vide."}
+
+    try:
+        octets = await file.read()
+    except Exception as e:
+        return {"erreur": f"Fichier illisible : {e}"}
+    if not octets:
+        return {"erreur": "Le fichier reçu est vide."}
+    if len(octets) > 25 * 1024 * 1024:
+        return {"erreur": "Image trop lourde (plus de 25 Mo). Réduis-la d'abord."}
+
+    analyse = _ret.analyser(consigne)
+
+    # ── Voie exacte : sur la machine, rien ne sort ──
+    if analyse['voie'] == 'local':
+        # Pillow travaille en bloquant : hors de la boucle, sinon une grande
+        # image fige tout le serveur le temps du redimensionnement.
+        res, mime, journal, err = await asyncio.to_thread(
+            _ret.appliquer, octets, analyse['operations'])
+        if err:
+            return {"erreur": err, "voie": "local", "raison": analyse['raison']}
+        return {
+            "voie": "local", "raison": analyse['raison'], "journal": journal,
+            "image": _base64.b64encode(res).decode('ascii'), "mime": mime,
+            "operations": " ; ".join(journal),
+            "description": await _decrire(res, mime),
+        }
+
+    # ── Voie inventive : le modèle redessine ──
+    from core.hub import load_settings
+    try:
+        _keys = load_settings().get('api_keys', {})
+    except Exception:
+        _keys = {}
+    if not (_keys.get('gemini') or '').strip():
+        return {"erreur": ("Cette demande suppose d'inventer ce qui n'est pas sur "
+                           "la photo, ce qui exige une clé Gemini. Sans elle, tu "
+                           "peux encore recadrer, pivoter, agrandir, éclaircir ou "
+                           "passer en noir et blanc."),
+                "voie": "modele", "raison": analyse['raison']}
+
+    from modules import imagerie as _img
+    resultat = await _img.generer(
+        prompt=consigne, modele=modele or 'flash', api_keys=_keys,
+        images_ref=[{'b64': _base64.b64encode(octets).decode('ascii'),
+                     'mime': file.content_type or 'image/png'}])
+    if resultat.get('erreur'):
+        return {"erreur": resultat['erreur'], "voie": "modele",
+                "raison": analyse['raison']}
+    images = resultat.get('images') or []
+    if not images:
+        return {"erreur": ("Le modèle n'a rendu aucune image. Il refuse parfois "
+                           "une retouche sur une photo de personne — dans ce cas "
+                           "tu n'es pas facturé."),
+                "voie": "modele", "raison": analyse['raison']}
+
+    try:
+        _octets_res = _base64.b64decode(images[0].get('b64') or '')
+    except Exception:
+        _octets_res = b''
+
+    return {
+        "voie": "modele", "raison": analyse['raison'],
+        "journal": ["image redessinée par %s en %.1f s"
+                    % (resultat.get('modele', 'le modèle'),
+                       resultat.get('secondes', 0))],
+        "image": images[0].get('b64', ''), "mime": images[0].get('mime', 'image/png'),
+        # Le texte rendu par le modèle n'est PAS une description de l'image :
+        # c'est son commentaire sur ce qu'il a fait. Ne pas les confondre — la
+        # description est demandée séparément, à un modèle de vision.
+        "commentaire": (resultat.get('texte') or '').strip(),
+        "operations": "",
+        "description": await _decrire(_octets_res, images[0].get('mime') or 'image/png'),
+    }
+
 
 
 # ══════════════════════════════════════════
