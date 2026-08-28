@@ -1938,6 +1938,28 @@ async function promptNewThreadModal() {
     const activeMask = document.getElementById('mask-select')?.value;
     if (activeMask) sel.value = activeMask;
 
+    // Un masque déclarant ghost:true impose la confidentialité — la case le
+    // reflète et se verrouille, plutôt que de rester silencieusement fausse
+    // pendant que le fil est de toute façon fantôme côté serveur.
+    const _ghostBoxSync  = document.getElementById('new-thread-ghost');
+    const _ghostAideSync = document.getElementById('new-thread-ghost-aide');
+    const _ghostAideDefaut = _ghostAideSync ? _ghostAideSync.textContent : '';
+    function _syncGhostFromMask() {
+        if (!_ghostBoxSync) return;
+        const _m = masks.find(m => m.id === sel.value);
+        if (_m && _m.ghost) {
+            _ghostBoxSync.checked  = true;
+            _ghostBoxSync.disabled = true;
+            if (_ghostAideSync) _ghostAideSync.textContent =
+                '👻 Ce masque impose la confidentialité : ce fil ne conservera rien, quel que soit ton choix.';
+        } else {
+            _ghostBoxSync.checked  = false;
+            _ghostBoxSync.disabled = false;
+            if (_ghostAideSync) _ghostAideSync.textContent = _ghostAideDefaut;
+        }
+    }
+    sel.addEventListener('change', _syncGhostFromMask);
+
     // Pré-déterminer le mode personnalité d'après le fil courant
     const curThread = threads.find(t => t.thread_id === currentThreadId);
     const curMode = curThread?.personality_mode === 'potards' ? 'potards' : 'mask';
@@ -2005,9 +2027,9 @@ async function promptNewThreadModal() {
         });
 
         // Jamais cochée par défaut : ne rien conserver doit rester un choix
-        // explicite, jamais un reste de la fois précédente.
-        const _ghostBox0 = document.getElementById('new-thread-ghost');
-        if (_ghostBox0) _ghostBox0.checked = false;
+        // explicite, jamais un reste de la fois précédente — sauf si le
+        // masque déjà présélectionné impose lui-même le fantôme.
+        _syncGhostFromMask();
         modal.classList.remove('hidden');
 
         // Focus accessible : sur l'élément pertinent selon le mode pré-sélectionné
