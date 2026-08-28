@@ -1438,3 +1438,67 @@ un service réel**. Un nom qui ne correspond à rien ne lève pas : il grise, en
 silence, pour toujours.
 
 Tests : 93 scénarios.
+
+---
+
+## Le studio fusionne dans le panneau Images (28/08/2026, troisième passe)
+
+### Trois fois au même endroit
+
+Fernando a cherché la création d'image et de vidéo **dans la galerie** trois
+fois de suite :
+
+1. « Si c'est dans le menu galerie, je ne vois rien de tout ça » ;
+2. « Il me semblait qu'il y avait aussi un moteur pour générer une image, une
+   vidéo, et je ne vois plus rien » ;
+3. « Si je dois trouver d'autres choses que le studio dans le popup galerie
+   d'images, ça n'a pas marché ».
+
+Après la deuxième, j'ai ajouté un **bouton de renvoi** de la galerie vers le
+studio. C'était traiter le symptôme. Une passerelle ne répare pas un mauvais
+rangement : elle l'avoue.
+
+### Ce que le va-et-vient a coûté
+
+Le studio a vécu dans la barre du haut, puis derrière le menu « + » (30/07,
+pour réduire une redondance que Fernando avait lui-même signalée), et enfin
+dans le panneau Images (28/08). Deux déménagements, une passerelle inutile, et
+trois signalements — parce qu'à chaque fois j'ai raisonné en termes
+d'**organisation du code** (« le + est là où se prennent les décisions de
+création ») plutôt qu'en termes de **réflexe de l'utilisateur** (« quand je
+pense image, je vais aux images »).
+
+### L'état d'arrivée
+
+| Porte | Raccourci | Ce qu'elle tient |
+|---|---|---|
+| **Images** | Alt+Maj+G | galerie, créer une image, créer une vidéo, manipuler une image |
+| **+** (zone de saisie) | — | joindre un fichier, créer une image DANS la conversation, document Vibe |
+
+Le partage n'est plus « consulter / produire » mais « ce qui s'ajoute au
+message que j'écris » contre « ce qui produit et conserve des fichiers ».
+`plus-imagegen` reste dans le « + » : il préfixe la zone de saisie, c'est un
+geste de conversation, pas de production.
+
+Quatre entrées deviennent deux. `Alt+Maj+I` est rendu.
+
+### Ce que la fusion a failli casser
+
+Le risque propre à ce genre de déménagement : le code survit, la page change,
+**et rien ne lève**. Les fonctions cessent simplement de répondre.
+
+C'est exactement ce qui s'est produit : en retirant le câblage de la
+passerelle, j'ai emporté **tout le corps de `_retoucheCabler()`**. Le panneau
+de retouche n'écoutait plus rien. Le contrôle du contrat interface/serveur l'a
+signalé dans la minute — « `/api/retouche/options` ajoutée sans être branchée ».
+
+Deux tests ont par ailleurs vu leur **règle vieillir**, et ont été réécrits
+plutôt que contournés :
+- celui qui exigeait `id="plus-studio"` dans le menu ;
+- celui qui exigeait le mot « vidéo » dans le nom du bouton « + » — un nom qui
+  promet plus qu'il ne donne fait perdre autant de temps qu'un nom trop pauvre.
+
+Le nouveau test vérifie qu'**aucun élément cherché par le script n'a disparu
+de la page**, et que le corps de `_retoucheCabler` n'est pas vide.
+
+Tests : 94 scénarios.

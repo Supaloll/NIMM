@@ -4863,8 +4863,8 @@ function _applyProviderConstraints(keys) {
     // mène à un refus n'a rien à faire dans la barre d'outils.
     var _btnMus = document.getElementById('toggle-musique');
     if (_btnMus) _btnMus.hidden = !(keys && keys.gemini);
-    var _btnStudio = document.getElementById('plus-studio');
-    if (_btnStudio) _btnStudio.hidden = !(keys && keys.gemini);
+    // Le studio n'a plus de bouton propre : ses volets vivent dans le panneau
+    // Images, et chacun annonce lui-même ce qu'il faut pour fonctionner.
     _majVisibiliteParCle(keys);
     // 1. Désactiver les options sans clé
     document.querySelectorAll('.routing-select option[data-needs-key]').forEach(opt => {
@@ -6790,8 +6790,15 @@ async function _galerieLoad() {
 
 // Ouverture galerie
 document.getElementById('toggle-galerie')?.addEventListener('click', function() {
-    document.getElementById('galerie-modal').classList.remove('hidden');
-    _galerieLoad();
+    // Le panneau contient désormais la galerie ET la production (image, vidéo,
+    // retouche). `_ouvrirStudio` ouvre le panneau et prépare TOUT : l'appeler
+    // seul évite de charger la galerie deux fois.
+    if (typeof window._ouvrirStudio === 'function') {
+        window._ouvrirStudio();
+    } else {
+        document.getElementById('galerie-modal').classList.remove('hidden');
+        _galerieLoad();
+    }
 });
 
 // Fermeture galerie
@@ -11930,7 +11937,6 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
     };
     // Le studio n'a plus de bouton dans la barre : son raccourci est annoncé
     // sur l'entrée du menu « + » qui l'ouvre.
-    document.getElementById('plus-studio')?.setAttribute('aria-keyshortcuts', 'Alt+Shift+I');
     // Annonce les raccourcis aux lecteurs d'écran.
     Object.keys(LABELS).forEach(function (id) {
         var el = document.getElementById(id);
@@ -11998,12 +12004,10 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
 
     document.addEventListener('click', function (e) {
         var ids = Object.keys(SHORTCUTS).map(function (k) { return SHORTCUTS[k]; });
-        ids.push('plus-studio');
         for (var n = 0; n < ids.length; n++) {
             var btn = e.target.closest && e.target.closest('#' + ids[n]);
             if (!btn) continue;
-            var panneau = document.getElementById(
-                ids[n] === 'plus-studio' ? 'studio-modal' : _panneauDe(ids[n]));
+            var panneau = document.getElementById(_panneauDe(ids[n]));
             if (!panneau) return;
             _surveiller(panneau, btn);
             // Après le gestionnaire d'origine, qui ouvre le panneau.
@@ -12038,15 +12042,8 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
             }
             return;
         }
-        if (k === 'i') {   // studIo image et vidéo
-            var _entree = document.getElementById('plus-studio');
-            // Caché = pas de clé Gemini : ouvrir mènerait à un panneau inutilisable.
-            if (!_entree || _entree.hidden) return;
-            e.preventDefault();
-            if (typeof window._ouvrirStudio === 'function') window._ouvrirStudio();
-            setTimeout(function () { focusModal(document.getElementById('studio-modal')); }, 90);
-            return;
-        }
+        // Alt+Maj+I est LIBRE depuis que le studio a rejoint le panneau
+        // Images : une seule porte, un seul raccourci — Alt+Maj+G.
         var id = SHORTCUTS[k];
         if (id) {
             var btn = document.getElementById(id);
@@ -13692,27 +13689,27 @@ init();
         _stChargerBiblioVideo().then(function () { _stVidStatus('Bibliothèque à jour.'); });
     });
 
-    // Le studio s'ouvre depuis le menu « + » — là où se prennent déjà les
-    // décisions « je crée quelque chose » — et non plus depuis la barre du haut,
-    // qui comptait trois portes pour deux idées. Exposé aussi en global pour que
-    // le raccourci clavier n'ait pas à connaître le menu.
+    // LE STUDIO A FUSIONNÉ DANS LE PANNEAU « IMAGES ».
+    //
+    // Il a vécu dans la barre du haut, puis derrière le menu « + » (30/07),
+    // et Fernando a cherché la création d'image et de vidéo dans la GALERIE
+    // trois fois de suite sans les trouver. Ce n'était pas un défaut
+    // d'explication : c'est là que va le réflexe quand on pense « image ».
+    // Quatre portes menaient aux images ; il n'en reste qu'une, celle-là.
+    //
+    // La fonction survit sous son nom pour les appelants existants, mais elle
+    // ouvre maintenant le panneau Images et charge tout ce qu'il contient.
     function _ouvrirStudio() {
         document.getElementById('plus-menu')?.classList.add('hidden');
-        document.getElementById('studio-modal')?.classList.remove('hidden');
+        var _p = document.getElementById('galerie-modal');
+        if (_p) _p.classList.remove('hidden');
+        if (typeof _galerieLoad === 'function') _galerieLoad();
         _stChargerImage();
         _stChargerVideo();
         _stChargerBiblioVideo();
         _stReprendre();
-        setTimeout(function () { document.getElementById('studio-image-prompt')?.focus(); }, 60);
     }
     window._ouvrirStudio = _ouvrirStudio;
-    document.getElementById('plus-studio')?.addEventListener('click', _ouvrirStudio);
-    document.getElementById('studio-close')?.addEventListener('click', function () {
-        document.getElementById('studio-modal')?.classList.add('hidden');
-    });
-    document.getElementById('studio-modal')?.addEventListener('click', function (e) {
-        if (e.target === this) this.classList.add('hidden');
-    });
 })();
 
 // ══════════════════════════════════════════
@@ -14630,20 +14627,6 @@ document.addEventListener('keydown', (e) => {
     function _retoucheCabler() {
         const det = $('studio-retouche-details');
         if (!det) return;
-
-        // Depuis la galerie : on ferme la galerie, on ouvre le studio, on
-        // déplie CE volet et on y met le focus. Sans le dépliage, le panneau
-        // s'ouvrirait sur une ligne repliée — et au lecteur d'écran, arriver
-        // sur un titre fermé ressemble à une impasse.
-        document.getElementById('galerie-vers-retouche')?.addEventListener('click', () => {
-            document.getElementById('galerie-modal')?.classList.add('hidden');
-            if (typeof window._ouvrirStudio === 'function') window._ouvrirStudio();
-            det.open = true;
-            setTimeout(() => {
-                det.querySelector('summary')?.setAttribute('tabindex', '-1');
-                det.querySelector('summary')?.focus();
-            }, 120);
-        });
 
         fetch('/api/retouche/options').then(r => r.json()).then(o => {
             _retoucheOptions = o;
