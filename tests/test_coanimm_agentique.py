@@ -3628,7 +3628,7 @@ def test_live_contrat_interface_serveur():
 
     # Le numéro de version du script a changé : sans cela, le navigateur sert
     # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
-    assert 'app.js?v=20260828-focus' in html, 'cache-bust non mis à jour'
+    assert 'app.js?v=20260828-cles' in html, 'cache-bust non mis à jour'
     ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
 
 
@@ -4180,6 +4180,146 @@ def test_retouche_atteignable_depuis_la_galerie():
     ok("retouche : joignable depuis la galerie, volet déplié et focus déplacé")
 
 
+
+def test_cles_api_toutes_enregistrables():
+    """Six services du catalogue ne pouvaient pas voir leur clé enregistrée.
+
+    Trouvé en cherchant pourquoi Fernando ne voyait plus la génération d'image
+    et de vidéo. `ApiKeysSetting` énumérait ses champs À LA MAIN, et six
+    services du catalogue n'y figuraient pas : groq, cerebras, exa, cohere,
+    voyage, jina.
+
+    Or Pydantic IGNORE en silence un champ qu'il ne connaît pas. L'interface
+    envoyait donc la clé Groq, le serveur répondait « ok », et rien n'était
+    enregistré. Groq et Cerebras étaient inutilisables depuis leur câblage du
+    30/07 — câblés partout, mais sans moyen de leur donner une clé.
+
+    La même liste figée servait à la LECTURE : l'interface croyait ces clés
+    absentes, et grisait leurs options même lorsqu'elles existaient.
+
+    C'est la troisième fois que ce motif coûte cher (adresses de fournisseurs
+    dupliquées, listes de fournisseurs dans app.js, et maintenant les clés).
+    La règle est la même à chaque fois : UNE table, et tout le reste s'en
+    déduit.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from core.services import SERVICES
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    connus = {s['id'] for s in SERVICES}
+    assert len(connus) >= 12, 'catalogue trop maigre (%d)' % len(connus)
+    for attendu in ('groq', 'cerebras', 'exa', 'cohere', 'voyage', 'jina'):
+        assert attendu in connus, '%s absent du catalogue' % attendu
+
+    # (1) Les deux routes se DÉDUISENT du catalogue, elles ne le recopient pas.
+    lecture = main[main.index('async def get_api_keys'):]
+    lecture = lecture[:lecture.index('@app.post')]
+    assert 'SERVICES' in lecture, 'la lecture énumère encore une liste figée'
+    assert "'anthropic','deepseek'" not in lecture, 'liste recopiée restante'
+
+    modele = main[main.index('class ApiKeysSetting'):]
+    modele = modele[:modele.index(chr(10) + 'class ')]
+    assert "'extra': 'allow'" in modele, \
+        'sans extra=allow, Pydantic jette en silence les clés inconnues'
+    assert 'SERVICES' in modele, 'le filtre doit s’appuyer sur le catalogue'
+
+    # (2) La preuve fonctionnelle, sur une SOURCE SIMULÉE : une clé Groq
+    #     envoyée doit être retenue. C'est ce qui ne marchait pas.
+    espace = {'SERVICES': SERVICES}
+    corps = modele[modele.index('    def cles_utiles'):]
+    corps = 'def cles_utiles(self):' + corps[corps.index('\n'):]
+    corps = corps.replace('from core.services import SERVICES as _CATALOGUE',
+                          '_CATALOGUE = SERVICES')
+    corps = corps.replace('self.model_dump() if hasattr(self, \'model_dump\') else self.dict()',
+                          'self')
+
+    class _Faux(dict):
+        pass
+    exec(compile(corps, 'simule', 'exec'), espace)
+    fn = espace['cles_utiles']
+    envoye = _Faux({'groq': 'gsk_x', 'cerebras': 'csk_y', 'gemini': '   ',
+                    'inconnu': 'z', 'exa': 'e'})
+    retenues = fn(envoye)
+    assert set(retenues) == {'groq', 'cerebras', 'exa'}, retenues
+    assert 'gemini' not in retenues, 'une clé vide ne doit pas écraser l’existante'
+    assert 'inconnu' not in retenues, 'un service hors catalogue ne doit pas entrer'
+
+    # (3) La réponse DIT ce qui a été retenu. C'est précisément ce qui manquait
+    #     pour s'apercevoir que six services partaient à la poubelle.
+    ecriture = main[main.index('async def save_api_keys'):]
+    ecriture = ecriture[:ecriture.index(chr(10) + '@app')]
+    assert 'enregistrees' in ecriture, \
+        'répondre « ok » sans dire quoi a caché le défaut pendant un mois'
+
+    # (4) Chaque `data-needs-key` de la page désigne un service RÉEL. Un nom qui
+    #     ne correspond à rien laisse l'élément grisé pour toujours, en
+    #     silence — c'était le cas de « stability » (le catalogue dit
+    #     « stability_ai »).
+    demandees = set(re.findall(r'data-needs-key="([a-z_]+)"', html))
+    assert demandees, 'aucun data-needs-key relevé : le test ne vérifie rien'
+    orphelines = sorted(demandees - connus)
+    assert not orphelines, \
+        'clés demandées par la page mais absentes du catalogue : %s' % orphelines
+    ok("clés API : les %d services du catalogue sont enregistrables et vus"
+       % len(connus))
+
+
+def test_menu_plus_dit_ou_il_mene():
+    """Une porte doit annoncer ce qu'il y a derrière.
+
+    Fernando, cherchant la génération d'image et de vidéo : « il me semblait
+    que fut un temps il y avait aussi un moteur pour générer une image, une
+    vidéo, et je ne vois plus rien de tout ça ». Rien n'avait été retiré : le
+    studio vit dans le menu « + », dont le nom accessible était « Ajouter ».
+
+    Ce n'est pas un défaut de code — tout marchait. C'est un défaut de nom, et
+    il ne se voit que si l'on navigue à l'oreille : le titre de survol disait
+    bien « Ajouter un fichier, créer une image ou une vidéo », mais un
+    aria-label écrase le titre pour le lecteur d'écran.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    bouton = html[html.index('id="upload-btn"'):]
+    bouton = bouton[:bouton.index('>') + 1]
+    m = re.search(r'aria-label="([^"]+)"', bouton)
+    assert m, 'le bouton « + » n’a pas de nom accessible'
+    nom = m.group(1).lower()
+    assert nom != 'ajouter', 'nom accessible trop pauvre : rien ne dit où il mène'
+    for mot in ('image', 'vidéo'):
+        assert mot in nom, '« %s » manque au nom du bouton « + »' % mot
+    # ... mais COURT. Les deux exigences se tiennent : ce bouton est
+    # traversé en permanence, et un nom de cinquante caractères y coûte du
+    # temps à chaque passage. Règle posée par Fernando le 30/07 sur le
+    # bouton Musique, et vérifiée par test_accessibilite_des_medias.
+    assert len(m.group(1)) <= 30, \
+        'nom accessible trop long (%d car.) : il sera lu à chaque passage' % len(m.group(1))
+
+    # Un menu déroulant doit dire s'il est ouvert, et le dire VRAIMENT.
+    assert 'aria-expanded' in bouton, 'aria-expanded absent du bouton de menu'
+    assert "btn.setAttribute('aria-expanded'" in js, \
+        'aria-expanded posé une fois pour toutes mentirait dès la première ouverture'
+    # On regarde AUTOUR de la mise à jour elle-même, pas à la première
+    # occurrence du mot dans le fichier : aria-expanded sert ailleurs.
+    _zone = js[js.index("btn.setAttribute('aria-expanded'") - 700:]
+    _zone = _zone[:1400]
+    assert 'MutationObserver' in _zone, \
+        'cinq endroits ouvrent ou ferment ce menu : les suivre un par un en rate un'
+
+    # L'entrée du studio dit ce qu'on y fait, pas seulement son nom, et annonce
+    # son raccourci.
+    entree = html[html.index('id="plus-studio"'):]
+    entree = entree[:entree.index('</button>')]
+    for mot in ('image', 'vidéo'):
+        assert mot in entree.lower(), '« %s » manque à l’entrée du studio' % mot
+    assert 'aria-keyshortcuts="Alt+Shift+I"' in entree, \
+        'le raccourci du studio doit être annoncé là où on le trouve'
+    ok("menu « + » : son nom dit où il mène, et son état est vrai")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -4233,6 +4373,8 @@ if __name__ == '__main__':
                test_retouche_aiguillage, test_retouche_operations_locales,
                test_retouche_cablee_et_honnete,
                test_focus_suit_l_ouverture,
-               test_retouche_atteignable_depuis_la_galerie]:
+               test_retouche_atteignable_depuis_la_galerie,
+               test_cles_api_toutes_enregistrables,
+               test_menu_plus_dit_ou_il_mene]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

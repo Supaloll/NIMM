@@ -8511,6 +8511,19 @@ function setupUpload() {
     // Clic en dehors → ferme le menu
     document.addEventListener('click', () => menu.classList.add('hidden'));
 
+    // aria-expanded doit dire la VÉRITÉ : cinq endroits ouvrent ou ferment ce
+    // menu. Plutôt que d'ajouter la mise à jour aux cinq — et d'en oublier un
+    // au prochain ajout — on observe la classe, qui est le seul juge.
+    try {
+        var _majDeplie = function () {
+            btn.setAttribute('aria-expanded',
+                             menu.classList.contains('hidden') ? 'false' : 'true');
+        };
+        new MutationObserver(_majDeplie).observe(
+            menu, { attributes: true, attributeFilter: ['class'] });
+        _majDeplie();
+    } catch (e) { /* sans MutationObserver, on garde l'état initial */ }
+
     // Option 1 : Joindre un fichier
     document.getElementById('plus-attach')?.addEventListener('click', () => {
         menu.classList.add('hidden');

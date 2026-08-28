@@ -449,15 +449,27 @@ class TabCreate(BaseModel):
     thread_id: Optional[str] = None
 
 class ApiKeysSetting(BaseModel):
-    anthropic:     Optional[str] = None
-    deepseek:      Optional[str] = None
-    gemini:        Optional[str] = None
-    openai:        Optional[str] = None
-    openrouter:    Optional[str] = None
-    mistral:       Optional[str] = None
-    stability_ai:  Optional[str] = None
-    brave:         Optional[str] = None
-    tavily:        Optional[str] = None
+    """Les clés que l'on peut enregistrer.
+
+    LE DÉFAUT QUE CE MODÈLE CACHAIT
+    La liste était écrite à la main, et six services du catalogue n'y
+    figuraient pas : groq, cerebras, exa, cohere, voyage, jina. Pydantic
+    IGNORE en silence un champ qu'il ne connaît pas — l'interface envoyait
+    donc la clé Groq, le serveur répondait « ok », et rien n'était enregistré.
+    Groq et Cerebras étaient inutilisables depuis leur câblage du 30/07.
+
+    Le modèle s'appuie désormais sur `core/services.py`, seul catalogue.
+    Ajouter un service ne peut plus laisser sa clé sur le quai.
+    """
+    model_config = {'extra': 'allow'}
+
+    def cles_utiles(self) -> dict:
+        """Les couples service/clé effectivement fournis, catalogue à l'appui."""
+        from core.services import SERVICES as _CATALOGUE
+        connus = {s['id'] for s in _CATALOGUE}
+        brut = self.model_dump() if hasattr(self, 'model_dump') else self.dict()
+        return {k: v for k, v in brut.items()
+                if k in connus and isinstance(v, str) and v.strip()}
 
 class VisionProviderSetting(BaseModel):
     provider: str
@@ -4322,17 +4334,29 @@ async def set_memoire_mode(req: SettingValue):
 
 @app.get("/api/settings/api-keys")
 async def get_api_keys():
+    """Quelles clés sont configurées — jamais leur valeur.
+
+    La liste vient du CATALOGUE, pas d'une énumération recopiée ici. Celle
+    qu'elle remplace omettait groq, cerebras, exa, cohere, voyage et jina :
+    l'interface les croyait donc toujours absentes, et grisait leurs options
+    même quand la clé existait.
+    """
+    from core.services import SERVICES as _CATALOGUE
     keys = _db_get_api_keys()
-    # Retourner seulement si présente (booléen) — jamais la clé elle-même
-    return {p: bool(keys.get(p)) for p in ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily']}
+    return {s['id']: bool(keys.get(s['id'])) for s in _CATALOGUE}
 
 @app.post("/api/settings/api-keys")
 async def save_api_keys(req: ApiKeysSetting):
+    """Enregistre les clés fournies, et DIT lesquelles ont été retenues.
+
+    Rendre la liste plutôt qu'un simple « ok » : c'est exactement ce qui
+    manquait pour s'apercevoir que six services étaient ignorés en silence.
+    """
     existing = _db_get_api_keys()
-    updates = req.dict(exclude_none=True)
-    existing.update({k: v for k, v in updates.items() if v})
+    utiles = req.cles_utiles()
+    existing.update(utiles)
     _db_set_api_keys(existing)
-    return {"status": "ok"}
+    return {"status": "ok", "enregistrees": sorted(utiles)}
 
 
 @app.get("/api/settings/global-keys")

@@ -132,11 +132,11 @@
                 <span id="draft-indicator" hidden aria-live="polite" style="font-size:0.72rem;color:var(--text-muted);padding:0 4px 2px 4px;align-self:flex-end;"></span>
                 <div id="input-actions">
                     <div id="plus-menu-wrap">
-                        <button id="upload-btn" title="Ajouter un fichier, créer une image ou une vidéo" aria-label="Ajouter" aria-haspopup="menu">+</button>
+                        <button id="upload-btn" title="Ajouter un fichier, créer une image ou une vidéo" aria-label="Fichier, image ou vidéo" aria-haspopup="menu" aria-expanded="false">+</button>
                         <div id="plus-menu" class="hidden" role="menu" aria-label="Actions fichier">
                             <button id="plus-attach" class="plus-menu-item" role="menuitem" aria-label="Joindre un fichier">📎 Joindre un fichier</button>
                             <button id="plus-imagegen" class="plus-menu-item" role="menuitem" aria-label="Créer une image">🖼️ Créer une image</button>
-                            <button id="plus-studio" class="plus-menu-item" role="menuitem" aria-label="Studio image et vidéo" hidden>🎬 Studio image et vidéo</button>
+                            <button id="plus-studio" class="plus-menu-item" role="menuitem" aria-label="Studio image, vidéo, retouche" aria-keyshortcuts="Alt+Shift+I" hidden>🎬 Studio — image, vidéo, retouche</button>
                             <button id="plus-vibe-doc" class="plus-menu-item" role="menuitem" aria-label="Analyser un document avec Vibe" hidden>📄 Document (Vibe)</button>
                             <input type="file" id="vibe-doc-input" accept=".pdf,.txt,.md,.csv,.py,.json,.docx,image/*" style="display:none" aria-hidden="true">
                         </div>
@@ -1813,7 +1813,7 @@ Analyse les sentiments de : ..."
                 <option value="gemini"     data-needs-key="gemini">🟡 Gemini (Nano Banana)</option>
                 <option value="mistral"    data-needs-key="mistral">🔵 Mistral</option>
                 <option value="openai"     data-needs-key="openai">🔴 OpenAI (DALL–E)</option>
-                <option value="stability"  data-needs-key="stability">Stability AI</option>
+                <option value="stability"  data-needs-key="stability_ai">Stability AI</option>
             </select>
 
             <span class="routing-label">🤖 CoaNIMM</span>
@@ -2443,7 +2443,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260828-focus"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260828-cles"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
