@@ -1,0 +1,69 @@
+TEST MOOD INTÉGRATION — chaîne complète NIMM
+======================================================================
+
+[NÉGATIF — Colère]
+Émotion attendue : colere | Dominant détecté : ? | ⚠️
+MSG 1 : Ils m'ont encore fait le coup ! Je suis hors de moi, j'en peux plus de ces incompétents.
+REP 1 : [ERREUR HTTP 500] Internal Server Error
+
+MSG 2 : T'as une minute ?
+REP 2 : [ERREUR HTTP 500] Internal Server Error
+
+Attendu : Réponse naturelle type ami — pas de 'Je comprends que', pas de coach, curiosité sincère.
+----------------------------------------------------------------------
+
+[NÉGATIF — Tristesse]
+Émotion attendue : tristesse | Dominant détecté : ? | ⚠️
+MSG 1 : Je me sens complètement vide. Rien ne va, j'ai l'impression que tout le monde s'en fout.
+REP 1 : [ERREUR HTTP 500] Internal Server Error
+
+MSG 2 : Je sais pas quoi faire de ma soirée.
+REP 2 : [ERREUR HTTP 500] Internal Server Error
+
+Attendu : Ton doux, ancré, pas thérapeutique.
+----------------------------------------------------------------------
+
+[POSITIF — Joie]
+Émotion attendue : joie | Dominant détecté : ? | ⚠️
+MSG 1 : C'est incroyable ! J'ai réussi, après tout ce temps ! Je suis au max !
+REP 1 : [ERREUR HTTP 500] Internal Server Error
+
+MSG 2 : Bon, je fais quoi maintenant ?
+REP 2 : [ERREUR HTTP 500] Internal Server Error
+
+Attendu : Énergie sincère, curiosité, pas de coach motivationnel.
+----------------------------------------------------------------------
+
+[POSITIF — Confiance]
+Émotion attendue : confiance | Dominant détecté : ? | ⚠️
+MSG 1 : Je sais que je vais y arriver. J'ai tout préparé, je me sens vraiment solide là-dessus.
+REP 1 : [ERREUR HTTP 500] Internal Server Error
+
+MSG 2 : Tu penses que c'est une bonne idée de leur en parler maintenant ?
+REP 2 : [ERREUR HTTP 500] Internal Server Error
+
+Attendu : Accompagne l'élan sans écraser la question.
+----------------------------------------------------------------------
+
+[NEUTRE — Surprise]
+Émotion attendue : surprise | Dominant détecté : ? | ⚠️
+MSG 1 : Attends... ils ont vraiment fait ça ? Je m'y attendais vraiment pas du tout.
+REP 1 : [ERREUR HTTP 500] Internal Server Error
+
+MSG 2 : Et toi tu en penses quoi ?
+REP 2 : [ERREUR HTTP 500] Internal Server Error
+
+Attendu : Réaction naturelle, une question concrète, pas de validation creuse.
+----------------------------------------------------------------------
+
+[NEUTRE — Anticipation]
+Émotion attendue : anticipation | Dominant détecté : ? | ⚠️
+MSG 1 : J'attends ce moment depuis des semaines. Je sais pas exactement ce qui va se passer mais je suis tendu.
+REP 1 : [ERREUR HTTP 500] Internal Server Error
+
+MSG 2 : C'est dans trois jours.
+REP 2 : [ERREUR HTTP 500] Internal Server Error
+
+Attendu : Aide à démêler, reste factuel, pas dramatique.
+----------------------------------------------------------------------
+

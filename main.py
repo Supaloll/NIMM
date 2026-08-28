@@ -4598,7 +4598,7 @@ async def list_masks():
                 name  = data.get('name',  mask_id.capitalize())
                 emoji = data.get('emoji', '')
                 label = f"{name} {emoji}".strip()
-                result.append({'id': mask_id, 'label': label, 'voice': data.get('voice', '')})
+                result.append({'id': mask_id, 'label': label, 'voice': data.get('voice', ''), 'ghost': bool(data.get('ghost', False))})
             except Exception:
                 result.append({'id': mask_id, 'label': mask_id.capitalize()})
     except Exception:

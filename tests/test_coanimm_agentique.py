@@ -3314,8 +3314,8 @@ def test_fantome_a_la_creation():
     assert 'ghost = false' in js, 'createThread doit accepter le mode fantôme'
     assert "body.ghost            = true" in js
     assert "result.ghost" in js, "l'appelant doit transmettre la case"
-    assert "_ghostBox0.checked = false" in js, \
-        'la case doit repartir décochée : ne rien conserver reste un choix explicite'
+    assert "_syncGhostFromMask();" in js, \
+        'la case repart décochée à l\'ouverture, sauf si le masque présélectionné impose le fantôme'
 
     # (4) Le bouton de la barre a bien disparu, partout.
     assert 'ghost-toggle' not in js and 'ghost-toggle' not in html, \
