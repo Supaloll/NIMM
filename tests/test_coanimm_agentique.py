@@ -2391,19 +2391,25 @@ def test_imagerie_reglee():
     assert "vign.alt = im.alt ||" in app, 'jamais d’alt inventé quand la description manque'
     assert 'zone.readOnly = true' in app, 'la description doit être copiable'
 
-    # (7) UNE SEULE porte pour créer un média : le studio est passé de la barre
-    # du haut au menu « + », là où se prennent déjà les décisions « je crée ».
-    # Trois boutons pour deux idées, c'était trois tabulations pour rien.
+    # (7) UNE SEULE porte pour créer un média. RÈGLE RÉÉCRITE le 28/08.
+    #
+    # Le studio a vécu dans la barre du haut, puis derrière le menu « + »
+    # (30/07), et il vit désormais DANS le panneau Images. Motif du dernier
+    # déménagement : Fernando y a cherché la création d'image et de vidéo trois
+    # fois de suite sans les trouver. Le « + » sert ce qui s'ajoute au message
+    # en cours ; le panneau Images sert ce qui produit et conserve des fichiers.
+    #
+    # Ce qui n'a pas changé et reste vérifié : UNE porte, pas trois.
     assert 'id="toggle-studio"' not in html and 'toggle-studio' not in app, \
-        'le studio ne doit plus avoir de bouton propre dans la barre du haut'
-    assert 'id="plus-studio"' in html, 'il s’ouvre depuis le menu « + »'
-    assert "_btnStudio = document.getElementById('plus-studio')" in app
-    assert "_btnStudio.hidden = !(keys && keys.gemini)" in app, \
-        'toujours caché sans clé : une porte qui ne mène nulle part ne vaut rien'
-    # Le raccourci survit au déménagement — sinon c'est un accès direct perdu
-    assert "'Alt+Shift+I'" in app and 'window._ouvrirStudio' in app
-    assert "if (k === 'i')" in app and '_entree.hidden' in app, \
-        'le raccourci ne doit pas ouvrir un panneau inutilisable'
+        'le studio ne doit pas retrouver un bouton propre dans la barre'
+    assert 'id="studio-modal"' not in html and 'studio-modal' not in app, \
+        'la modale studio a fusionné : plus personne ne doit la chercher'
+    assert 'plus-studio' not in html and 'plus-studio' not in app, \
+        'l’entrée du menu « + » a été retirée avec la fusion'
+    debut_images = html.index('<div id="galerie-modal"')
+    assert html.index('id="studio-image-details"') > debut_images, \
+        'la création d’image doit vivre dans le panneau Images'
+    assert 'window._ouvrirStudio' in app, 'la fonction d’ouverture doit survivre'
     ok("imagerie : réglages complets, rien conservé chez Google, image décrite, une seule porte")
 
 
@@ -3320,7 +3326,20 @@ def test_fantome_a_la_creation():
     # (4) Le bouton de la barre a bien disparu, partout.
     assert 'ghost-toggle' not in js and 'ghost-toggle' not in html, \
         'le bouton fantôme subsiste dans la barre'
-    assert "getElementById('live-toggle')" in js, 'Alt+F doit désigner le mode Live'
+    assert "getElementById('live-toggle')" in js, 'le bouton Live doit être joignable'
+    # Le raccourci a changé le 28/08 : Alt+F seul entrait en concurrence
+    # avec le navigateur. Le mode Live rejoint la famille Alt+Maj, où
+    # vivent déjà tous les panneaux.
+    assert "aria-keyshortcuts', 'Alt+Shift+K'" in js, 'raccourci Live non annoncé'
+    assert "k === 'k'" in js, 'Alt+Maj+K n’est écouté nulle part'
+    assert "case 'f': {   // Alt+F" not in js, 'Alt+F devait être libéré'
+    # Aucune lettre Alt+Maj ne doit servir deux fois : un doublon ferait
+    # gagner le premier arrivé, en silence.
+    _table = set(re.findall(r"^\s{8}'([a-z])': 'toggle-", js, re.M))
+    _apart = set(re.findall(r"if \(k === '([a-z])'\)", js))
+    assert not (_table & _apart), \
+        'lettre Alt+Maj attribuée deux fois : %s' % sorted(_table & _apart)
+    assert len(_table) >= 8 and _apart, 'relevé des raccourcis trop maigre'
 
     # (5) DÉCISION D'INTERFACE : la case n'est PAS dans « Options avancées ».
     #     Une décision de confidentialité ne se cache pas derrière un repli —
@@ -3615,7 +3634,7 @@ def test_live_contrat_interface_serveur():
 
     # Le numéro de version du script a changé : sans cela, le navigateur sert
     # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
-    assert 'app.js?v=20260826-live' in html, 'cache-bust non mis à jour'
+    assert 'app.js?v=20260828-images' in html, 'cache-bust non mis à jour'
     ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
 
 
@@ -3862,6 +3881,538 @@ def test_outils_en_live_cables():
     ok("outils en Live : exécutés hors de la boucle audio, annoncés et écrits")
 
 
+
+def test_retouche_aiguillage():
+    """Découper ou redessiner : ce n'est pas le même travail, ni la même confiance.
+
+    Le dossier « papillons » de Fernando contenait les deux natures, et ses
+    noms de fichiers étaient les consignes : « enlever la dame en arrière-plan
+    avec son sac », mais aussi des recadrages et un agrandissement.
+
+    Confier un recadrage à un modèle génératif est une mauvaise idée : il ne
+    DÉCOUPE pas, il REDESSINE — tous les pixels changent, les visages avec.
+    Inversement, aucune bibliothèque locale ne fera disparaître la dame.
+
+    Ce test vérifie l'aiguillage sur les consignes RÉELLES du dossier, plus les
+    formulations courantes des deux catégories.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from modules import retouche as R
+
+    # Les trois consignes réelles, telles qu'elles étaient écrites.
+    reelles = [
+        "Il faut garder le papillon qui est au premier plan, posé sur un bras, "
+        "mais si possible sans voir le bras, et surtout enlever la dame en "
+        "arrière-plan avec son sac",
+        "Il faut essayer d'enlever la barre en fer entre les deux nichoirs",
+        "On voit un bout du mur, il faut l'enlever",
+    ]
+    for c in reelles:
+        assert R.analyser(c)['voie'] == 'modele', \
+            'consigne inventive envoyée en local : %s' % c[:50]
+
+    exactes = {
+        "recadre au format carré": 'recadrer',
+        "recadre en 16:9": 'recadrer',
+        "rogne de 10 %": 'recadrer',
+        "enlève les bords blancs": 'recadrer',
+        "pivote à droite": 'rotation',
+        "tourne l'image de 90 degrés": 'rotation',
+        "redresse la photo": 'redresser',
+        "retourne en miroir": 'miroir',
+        "agrandis ×2": 'echelle',
+        "agrandis par 4": 'echelle',
+        "réduis de moitié": 'echelle',
+        "redimensionne à 1600 px": 'largeur',
+        "éclaircis un peu": 'luminosite',
+        "assombris beaucoup": 'luminosite',
+        "plus de contraste": 'contraste',
+        "rends-la plus nette": 'nettete',
+        "mets-la en noir et blanc": 'gris',
+    }
+    for c, op in exactes.items():
+        a = R.analyser(c)
+        assert a['voie'] == 'local', 'partie au modèle pour rien : %s' % c
+        assert op in [o['op'] for o in a['operations']], \
+            '%s : opération %s non reconnue (%s)' % (c, op, a['operations'])
+
+    # « enlève » ne rend pas une demande inventive : « enlève les bords » est
+    # un rognage. Sans cette exception, un simple recadrage partait au modèle.
+    assert R.analyser("enlève les bords blancs")['voie'] == 'local'
+    assert R.analyser("enlève la dame")['voie'] == 'modele'
+
+    # MÉLANGE : tout part au modèle. Faire la moitié localement puis l'autre
+    # moitié autrement donnerait un résultat que personne ne saurait décrire.
+    m = R.analyser("recadre en carré et enlève la dame")
+    assert m['voie'] == 'modele' and 'mélange' in m['raison']
+
+    # Rien de reconnu, ou rien du tout : au modèle, et il le dit.
+    assert R.analyser("fais quelque chose de joli")['voie'] == 'modele'
+    assert R.analyser("")['voie'] == 'modele'
+    assert R.analyser("")['raison']
+
+    # « un peu » et « beaucoup » ne demandent pas la même chose.
+    doux = R.analyser("éclaircis un peu")['operations'][0]['facteur']
+    fort = R.analyser("éclaircis beaucoup")['operations'][0]['facteur']
+    assert fort > doux, 'la nuance d’intensité est ignorée'
+
+    # La raison est TOUJOURS remplie : c'est elle qui sera lue à l'utilisateur.
+    for c in list(exactes) + reelles + ["", "n'importe quoi"]:
+        assert R.analyser(c)['raison'], 'raison vide pour : %r' % c[:40]
+    ok("retouche : les consignes réelles du dossier papillons sont bien aiguillées")
+
+
+def test_retouche_operations_locales():
+    """Les opérations exactes le sont vraiment, et se racontent.
+
+    On fabrique une image en mémoire : aucun fichier du projet n'est touché.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from modules import retouche as R
+    try:
+        from PIL import Image
+    except ImportError:
+        ok("retouche : Pillow absent, opérations locales non vérifiées")
+        return
+
+    import io as _io
+    tampon = _io.BytesIO()
+    Image.new('RGB', (400, 300), (120, 60, 30)).save(tampon, format='JPEG')
+    src = tampon.getvalue()
+
+    def dims(octets):
+        return Image.open(_io.BytesIO(octets)).size
+
+    # Recadrage au carré : la plus petite dimension commande.
+    res, mime, journal, err = R.appliquer(src, [{'op': 'recadrer', 'ratio': (1, 1)}])
+    assert not err and dims(res) == (300, 300), dims(res)
+    assert mime == 'image/png', 'le sans-perte est requis pour enchaîner les reprises'
+
+    # Rotation : les dimensions s'échangent.
+    res, _, _, err = R.appliquer(src, [{'op': 'rotation', 'angle': 90}])
+    assert not err and dims(res) == (300, 400)
+
+    # Agrandissement : facteur exact, et le journal DIT que rien n'est inventé.
+    res, _, journal, err = R.appliquer(src, [{'op': 'echelle', 'facteur': 2.0}])
+    assert not err and dims(res) == (800, 600)
+    assert any('sans détail inventé' in l for l in journal), \
+        'un agrandissement simple ne doit pas se faire passer pour mieux'
+
+    # Largeur imposée : la hauteur suit la proportion.
+    res, _, _, err = R.appliquer(src, [{'op': 'largeur', 'px': 200}])
+    assert not err and dims(res) == (200, 150)
+
+    # Les opérations s'enchaînent dans l'ordre demandé.
+    res, _, journal, err = R.appliquer(src, [{'op': 'echelle', 'facteur': 2.0},
+                                             {'op': 'recadrer', 'ratio': (1, 1)}])
+    assert not err and dims(res) == (600, 600)
+
+    # Le journal se termine TOUJOURS par les dimensions et le poids : sans les
+    # voir, c'est la seule preuve que l'opération a eu lieu.
+    assert any('au départ' in l and 'arrivée' in l for l in journal)
+    assert any('sans perte' in l for l in journal)
+
+    # Accord en genre : « contraste augmentée » était faux.
+    _, _, journal, _ = R.appliquer(src, [{'op': 'contraste', 'facteur': 1.3}])
+    assert any('contraste augmenté' in l and 'augmentée' not in l for l in journal), journal
+
+    # Aucune fonction ne lève : les erreurs reviennent en français.
+    assert 'illisible' in R.appliquer(b'pas une image', [{'op': 'gris'}])[3]
+    assert R.appliquer(b'', [{'op': 'gris'}])[3]
+    assert R.appliquer(src, [])[3], 'une liste vide doit être signalée'
+    ok("retouche locale : exacte au pixel, et racontée dimension par dimension")
+
+
+def test_retouche_cablee_et_honnete():
+    """Le câblage, et la règle qui compte : ne jamais faire passer la consigne
+    pour une description.
+
+    C'est le même piège que pour les images créées, corrigé le 29/07 : on ne
+    voit pas le résultat, donc la phrase qui le décrit EST le résultat. Servir
+    la demande à la place de la description, c'est répondre à côté sans que
+    personne puisse s'en apercevoir.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) Contrat interface / serveur.
+    app = set(re.findall(r"/api/retouche/[a-z_]+", js))
+    dec = set(re.findall(r"@app\.(?:get|post)\(\"(/api/retouche/[a-z_]+)\"", main))
+    assert app and not (app - dec), 'routes appelées sans exister : %s' % sorted(app - dec)
+    ids_js = set(re.findall(r"\$\('(studio-retouche-[a-z-]+)'\)", js))
+    ids_html = set(re.findall(r'id="(studio-retouche-[a-z-]+)"', html))
+    assert ids_js and not (ids_js - ids_html), \
+        'éléments absents de la page : %s' % sorted(ids_js - ids_html)
+
+    # (2) La VOIE est annoncée AVANT de lancer : savoir si l'image sera
+    #     découpée ou redessinée change la confiance qu'on lui accorde.
+    assert '/api/retouche/analyser' in js and 'studio-retouche-voie' in html
+    voie = html[html.index('id="studio-retouche-voie"'):][:220]
+    assert 'aria-live="polite"' in voie, 'l’aiguillage doit être annoncé'
+
+    # (3) La description porte sur l'image OBTENUE, jamais sur la consigne.
+    route = main[main.index('async def retouche_appliquer'):]
+    route = route[:route.index(chr(10) + '@app') if chr(10) + '@app' in route else len(route)]
+    assert '_vibe_describe_image' in route, 'le résultat n’est pas décrit'
+    assert 'octets_res' in route, 'la description doit partir des octets OBTENUS'
+    assert '"description": consigne' not in route and "'description': consigne" not in route
+
+    # (4) Le commentaire du modèle N'EST PAS une description : il est rendu à
+    #     part, pour qu'on ne le prenne pas pour ce qu'il n'est pas.
+    assert '"commentaire"' in route
+
+    # (5) Une description absente est DITE, pas passée sous silence.
+    assert 'sans description disponible' in js, \
+        'une alternative manquante doit s’annoncer'
+
+    # (6) Le compte rendu est copiable : c'est le produit du panneau pour
+    #     quelqu'un qui ne voit pas l'image.
+    cr = html[html.index('id="studio-retouche-compte-rendu"') - 200:]
+    cr = cr[:cr.index('</textarea>')]
+    assert '<textarea' in cr and 'readonly' in cr, \
+        'le compte rendu doit être un champ de texte copiable'
+
+    # (7) Pillow travaille en bloquant : hors de la boucle.
+    assert 'asyncio.to_thread(' in route, 'une grande image figerait le serveur'
+
+    # (8) Sans clé Gemini, la voie inventive refuse en EXPLIQUANT ce qui reste
+    #     possible, au lieu d'échouer sèchement.
+    assert 'recadrer, pivoter, agrandir' in route
+
+    # (9) La dépendance est déclarée.
+    req = open(os.path.join(racine, 'requirements.txt'), encoding='utf-8').read()
+    assert 'Pillow' in req, 'Pillow absent de requirements.txt'
+
+    # (10) Le panneau est bien dans le studio, avec ses étiquettes.
+    for ident in ('studio-retouche-fichier', 'studio-retouche-consigne',
+                  'studio-retouche-compte-rendu'):
+        assert ('for="%s"' % ident) in html, 'commande sans étiquette : %s' % ident
+    ok("retouche : câblée, voie annoncée d’avance, résultat décrit honnêtement")
+
+
+
+def test_focus_suit_l_ouverture():
+    """Ouvrir un panneau doit y emmener le focus. Au clic comme au clavier.
+
+    Défaut signalé par Fernando le 28/08 : en activant le bouton « Galerie
+    d'images », le panneau s'ouvrait mais le focus restait sur le bouton. Au
+    lecteur d'écran, rien ne se passe — il faut deviner qu'un panneau est
+    apparu, puis aller le chercher à la tabulation.
+
+    La cause tenait à l'histoire du code : le déplacement du focus n'existait
+    QUE dans le gestionnaire de raccourci Alt+Maj. Chaque bouton avait son
+    propre gestionnaire de clic, écrit à un moment différent, et aucun ne s'en
+    occupait. Onze panneaux, onze occasions d'oublier.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) Le clic déplace le focus, et pas seulement le raccourci.
+    assert 'LE FOCUS SUIT AUSSI LE CLIC' in js
+    bloc = js[js.index('LE FOCUS SUIT AUSSI LE CLIC'):]
+    bloc = bloc[:bloc.index('})();')]
+    assert "document.addEventListener('click'" in bloc, \
+        'le clic ne déclenche aucun déplacement de focus'
+    assert 'focusModal(' in bloc
+
+    # (2) PAR DÉLÉGATION, et c'est nécessaire : trois de ces boutons n'existent
+    #     pas dans la page. Ils sont créés par renderSidebar(), qui les recrée
+    #     à chaque rendu — un gestionnaire posé sur l'élément disparaîtrait.
+    assert 'closest(' in bloc, \
+        'sans délégation, les boutons créés dynamiquement ne sont pas couverts'
+    crees = ['toggle-memory', 'toggle-prompt-library', 'toggle-search-conversations']
+    ids_html = set(re.findall(r'id="([a-zA-Z0-9_-]+)"', html))
+    absents = [b for b in crees if b not in ids_html]
+    assert absents, ("ces boutons sont désormais dans la page : la justification "
+                     "de la délégation a vieilli, relire le commentaire")
+    for b in absents:
+        assert ("id        = '%s'" % b) in js or ("id = '%s'" % b) in js, \
+            '%s n’est ni dans la page ni créé par le script' % b
+
+    # (3) TOUS les panneaux de la table sont couverts — pas une liste écrite à
+    #     la main, qui laisserait le douzième derrière.
+    assert 'Object.keys(SHORTCUTS)' in bloc, \
+        'la couverture doit se déduire de la table, pas être recopiée'
+
+    # (4) Chaque panneau attendu existe vraiment : un appariement cassé ne
+    #     lève pas, il ne fait simplement rien — le pire des cas.
+    table = dict(re.findall(r"^\s{8}'([a-z])': '(toggle-[a-z-]+)'", js, re.M))
+    assert len(table) >= 8, 'relevé de la table trop maigre (%d)' % len(table)
+    casses = []
+    for _, bouton in table.items():
+        panneau = ('history-panel' if bouton == 'toggle-history'
+                   else bouton.replace('toggle-', '') + '-modal')
+        if panneau not in ids_html:
+            casses.append((bouton, panneau))
+    assert not casses, 'panneaux introuvables : %s' % casses
+
+    # (5) À la fermeture, le focus REVIENT d'où il venait. Sans cela on se
+    #     retrouve en haut de la page sans savoir où l'on était.
+    assert 'MutationObserver' in bloc, \
+        'la fermeture passe par plusieurs chemins : les suivre un par un les rate'
+    assert '_ouvreurs' in bloc
+    ok("focus : tout panneau ouvert reçoit le focus, et le rend en se fermant")
+
+
+def test_retouche_atteignable_depuis_la_galerie():
+    """L'outil doit être là où on le cherche — et il y est maintenant POUR DE BON.
+
+    Fernando a cherché « Manipuler une image » dans la galerie, et c'est
+    logique : c'est l'endroit où l'on pense aux images qu'on possède déjà.
+
+    Première réponse (28/08, matin) : un bouton dans la galerie qui renvoyait
+    au studio. Insuffisant — il a redemandé, en cherchant cette fois la
+    création d'image et de vidéo au même endroit. Une passerelle ne répare pas
+    un mauvais rangement, elle l'avoue.
+
+    Seconde réponse : le studio ENTRE dans le panneau. Plus de renvoi, plus de
+    porte intermédiaire. Ce test vérifie donc l'inverse de ce qu'il vérifiait :
+    la passerelle ne doit PLUS exister, et la retouche doit être sur place.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    assert 'galerie-vers-retouche' not in html and 'galerie-vers-retouche' not in js, \
+        'la passerelle n’a plus lieu d’être : la retouche est dans le panneau'
+
+    debut = html.index('<div id="galerie-modal"')
+    assert html.index('id="studio-retouche-details"') > debut, \
+        'la retouche doit vivre DANS le panneau Images'
+
+    # Le volet reste câblé après le déménagement — c'est le risque de ce genre
+    # de fusion : le code survit, la page change, et rien ne lève.
+    for route in ('/api/retouche/options', '/api/retouche/analyser',
+                  '/api/retouche/appliquer'):
+        assert route in js, 'route %s plus appelée après la fusion' % route
+    for ident in ('studio-retouche-btn', 'studio-retouche-consigne',
+                  'studio-retouche-fichier', 'studio-retouche-reprendre'):
+        assert ("$('%s')" % ident) in js, '%s n’est plus câblé' % ident
+    corps = js[js.index('function _retoucheCabler'):]
+    corps = corps[:corps.index(chr(10) + '    }' + chr(10))]
+    assert 'addEventListener' in corps, \
+        'le corps de _retoucheCabler est vide : le panneau ne répondrait à rien'
+    ok("retouche : dans le panneau Images, sans passerelle, et toujours câblée")
+
+def test_cles_api_toutes_enregistrables():
+    """Six services du catalogue ne pouvaient pas voir leur clé enregistrée.
+
+    Trouvé en cherchant pourquoi Fernando ne voyait plus la génération d'image
+    et de vidéo. `ApiKeysSetting` énumérait ses champs À LA MAIN, et six
+    services du catalogue n'y figuraient pas : groq, cerebras, exa, cohere,
+    voyage, jina.
+
+    Or Pydantic IGNORE en silence un champ qu'il ne connaît pas. L'interface
+    envoyait donc la clé Groq, le serveur répondait « ok », et rien n'était
+    enregistré. Groq et Cerebras étaient inutilisables depuis leur câblage du
+    30/07 — câblés partout, mais sans moyen de leur donner une clé.
+
+    La même liste figée servait à la LECTURE : l'interface croyait ces clés
+    absentes, et grisait leurs options même lorsqu'elles existaient.
+
+    C'est la troisième fois que ce motif coûte cher (adresses de fournisseurs
+    dupliquées, listes de fournisseurs dans app.js, et maintenant les clés).
+    La règle est la même à chaque fois : UNE table, et tout le reste s'en
+    déduit.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from core.services import SERVICES
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    connus = {s['id'] for s in SERVICES}
+    assert len(connus) >= 12, 'catalogue trop maigre (%d)' % len(connus)
+    for attendu in ('groq', 'cerebras', 'exa', 'cohere', 'voyage', 'jina'):
+        assert attendu in connus, '%s absent du catalogue' % attendu
+
+    # (1) Les deux routes se DÉDUISENT du catalogue, elles ne le recopient pas.
+    lecture = main[main.index('async def get_api_keys'):]
+    lecture = lecture[:lecture.index('@app.post')]
+    assert 'SERVICES' in lecture, 'la lecture énumère encore une liste figée'
+    assert "'anthropic','deepseek'" not in lecture, 'liste recopiée restante'
+
+    modele = main[main.index('class ApiKeysSetting'):]
+    modele = modele[:modele.index(chr(10) + 'class ')]
+    assert "'extra': 'allow'" in modele, \
+        'sans extra=allow, Pydantic jette en silence les clés inconnues'
+    assert 'SERVICES' in modele, 'le filtre doit s’appuyer sur le catalogue'
+
+    # (2) La preuve fonctionnelle, sur une SOURCE SIMULÉE : une clé Groq
+    #     envoyée doit être retenue. C'est ce qui ne marchait pas.
+    espace = {'SERVICES': SERVICES}
+    corps = modele[modele.index('    def cles_utiles'):]
+    corps = 'def cles_utiles(self):' + corps[corps.index('\n'):]
+    corps = corps.replace('from core.services import SERVICES as _CATALOGUE',
+                          '_CATALOGUE = SERVICES')
+    corps = corps.replace('self.model_dump() if hasattr(self, \'model_dump\') else self.dict()',
+                          'self')
+
+    class _Faux(dict):
+        pass
+    exec(compile(corps, 'simule', 'exec'), espace)
+    fn = espace['cles_utiles']
+    envoye = _Faux({'groq': 'gsk_x', 'cerebras': 'csk_y', 'gemini': '   ',
+                    'inconnu': 'z', 'exa': 'e'})
+    retenues = fn(envoye)
+    assert set(retenues) == {'groq', 'cerebras', 'exa'}, retenues
+    assert 'gemini' not in retenues, 'une clé vide ne doit pas écraser l’existante'
+    assert 'inconnu' not in retenues, 'un service hors catalogue ne doit pas entrer'
+
+    # (3) La réponse DIT ce qui a été retenu. C'est précisément ce qui manquait
+    #     pour s'apercevoir que six services partaient à la poubelle.
+    ecriture = main[main.index('async def save_api_keys'):]
+    ecriture = ecriture[:ecriture.index(chr(10) + '@app')]
+    assert 'enregistrees' in ecriture, \
+        'répondre « ok » sans dire quoi a caché le défaut pendant un mois'
+
+    # (4) Chaque `data-needs-key` de la page désigne un service RÉEL. Un nom qui
+    #     ne correspond à rien laisse l'élément grisé pour toujours, en
+    #     silence — c'était le cas de « stability » (le catalogue dit
+    #     « stability_ai »).
+    demandees = set(re.findall(r'data-needs-key="([a-z_]+)"', html))
+    assert demandees, 'aucun data-needs-key relevé : le test ne vérifie rien'
+    orphelines = sorted(demandees - connus)
+    assert not orphelines, \
+        'clés demandées par la page mais absentes du catalogue : %s' % orphelines
+    ok("clés API : les %d services du catalogue sont enregistrables et vus"
+       % len(connus))
+
+
+def test_menu_plus_dit_ou_il_mene():
+    """Une porte doit annoncer ce qu'il y a derrière.
+
+    Fernando, cherchant la génération d'image et de vidéo : « il me semblait
+    que fut un temps il y avait aussi un moteur pour générer une image, une
+    vidéo, et je ne vois plus rien de tout ça ». Rien n'avait été retiré : le
+    studio vit dans le menu « + », dont le nom accessible était « Ajouter ».
+
+    Ce n'est pas un défaut de code — tout marchait. C'est un défaut de nom, et
+    il ne se voit que si l'on navigue à l'oreille : le titre de survol disait
+    bien « Ajouter un fichier, créer une image ou une vidéo », mais un
+    aria-label écrase le titre pour le lecteur d'écran.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    bouton = html[html.index('id="upload-btn"'):]
+    bouton = bouton[:bouton.index('>') + 1]
+    m = re.search(r'aria-label="([^"]+)"', bouton)
+    assert m, 'le bouton « + » n’a pas de nom accessible'
+    nom = m.group(1).lower()
+    assert nom != 'ajouter', 'nom accessible trop pauvre : rien ne dit où il mène'
+    # RÈGLE AJUSTÉE le 28/08 au soir : le « + » ne mène plus à la vidéo ni au
+    # studio, qui ont rejoint le panneau Images. Son nom ne doit donc PAS les
+    # promettre — un nom qui annonce plus qu'il ne donne fait perdre autant de
+    # temps qu'un nom trop pauvre.
+    assert 'image' in nom, 'le « + » crée bien une image dans la conversation'
+    assert 'vidéo' not in nom, \
+        'le « + » ne mène plus à la vidéo : ne pas la promettre'
+    # ... mais COURT. Les deux exigences se tiennent : ce bouton est
+    # traversé en permanence, et un nom de cinquante caractères y coûte du
+    # temps à chaque passage. Règle posée par Fernando le 30/07 sur le
+    # bouton Musique, et vérifiée par test_accessibilite_des_medias.
+    assert len(m.group(1)) <= 30, \
+        'nom accessible trop long (%d car.) : il sera lu à chaque passage' % len(m.group(1))
+
+    # Un menu déroulant doit dire s'il est ouvert, et le dire VRAIMENT.
+    assert 'aria-expanded' in bouton, 'aria-expanded absent du bouton de menu'
+    assert "btn.setAttribute('aria-expanded'" in js, \
+        'aria-expanded posé une fois pour toutes mentirait dès la première ouverture'
+    # On regarde AUTOUR de la mise à jour elle-même, pas à la première
+    # occurrence du mot dans le fichier : aria-expanded sert ailleurs.
+    _zone = js[js.index("btn.setAttribute('aria-expanded'") - 700:]
+    _zone = _zone[:1400]
+    assert 'MutationObserver' in _zone, \
+        'cinq endroits ouvrent ou ferment ce menu : les suivre un par un en rate un'
+
+    # L'entrée du studio a disparu du menu : elle vit dans le panneau Images.
+    assert 'plus-studio' not in html, \
+        'l’entrée studio subsiste dans le « + » après la fusion'
+    ok("menu « + » : son nom dit où il mène, et son état est vrai")
+
+
+
+def test_une_seule_porte_vers_les_images():
+    """Quatre portes menaient aux images. Il n'en reste qu'une.
+
+    Fernando a cherché la création d'image et de vidéo dans la GALERIE trois
+    fois de suite, sans les trouver. Après la deuxième, j'ai ajouté un bouton
+    qui renvoyait au studio ; après la troisième, il a fallu admettre que ce
+    n'était pas un défaut d'explication mais de rangement. C'est là que va le
+    réflexe quand on pense « image ».
+
+    Historique du va-et-vient, pour ne pas le refaire :
+      - le studio a d'abord vécu dans la barre du haut ;
+      - déplacé derrière le menu « + » le 30/07, pour réduire la redondance ;
+      - fusionné dans le panneau Images le 28/08, parce que le « + » n'est pas
+        l'endroit où l'on cherche des images.
+
+    Le menu « + » garde ce qui s'ajoute AU MESSAGE en cours (joindre un
+    fichier, créer une image dans la conversation, document Vibe). Le panneau
+    Images tient ce qui PRODUIT et CONSERVE des fichiers.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    # (1) La modale studio n'existe plus, et RIEN ne la cherche encore.
+    assert 'id="studio-modal"' not in html, 'la modale studio subsiste'
+    assert 'studio-modal' not in js, 'le script cherche encore une modale disparue'
+    assert 'plus-studio' not in html and 'plus-studio' not in js, \
+        'l’entrée studio subsiste dans le menu « + »'
+
+    # (2) Les trois volets ont bien SUIVI, dans le panneau Images.
+    volets = re.findall(r'<details id="(studio-[a-z-]+)"', html)
+    assert set(volets) == {'studio-image-details', 'studio-video-details',
+                           'studio-retouche-details'}, volets
+    debut = html.index('<div id="galerie-modal"')
+    for v in volets:
+        assert html.index('id="%s"' % v) > debut, \
+            '%s n’est pas dans le panneau Images' % v
+
+    # (3) Aucun élément cherché par le script n'a disparu dans le déménagement.
+    #     C'est le risque propre à ce genre de fusion : le code survit, la page
+    #     non, et rien ne lève — les fonctions cessent simplement de répondre.
+    ids_html = set(re.findall(r'id="([a-zA-Z0-9_-]+)"', html))
+    cherches = set(re.findall(r"getElementById\('(studio-[a-z-]+)'\)", js))
+    cherches |= set(re.findall(r"\$\('(studio-[a-z-]+)'\)", js))
+    absents = sorted(cherches - ids_html)
+    assert not absents, 'éléments cherchés mais disparus : %s' % absents
+    assert len(cherches) >= 15, 'contrôle trop maigre (%d éléments)' % len(cherches)
+
+    # (4) Une seule porte, donc un seul raccourci. Alt+Maj+I est rendu.
+    assert "if (k === 'i')" not in js, 'Alt+Maj+I désigne encore un studio disparu'
+    assert 'Alt+Shift+I' not in js, 'raccourci orphelin'
+    assert "'g': 'toggle-galerie'" in js, 'Alt+Maj+G doit rester la porte'
+
+    # (5) Le bouton dit ce qu'il y a derrière — sans dépasser trente
+    #     caractères, règle posée par Fernando le 30/07.
+    bouton = html[html.index('id="toggle-galerie"'):]
+    bouton = bouton[:bouton.index('>') + 1]
+    m = re.search(r'aria-label="([^"]+)"', bouton)
+    assert m and len(m.group(1)) <= 24, \
+        'nom du bouton Images absent ou trop long pour la barre du haut'
+    assert 'image' in (re.search(r'title="([^"]+)"', bouton).group(1).lower()), \
+        'l’infobulle doit détailler ce que contient le panneau'
+
+    # (6) Le menu « + » garde ce qui s'ajoute au MESSAGE, et rien d'autre.
+    menu = html[html.index('id="plus-menu"'):]
+    menu = menu[:menu.index('</div>')]
+    entrees = set(re.findall(r'<button id="(plus-[a-z-]+)"', menu))
+    assert 'plus-attach' in entrees, 'joindre un fichier a disparu'
+    assert 'plus-imagegen' in entrees, \
+        'créer une image DANS LA CONVERSATION est autre chose que le studio : à garder'
+    assert 'plus-studio' not in entrees
+    ok("images : une seule porte (Alt+Maj+G), rien d’injoignable après la fusion")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -3911,6 +4462,13 @@ if __name__ == '__main__':
                test_live_confidentialite, test_live_contrat_interface_serveur,
                test_masque_illisible_ne_bloque_pas, test_tout_est_utf8,
                test_outils_tous_atteignables, test_outils_en_live,
-               test_outils_en_live_cables]:
+               test_outils_en_live_cables,
+               test_retouche_aiguillage, test_retouche_operations_locales,
+               test_retouche_cablee_et_honnete,
+               test_focus_suit_l_ouverture,
+               test_retouche_atteignable_depuis_la_galerie,
+               test_cles_api_toutes_enregistrables,
+               test_menu_plus_dit_ou_il_mene,
+               test_une_seule_porte_vers_les_images]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

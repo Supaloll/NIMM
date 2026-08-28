@@ -4711,13 +4711,10 @@ document.addEventListener('keydown', (e) => {
                 document.getElementById('autotts-toggle')?.click();
                 break;
             }
-            case 'f': {   // Alt+F : conversation Live
-                // Le mode fantôme se règle maintenant à la création du fil ;
-                // le raccourci sert la fonction qui a pris sa place dans la barre.
-                e.preventDefault();
-                document.getElementById('live-toggle')?.click();
-                break;
-            }
+            // Alt+F est LIBRE : il servait au mode fantôme, puis brièvement à
+            // la conversation Live. Celle-ci a rejoint la famille Alt+Maj,
+            // où vivent tous les panneaux — c'est plus cohérent, et Alt+F
+            // seul entrait en concurrence avec les raccourcis du navigateur.
         }
     }
 });
@@ -4888,8 +4885,8 @@ function _applyProviderConstraints(keys) {
     // mène à un refus n'a rien à faire dans la barre d'outils.
     var _btnMus = document.getElementById('toggle-musique');
     if (_btnMus) _btnMus.hidden = !(keys && keys.gemini);
-    var _btnStudio = document.getElementById('plus-studio');
-    if (_btnStudio) _btnStudio.hidden = !(keys && keys.gemini);
+    // Le studio n'a plus de bouton propre : ses volets vivent dans le panneau
+    // Images, et chacun annonce lui-même ce qu'il faut pour fonctionner.
     _majVisibiliteParCle(keys);
     // 1. Désactiver les options sans clé
     document.querySelectorAll('.routing-select option[data-needs-key]').forEach(opt => {
@@ -6603,7 +6600,8 @@ async function _loadGhostMode(threadId) {
 // ne tient que si elle est faite avant le premier mot : le réglage vit
 // désormais dans la modale de création du fil (case « Ne rien conserver »),
 // et reste modifiable ensuite dans les Paramètres du fil.
-// La place libérée dans la barre, et le raccourci Alt+F, vont au mode Live.
+// La place libérée dans la barre va au mode Live, qui prend le raccourci
+// Alt+Maj+K — la famille où vivent déjà tous les panneaux de NIMM.
 
 // ============================================
 // AGENDA
@@ -6814,8 +6812,15 @@ async function _galerieLoad() {
 
 // Ouverture galerie
 document.getElementById('toggle-galerie')?.addEventListener('click', function() {
-    document.getElementById('galerie-modal').classList.remove('hidden');
-    _galerieLoad();
+    // Le panneau contient désormais la galerie ET la production (image, vidéo,
+    // retouche). `_ouvrirStudio` ouvre le panneau et prépare TOUT : l'appeler
+    // seul évite de charger la galerie deux fois.
+    if (typeof window._ouvrirStudio === 'function') {
+        window._ouvrirStudio();
+    } else {
+        document.getElementById('galerie-modal').classList.remove('hidden');
+        _galerieLoad();
+    }
 });
 
 // Fermeture galerie
@@ -8534,6 +8539,19 @@ function setupUpload() {
 
     // Clic en dehors → ferme le menu
     document.addEventListener('click', () => menu.classList.add('hidden'));
+
+    // aria-expanded doit dire la VÉRITÉ : cinq endroits ouvrent ou ferment ce
+    // menu. Plutôt que d'ajouter la mise à jour aux cinq — et d'en oublier un
+    // au prochain ajout — on observe la classe, qui est le seul juge.
+    try {
+        var _majDeplie = function () {
+            btn.setAttribute('aria-expanded',
+                             menu.classList.contains('hidden') ? 'false' : 'true');
+        };
+        new MutationObserver(_majDeplie).observe(
+            menu, { attributes: true, attributeFilter: ['class'] });
+        _majDeplie();
+    } catch (e) { /* sans MutationObserver, on garde l'état initial */ }
 
     // Option 1 : Joindre un fichier
     document.getElementById('plus-attach')?.addEventListener('click', () => {
@@ -11941,7 +11959,6 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
     };
     // Le studio n'a plus de bouton dans la barre : son raccourci est annoncé
     // sur l'entrée du menu « + » qui l'ouvre.
-    document.getElementById('plus-studio')?.setAttribute('aria-keyshortcuts', 'Alt+Shift+I');
     // Annonce les raccourcis aux lecteurs d'écran.
     Object.keys(LABELS).forEach(function (id) {
         var el = document.getElementById(id);
@@ -11959,6 +11976,67 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
         dlg.setAttribute('tabindex', '-1');
         dlg.focus();
     }
+
+    // ── LE FOCUS SUIT AUSSI LE CLIC, PAS SEULEMENT LE RACCOURCI ──
+    //
+    // Défaut signalé par Fernando le 28/08 : en activant le bouton « Galerie
+    // d'images », le panneau s'ouvrait mais le focus restait sur le bouton. Au
+    // lecteur d'écran, rien ne se passe — il faut deviner qu'un panneau est
+    // apparu, puis aller le chercher à la tabulation.
+    //
+    // La cause : le déplacement du focus n'existait QUE dans le gestionnaire de
+    // raccourci Alt+Maj. Chaque bouton avait son propre gestionnaire de clic,
+    // écrit à un moment différent, et aucun ne s'en occupait.
+    //
+    // POURQUOI PAR DÉLÉGATION, ET NON BOUTON PAR BOUTON
+    // Trois de ces boutons (mémoire, promptothèque, recherches) n'existent pas
+    // dans la page : ils sont CRÉÉS par renderSidebar(), qui les recrée à
+    // chaque rendu. Un gestionnaire posé sur l'élément disparaîtrait avec lui.
+    // On écoute donc le document, et on reconnaît le bouton au moment du clic.
+    var _ouvreurs = {};
+    var _observes = {};
+
+    function _panneauDe(idBouton) {
+        return idBouton === 'toggle-history'
+            ? 'history-panel'
+            : idBouton.replace('toggle-', '') + '-modal';
+    }
+
+    function _surveiller(panneau, ouvreur) {
+        _ouvreurs[panneau.id] = ouvreur;
+        if (_observes[panneau.id]) return;
+        _observes[panneau.id] = true;
+        // La fermeture passe par plusieurs chemins (croix, clic à côté, Échap,
+        // bouton bascule). Plutôt que de les suivre un par un, on observe la
+        // classe : quel que soit le chemin, le focus revient d'où il venait —
+        // sinon on se retrouve en haut de la page sans savoir où l'on était.
+        try {
+            new MutationObserver(function () {
+                if (!panneau.classList.contains('hidden')) return;
+                var o = _ouvreurs[panneau.id];
+                _ouvreurs[panneau.id] = null;
+                if (!o || !document.body.contains(o)) return;
+                if (document.activeElement === document.body
+                    || panneau.contains(document.activeElement)) {
+                    o.focus();
+                }
+            }).observe(panneau, { attributes: true, attributeFilter: ['class'] });
+        } catch (e) { /* navigateur sans MutationObserver : on s'en passe */ }
+    }
+
+    document.addEventListener('click', function (e) {
+        var ids = Object.keys(SHORTCUTS).map(function (k) { return SHORTCUTS[k]; });
+        for (var n = 0; n < ids.length; n++) {
+            var btn = e.target.closest && e.target.closest('#' + ids[n]);
+            if (!btn) continue;
+            var panneau = document.getElementById(_panneauDe(ids[n]));
+            if (!panneau) return;
+            _surveiller(panneau, btn);
+            // Après le gestionnaire d'origine, qui ouvre le panneau.
+            setTimeout(function () { focusModal(panneau); }, 90);
+            return;
+        }
+    });
     document.addEventListener('keydown', function (e) {
         if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
         var k = (e.key || '').toLowerCase();
@@ -11972,15 +12050,22 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
             }
             return;
         }
-        if (k === 'i') {   // studIo image et vidéo
-            var _entree = document.getElementById('plus-studio');
-            // Caché = pas de clé Gemini : ouvrir mènerait à un panneau inutilisable.
-            if (!_entree || _entree.hidden) return;
+        if (k === 'k') {   // K comme « parler » — dernière lettre libre parlante
+            // Traité à part plutôt que dans la table SHORTCUTS : le bouton
+            // sert AUSSI à raccrocher quand une conversation est en cours, et
+            // il ne faut alors pas envoyer le focus dans une modale fermée.
+            var _btnLive = document.getElementById('live-toggle');
+            if (!_btnLive) return;
             e.preventDefault();
-            if (typeof window._ouvrirStudio === 'function') window._ouvrirStudio();
-            setTimeout(function () { focusModal(document.getElementById('studio-modal')); }, 90);
+            var _enCours = (typeof _liveActif !== 'undefined') && _liveActif;
+            _btnLive.click();
+            if (!_enCours) {
+                setTimeout(function () { focusModal(document.getElementById('live-modal')); }, 90);
+            }
             return;
         }
+        // Alt+Maj+I est LIBRE depuis que le studio a rejoint le panneau
+        // Images : une seule porte, un seul raccourci — Alt+Maj+G.
         var id = SHORTCUTS[k];
         if (id) {
             var btn = document.getElementById(id);
@@ -11989,10 +12074,13 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
                 btn.click();
                 // Déplace le focus dans le panneau ouvert (sinon le lecteur d'écran reste en arrière).
                 var targetId = (id === 'toggle-history') ? 'history-panel' : id.replace('toggle-', '') + '-modal';
-                setTimeout(function () { focusModal(document.getElementById(targetId)); }, 90);
+                var _p = document.getElementById(targetId);
+                if (_p) _surveiller(_p, btn);
+                setTimeout(function () { focusModal(_p); }, 90);
             }
         }
     });
+
 })();
 
 // ══════════════════════════════════════════
@@ -13623,27 +13711,27 @@ init();
         _stChargerBiblioVideo().then(function () { _stVidStatus('Bibliothèque à jour.'); });
     });
 
-    // Le studio s'ouvre depuis le menu « + » — là où se prennent déjà les
-    // décisions « je crée quelque chose » — et non plus depuis la barre du haut,
-    // qui comptait trois portes pour deux idées. Exposé aussi en global pour que
-    // le raccourci clavier n'ait pas à connaître le menu.
+    // LE STUDIO A FUSIONNÉ DANS LE PANNEAU « IMAGES ».
+    //
+    // Il a vécu dans la barre du haut, puis derrière le menu « + » (30/07),
+    // et Fernando a cherché la création d'image et de vidéo dans la GALERIE
+    // trois fois de suite sans les trouver. Ce n'était pas un défaut
+    // d'explication : c'est là que va le réflexe quand on pense « image ».
+    // Quatre portes menaient aux images ; il n'en reste qu'une, celle-là.
+    //
+    // La fonction survit sous son nom pour les appelants existants, mais elle
+    // ouvre maintenant le panneau Images et charge tout ce qu'il contient.
     function _ouvrirStudio() {
         document.getElementById('plus-menu')?.classList.add('hidden');
-        document.getElementById('studio-modal')?.classList.remove('hidden');
+        var _p = document.getElementById('galerie-modal');
+        if (_p) _p.classList.remove('hidden');
+        if (typeof _galerieLoad === 'function') _galerieLoad();
         _stChargerImage();
         _stChargerVideo();
         _stChargerBiblioVideo();
         _stReprendre();
-        setTimeout(function () { document.getElementById('studio-image-prompt')?.focus(); }, 60);
     }
     window._ouvrirStudio = _ouvrirStudio;
-    document.getElementById('plus-studio')?.addEventListener('click', _ouvrirStudio);
-    document.getElementById('studio-close')?.addEventListener('click', function () {
-        document.getElementById('studio-modal')?.classList.add('hidden');
-    });
-    document.getElementById('studio-modal')?.addEventListener('click', function (e) {
-        if (e.target === this) this.classList.add('hidden');
-    });
 })();
 
 // ══════════════════════════════════════════
@@ -14342,10 +14430,10 @@ async function _liveOuvrirModale() {
     btn.id        = 'live-toggle';
     btn.className = 'topbar-icon-btn';
     btn.innerHTML = '<span aria-hidden="true">🎙️</span>';
-    btn.title     = 'Conversation Live (Alt+F) — parler à NIMM, rien n\'est conservé';
+    btn.title     = 'Conversation Live (Alt+Maj+K) — parler à NIMM, rien n\'est conservé';
     btn.setAttribute('aria-label',
-        'Conversation Live : parler à NIMM et pouvoir le couper. Rien n\'est conservé. Alt+F.');
-    btn.setAttribute('aria-keyshortcuts', 'Alt+F');
+        'Conversation Live : parler à NIMM et pouvoir le couper. Rien n\'est conservé. Alt+Maj+K.');
+    btn.setAttribute('aria-keyshortcuts', 'Alt+Shift+K');
     btn.setAttribute('aria-haspopup', 'dialog');
     btn.addEventListener('click', () => {
         if (_liveActif) { _liveRaccrocher(); return; }
@@ -14407,3 +14495,196 @@ document.addEventListener('keydown', (e) => {
         document.getElementById('live-micro')?.click();
     }
 });
+
+// ══════════════════════════════════════════════════════════════════════
+// MANIPULER UNE IMAGE — dire ce qu'on veut, savoir qui l'a fait
+// ══════════════════════════════════════════════════════════════════════
+//
+// LE PRINCIPE, ET IL EST TOUT DANS LE COMPTE RENDU
+// On ne voit pas le résultat. Ce qui compte, ce n'est donc pas l'image : c'est
+// la phrase qui dit ce qu'elle est devenue. Le panneau en produit trois :
+//   1. la VOIE — découpée sur ta machine, ou redessinée par un modèle ;
+//   2. le JOURNAL — les opérations réelles, dimensions et poids compris ;
+//   3. la DESCRIPTION — ce que NIMM voit dans l'image obtenue, pas ce qu'on
+//      avait demandé.
+// Les trois vivent dans un champ de texte copiable, parce qu'on doit pouvoir
+// les relire au braille et les coller ailleurs.
+
+(function () {
+    let _retoucheOptions = null;
+    let _retoucheResultat = null;   // {b64, mime} — pour repartir du résultat
+
+    const $ = (id) => document.getElementById(id);
+
+    function _retoucheEtat(texte) {
+        const el = $('studio-retouche-status');
+        if (el) el.textContent = texte;
+    }
+
+    /** Écrit le compte rendu, dans l'ordre où on veut le lire. */
+    function _retoucheCompteRendu(d) {
+        const lignes = [];
+        if (d.voie === 'local') {
+            lignes.push('Retouche EXACTE, faite sur ta machine.');
+        } else if (d.voie === 'modele') {
+            lignes.push('Image REDESSINÉE par le modèle : tous les pixels ont changé.');
+        }
+        if (d.raison) lignes.push(d.raison);
+        if (d.journal && d.journal.length) {
+            lignes.push('');
+            lignes.push('Ce qui a été fait :');
+            d.journal.forEach(l => lignes.push('- ' + l));
+        }
+        if (d.commentaire) {
+            lignes.push('');
+            lignes.push('Commentaire du modèle : ' + d.commentaire);
+        }
+        if (d.description) {
+            lignes.push('');
+            lignes.push('Ce que contient l’image obtenue :');
+            lignes.push(d.description);
+        } else if (d.image) {
+            // Le dire plutôt que de laisser croire à un oubli. C'est la règle
+            // de l'alternative honnête : une description absente s'annonce.
+            lignes.push('');
+            lignes.push('Aucune description disponible pour cette image.');
+        }
+        const zone = $('studio-retouche-compte-rendu');
+        if (zone) zone.value = lignes.join('\n');
+    }
+
+    /** Annonce la voie AVANT de lancer : on doit savoir à quoi s'attendre. */
+    let _minuteurVoie = null;
+    function _retoucheAnnoncerVoie() {
+        clearTimeout(_minuteurVoie);
+        _minuteurVoie = setTimeout(async () => {
+            const consigne = ($('studio-retouche-consigne')?.value || '').trim();
+            const el = $('studio-retouche-voie');
+            if (!el) return;
+            if (!consigne) { el.textContent = ''; return; }
+            try {
+                const r = await fetch('/api/retouche/analyser', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ consigne })
+                });
+                const d = await r.json();
+                el.textContent = (d.voie === 'local'
+                    ? '✓ Retouche exacte, sur ta machine. '
+                    : '↗ Retouche réinventée par le modèle. ') + (d.raison || '');
+            } catch (e) { el.textContent = ''; }
+        }, 500);   // on laisse finir la phrase avant de la juger
+    }
+
+    async function _retoucheAppliquer() {
+        const champ = $('studio-retouche-fichier');
+        const consigne = ($('studio-retouche-consigne')?.value || '').trim();
+        if (!consigne) { _retoucheEtat('Dis d’abord ce que tu veux changer.'); return; }
+
+        const fd = new FormData();
+        if (_retoucheResultat && champ && !champ.files.length) {
+            // Reprise : on repart du résultat précédent, pas de l'original.
+            // Enchaîner sur l'original referait la retouche à zéro, et
+            // « encore un peu plus » n'aurait aucun sens.
+            const bin = atob(_retoucheResultat.b64);
+            const oct = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) oct[i] = bin.charCodeAt(i);
+            fd.append('file', new Blob([oct], { type: _retoucheResultat.mime }),
+                      'reprise.png');
+        } else if (champ && champ.files.length) {
+            fd.append('file', champ.files[0], champ.files[0].name);
+        } else {
+            _retoucheEtat('Choisis d’abord une image.');
+            return;
+        }
+        fd.append('consigne', consigne);
+        fd.append('decrire', $('studio-retouche-decrire')?.checked ? 'true' : 'false');
+
+        const btn = $('studio-retouche-btn');
+        if (btn) btn.disabled = true;
+        _retoucheEtat('Travail en cours…');
+        try {
+            const r = await fetch('/api/retouche/appliquer', { method: 'POST', body: fd });
+            const d = await r.json();
+            if (d.erreur) {
+                _retoucheEtat('Échec : ' + d.erreur);
+                _retoucheCompteRendu(d);
+                return;
+            }
+            _retoucheResultat = { b64: d.image, mime: d.mime || 'image/png' };
+            _retoucheCompteRendu(d);
+            _retoucheEtat(d.voie === 'local'
+                ? 'Fait, au pixel près. Le compte rendu est ci-dessous.'
+                : 'Fait par le modèle. Le compte rendu est ci-dessous.');
+
+            const out = $('studio-retouche-out');
+            if (out) {
+                out.innerHTML = '';
+                const img = document.createElement('img');
+                img.src = 'data:' + _retoucheResultat.mime + ';base64,' + d.image;
+                // L'alternative dit ce que l'image EST, jamais ce qu'on avait
+                // demandé — et quand la description manque, elle le dit.
+                img.alt = d.description
+                    || 'Image obtenue, sans description disponible.';
+                img.style.cssText = 'max-width:100%;border-radius:8px;';
+                out.appendChild(img);
+
+                const lien = document.createElement('a');
+                lien.href = img.src;
+                lien.download = 'nimm_retouche.' +
+                    (_retoucheResultat.mime.includes('jpeg') ? 'jpg' : 'png');
+                lien.textContent = 'Télécharger l’image obtenue';
+                lien.className = 'btn-secondary';
+                lien.style.cssText = 'display:inline-block;margin-top:8px;';
+                out.appendChild(lien);
+            }
+            const rep = $('studio-retouche-reprendre');
+            if (rep) rep.hidden = false;
+        } catch (e) {
+            _retoucheEtat('Échec : ' + e.message);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function _retoucheCabler() {
+        const det = $('studio-retouche-details');
+        if (!det) return;
+
+        fetch('/api/retouche/options').then(r => r.json()).then(o => {
+            _retoucheOptions = o;
+            const note = $('studio-retouche-note');
+            if (note) note.textContent = o.note || '';
+            const ex = $('studio-retouche-exemples');
+            if (ex) {
+                const bloc = (titre, liste) =>
+                    '<p style="margin:4px 0 2px;font-weight:600;">' + titre + '</p><ul style="margin:0 0 8px 18px;">'
+                    + (liste || []).map(s => '<li>' + s + '</li>').join('') + '</ul>';
+                ex.innerHTML = bloc('Faites sur ta machine, au pixel près', o.exemples_locaux)
+                             + bloc('Confiées au modèle, qui redessine', o.exemples_modele);
+            }
+        }).catch(() => {});
+
+        $('studio-retouche-consigne')?.addEventListener('input', _retoucheAnnoncerVoie);
+        $('studio-retouche-btn')?.addEventListener('click', _retoucheAppliquer);
+        $('studio-retouche-fichier')?.addEventListener('change', () => {
+            // Une nouvelle image repart de zéro : garder l'ancien résultat en
+            // réserve laisserait un doute sur ce qui va être retouché.
+            _retoucheResultat = null;
+            const rep = $('studio-retouche-reprendre');
+            if (rep) rep.hidden = true;
+            _retoucheEtat('');
+        });
+        $('studio-retouche-reprendre')?.addEventListener('click', () => {
+            const champ = $('studio-retouche-fichier');
+            if (champ) champ.value = '';
+            _retoucheEtat('La prochaine retouche partira du résultat précédent.');
+            $('studio-retouche-consigne')?.focus();
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _retoucheCabler, { once: true });
+    } else {
+        _retoucheCabler();
+    }
+})();
