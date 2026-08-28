@@ -1232,3 +1232,105 @@ désormais **attendu**.
 Tests : 86 scénarios. Les contrôles de ce lot ont été éprouvés sur des sources
 simulées (garde restauré, outil d'écriture laissé passer, schéma vide, étiquette
 manquante) : les quatre défauts sont bien vus.
+
+---
+
+## Manipuler une image, et le raccourci du mode Live (28/08/2026)
+
+### Le raccourci
+
+`Alt+F` ne convenait pas — trop proche des raccourcis du navigateur. La
+conversation Live rejoint **`Alt+Maj+K`**, la famille où vivent déjà tous les
+panneaux (`Alt+Maj+F` fils, `A` agenda, `M` mémoire, `G` galerie, `E`
+enrichissement, `P` paramètres, `O` promptothèque, `R` recherches, `T` CoaNIMM,
+`U` musique, `S` saisie, `I` studio). `Alt+F` est rendu.
+
+Traité **à part** de la table `SHORTCUTS` plutôt qu'ajouté dedans : le bouton
+sert aussi à **raccrocher** quand une conversation est en cours, et il ne faut
+alors pas envoyer le focus dans une modale fermée.
+
+Un test relève désormais les deux mécanismes (table et cas particuliers) et
+**refuse qu'une lettre soit attribuée deux fois** — un doublon ferait gagner le
+premier arrivé, en silence. Treize lettres restent libres.
+
+### « Manipuler une image » — d'où vient l'idée
+
+Du dossier `dossier_papillons` de Fernando, où **les noms de fichiers étaient
+les consignes** : « Il faut garder le papillon qui est au premier plan, posé
+sur un bras, mais si possible sans voir le bras, et surtout enlever la dame en
+arrière-plan avec son sac ».
+
+En relisant ce dossier, une chose saute aux yeux : le travail était de **deux
+natures**, et les confondre serait une faute.
+
+| | Nature | Exemple | Qui le fait |
+|---|---|---|---|
+| Exacte | découper, transformer | recadrer au carré, pivoter, agrandir, éclaircir | **la machine**, au pixel près |
+| Inventive | imaginer ce qui manque | enlever la dame, effacer un mur, une barre de fer | **le modèle**, qui redessine |
+
+Confier un recadrage à un modèle génératif est une mauvaise idée : il ne
+**découpe** pas, il **redessine**. Sur une photo de famille, tous les pixels
+changent, et les visages avec. Inversement, aucune bibliothèque locale ne fera
+disparaître la dame au sac.
+
+### `modules/retouche.py`
+
+- **`analyser(consigne)`** — fonction pure. Lit la phrase, reconnaît les
+  opérations exactes (rotation, redressement EXIF, miroir, recadrage par ratio
+  ou par marge, échelle, largeur imposée, luminosité, contraste, netteté, noir
+  et blanc), repère les marqueurs inventifs, et tranche.
+- **Règle du mélange** : si la consigne contient les deux natures
+  (« recadre et enlève la dame »), **tout** part au modèle. Faire la moitié
+  localement puis l'autre moitié autrement donnerait un résultat dont personne
+  ne saurait dire ce qu'il contient.
+- **Exception nécessaire** : « enlève les bords blancs » est un **rognage**,
+  pas une invention. Sans elle, le mot « enlève » suffisait à envoyer un simple
+  recadrage chez le modèle. Elle est testée **avant** les marqueurs inventifs.
+- **Nuance d'intensité** : « un peu », « beaucoup », « légèrement » modulent le
+  facteur. Un test vérifie que « beaucoup » fait plus que « un peu ».
+- Le champ **`raison`** n'est pas décoratif : c'est ce qui sera lu à
+  l'utilisateur. Il est toujours rempli, y compris quand la consigne est vide.
+
+### Ce qui est dit du résultat — et c'est tout le sujet
+
+Fernando ne voit pas l'image. **La phrase qui la décrit EST le résultat.** Le
+panneau en produit trois, dans un champ de texte copiable :
+
+1. **la voie** — « Retouche EXACTE, faite sur ta machine » ou « Image
+   REDESSINÉE par le modèle : tous les pixels ont changé » ;
+2. **le journal** — les opérations réelles, avec dimensions de départ et
+   d'arrivée, et le **poids** (le PNG sans perte pèse plusieurs fois le JPEG
+   d'origine : le dire évite la surprise) ;
+3. **la description** — ce que NIMM **voit** dans l'image obtenue.
+
+La description part des **octets obtenus**, jamais de la consigne. C'est la
+règle du texte alternatif honnête, corrigée le 29/07 pour les images créées et
+appliquée ici aussi : servir la demande à la place de la description, c'est
+répondre à côté sans que personne puisse s'en apercevoir. Le commentaire du
+modèle est rendu **séparément**, sous son propre nom, pour qu'on ne le prenne
+pas pour une description. Et une description absente est **dite**.
+
+La voie est en outre annoncée **avant** de lancer, pendant qu'on tape : savoir
+si l'image sera découpée ou redessinée change la confiance qu'on lui accorde.
+
+### Deux détails qui comptent
+
+- **PNG systématiquement en sortie.** Réencoder une photo en JPEG à chaque
+  retouche la dégrade un peu plus, et sur une série de reprises successives
+  cela finit par se voir. Le bouton « Repartir de ce résultat » rend ces
+  reprises normales : le prix du sans-perte est donc justifié.
+- **Pillow travaille en bloquant** : l'appel passe par `asyncio.to_thread`,
+  sinon un agrandissement de grande image fige tout le serveur.
+
+### Ce qui n'est PAS fait, et pourquoi
+
+Le dossier papillons employait **Real-ESRGAN** (67 Mo de poids) pour agrandir
+sans flou. Ce n'est pas repris : ce serait `torch` et des centaines de Mo pour
+une fonction ponctuelle. L'agrandissement local est un simple rééchantillonnage
+LANCZOS, et le journal **le dit** — « agrandissement simple, sans détail
+inventé ». Ne pas le dire aurait été laisser croire à mieux.
+
+Tests : 89 scénarios. Les contrôles de ce lot ont été éprouvés sur sources
+simulées (consigne déguisée en description, absence de description tue, Pillow
+dans la boucle, recadrage envoyé au modèle pour rien) : les quatre défauts sont
+bien vus.

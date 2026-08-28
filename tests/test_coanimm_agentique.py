@@ -3320,7 +3320,20 @@ def test_fantome_a_la_creation():
     # (4) Le bouton de la barre a bien disparu, partout.
     assert 'ghost-toggle' not in js and 'ghost-toggle' not in html, \
         'le bouton fantôme subsiste dans la barre'
-    assert "getElementById('live-toggle')" in js, 'Alt+F doit désigner le mode Live'
+    assert "getElementById('live-toggle')" in js, 'le bouton Live doit être joignable'
+    # Le raccourci a changé le 28/08 : Alt+F seul entrait en concurrence
+    # avec le navigateur. Le mode Live rejoint la famille Alt+Maj, où
+    # vivent déjà tous les panneaux.
+    assert "aria-keyshortcuts', 'Alt+Shift+K'" in js, 'raccourci Live non annoncé'
+    assert "k === 'k'" in js, 'Alt+Maj+K n’est écouté nulle part'
+    assert "case 'f': {   // Alt+F" not in js, 'Alt+F devait être libéré'
+    # Aucune lettre Alt+Maj ne doit servir deux fois : un doublon ferait
+    # gagner le premier arrivé, en silence.
+    _table = set(re.findall(r"^\s{8}'([a-z])': 'toggle-", js, re.M))
+    _apart = set(re.findall(r"if \(k === '([a-z])'\)", js))
+    assert not (_table & _apart), \
+        'lettre Alt+Maj attribuée deux fois : %s' % sorted(_table & _apart)
+    assert len(_table) >= 8 and _apart, 'relevé des raccourcis trop maigre'
 
     # (5) DÉCISION D'INTERFACE : la case n'est PAS dans « Options avancées ».
     #     Une décision de confidentialité ne se cache pas derrière un repli —
@@ -3615,7 +3628,7 @@ def test_live_contrat_interface_serveur():
 
     # Le numéro de version du script a changé : sans cela, le navigateur sert
     # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
-    assert 'app.js?v=20260826-live' in html, 'cache-bust non mis à jour'
+    assert 'app.js?v=20260828-retouche' in html, 'cache-bust non mis à jour'
     ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
 
 
@@ -3862,6 +3875,219 @@ def test_outils_en_live_cables():
     ok("outils en Live : exécutés hors de la boucle audio, annoncés et écrits")
 
 
+
+def test_retouche_aiguillage():
+    """Découper ou redessiner : ce n'est pas le même travail, ni la même confiance.
+
+    Le dossier « papillons » de Fernando contenait les deux natures, et ses
+    noms de fichiers étaient les consignes : « enlever la dame en arrière-plan
+    avec son sac », mais aussi des recadrages et un agrandissement.
+
+    Confier un recadrage à un modèle génératif est une mauvaise idée : il ne
+    DÉCOUPE pas, il REDESSINE — tous les pixels changent, les visages avec.
+    Inversement, aucune bibliothèque locale ne fera disparaître la dame.
+
+    Ce test vérifie l'aiguillage sur les consignes RÉELLES du dossier, plus les
+    formulations courantes des deux catégories.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from modules import retouche as R
+
+    # Les trois consignes réelles, telles qu'elles étaient écrites.
+    reelles = [
+        "Il faut garder le papillon qui est au premier plan, posé sur un bras, "
+        "mais si possible sans voir le bras, et surtout enlever la dame en "
+        "arrière-plan avec son sac",
+        "Il faut essayer d'enlever la barre en fer entre les deux nichoirs",
+        "On voit un bout du mur, il faut l'enlever",
+    ]
+    for c in reelles:
+        assert R.analyser(c)['voie'] == 'modele', \
+            'consigne inventive envoyée en local : %s' % c[:50]
+
+    exactes = {
+        "recadre au format carré": 'recadrer',
+        "recadre en 16:9": 'recadrer',
+        "rogne de 10 %": 'recadrer',
+        "enlève les bords blancs": 'recadrer',
+        "pivote à droite": 'rotation',
+        "tourne l'image de 90 degrés": 'rotation',
+        "redresse la photo": 'redresser',
+        "retourne en miroir": 'miroir',
+        "agrandis ×2": 'echelle',
+        "agrandis par 4": 'echelle',
+        "réduis de moitié": 'echelle',
+        "redimensionne à 1600 px": 'largeur',
+        "éclaircis un peu": 'luminosite',
+        "assombris beaucoup": 'luminosite',
+        "plus de contraste": 'contraste',
+        "rends-la plus nette": 'nettete',
+        "mets-la en noir et blanc": 'gris',
+    }
+    for c, op in exactes.items():
+        a = R.analyser(c)
+        assert a['voie'] == 'local', 'partie au modèle pour rien : %s' % c
+        assert op in [o['op'] for o in a['operations']], \
+            '%s : opération %s non reconnue (%s)' % (c, op, a['operations'])
+
+    # « enlève » ne rend pas une demande inventive : « enlève les bords » est
+    # un rognage. Sans cette exception, un simple recadrage partait au modèle.
+    assert R.analyser("enlève les bords blancs")['voie'] == 'local'
+    assert R.analyser("enlève la dame")['voie'] == 'modele'
+
+    # MÉLANGE : tout part au modèle. Faire la moitié localement puis l'autre
+    # moitié autrement donnerait un résultat que personne ne saurait décrire.
+    m = R.analyser("recadre en carré et enlève la dame")
+    assert m['voie'] == 'modele' and 'mélange' in m['raison']
+
+    # Rien de reconnu, ou rien du tout : au modèle, et il le dit.
+    assert R.analyser("fais quelque chose de joli")['voie'] == 'modele'
+    assert R.analyser("")['voie'] == 'modele'
+    assert R.analyser("")['raison']
+
+    # « un peu » et « beaucoup » ne demandent pas la même chose.
+    doux = R.analyser("éclaircis un peu")['operations'][0]['facteur']
+    fort = R.analyser("éclaircis beaucoup")['operations'][0]['facteur']
+    assert fort > doux, 'la nuance d’intensité est ignorée'
+
+    # La raison est TOUJOURS remplie : c'est elle qui sera lue à l'utilisateur.
+    for c in list(exactes) + reelles + ["", "n'importe quoi"]:
+        assert R.analyser(c)['raison'], 'raison vide pour : %r' % c[:40]
+    ok("retouche : les consignes réelles du dossier papillons sont bien aiguillées")
+
+
+def test_retouche_operations_locales():
+    """Les opérations exactes le sont vraiment, et se racontent.
+
+    On fabrique une image en mémoire : aucun fichier du projet n'est touché.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, racine)
+    from modules import retouche as R
+    try:
+        from PIL import Image
+    except ImportError:
+        ok("retouche : Pillow absent, opérations locales non vérifiées")
+        return
+
+    import io as _io
+    tampon = _io.BytesIO()
+    Image.new('RGB', (400, 300), (120, 60, 30)).save(tampon, format='JPEG')
+    src = tampon.getvalue()
+
+    def dims(octets):
+        return Image.open(_io.BytesIO(octets)).size
+
+    # Recadrage au carré : la plus petite dimension commande.
+    res, mime, journal, err = R.appliquer(src, [{'op': 'recadrer', 'ratio': (1, 1)}])
+    assert not err and dims(res) == (300, 300), dims(res)
+    assert mime == 'image/png', 'le sans-perte est requis pour enchaîner les reprises'
+
+    # Rotation : les dimensions s'échangent.
+    res, _, _, err = R.appliquer(src, [{'op': 'rotation', 'angle': 90}])
+    assert not err and dims(res) == (300, 400)
+
+    # Agrandissement : facteur exact, et le journal DIT que rien n'est inventé.
+    res, _, journal, err = R.appliquer(src, [{'op': 'echelle', 'facteur': 2.0}])
+    assert not err and dims(res) == (800, 600)
+    assert any('sans détail inventé' in l for l in journal), \
+        'un agrandissement simple ne doit pas se faire passer pour mieux'
+
+    # Largeur imposée : la hauteur suit la proportion.
+    res, _, _, err = R.appliquer(src, [{'op': 'largeur', 'px': 200}])
+    assert not err and dims(res) == (200, 150)
+
+    # Les opérations s'enchaînent dans l'ordre demandé.
+    res, _, journal, err = R.appliquer(src, [{'op': 'echelle', 'facteur': 2.0},
+                                             {'op': 'recadrer', 'ratio': (1, 1)}])
+    assert not err and dims(res) == (600, 600)
+
+    # Le journal se termine TOUJOURS par les dimensions et le poids : sans les
+    # voir, c'est la seule preuve que l'opération a eu lieu.
+    assert any('au départ' in l and 'arrivée' in l for l in journal)
+    assert any('sans perte' in l for l in journal)
+
+    # Accord en genre : « contraste augmentée » était faux.
+    _, _, journal, _ = R.appliquer(src, [{'op': 'contraste', 'facteur': 1.3}])
+    assert any('contraste augmenté' in l and 'augmentée' not in l for l in journal), journal
+
+    # Aucune fonction ne lève : les erreurs reviennent en français.
+    assert 'illisible' in R.appliquer(b'pas une image', [{'op': 'gris'}])[3]
+    assert R.appliquer(b'', [{'op': 'gris'}])[3]
+    assert R.appliquer(src, [])[3], 'une liste vide doit être signalée'
+    ok("retouche locale : exacte au pixel, et racontée dimension par dimension")
+
+
+def test_retouche_cablee_et_honnete():
+    """Le câblage, et la règle qui compte : ne jamais faire passer la consigne
+    pour une description.
+
+    C'est le même piège que pour les images créées, corrigé le 29/07 : on ne
+    voit pas le résultat, donc la phrase qui le décrit EST le résultat. Servir
+    la demande à la place de la description, c'est répondre à côté sans que
+    personne puisse s'en apercevoir.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) Contrat interface / serveur.
+    app = set(re.findall(r"/api/retouche/[a-z_]+", js))
+    dec = set(re.findall(r"@app\.(?:get|post)\(\"(/api/retouche/[a-z_]+)\"", main))
+    assert app and not (app - dec), 'routes appelées sans exister : %s' % sorted(app - dec)
+    ids_js = set(re.findall(r"\$\('(studio-retouche-[a-z-]+)'\)", js))
+    ids_html = set(re.findall(r'id="(studio-retouche-[a-z-]+)"', html))
+    assert ids_js and not (ids_js - ids_html), \
+        'éléments absents de la page : %s' % sorted(ids_js - ids_html)
+
+    # (2) La VOIE est annoncée AVANT de lancer : savoir si l'image sera
+    #     découpée ou redessinée change la confiance qu'on lui accorde.
+    assert '/api/retouche/analyser' in js and 'studio-retouche-voie' in html
+    voie = html[html.index('id="studio-retouche-voie"'):][:220]
+    assert 'aria-live="polite"' in voie, 'l’aiguillage doit être annoncé'
+
+    # (3) La description porte sur l'image OBTENUE, jamais sur la consigne.
+    route = main[main.index('async def retouche_appliquer'):]
+    route = route[:route.index(chr(10) + '@app') if chr(10) + '@app' in route else len(route)]
+    assert '_vibe_describe_image' in route, 'le résultat n’est pas décrit'
+    assert 'octets_res' in route, 'la description doit partir des octets OBTENUS'
+    assert '"description": consigne' not in route and "'description': consigne" not in route
+
+    # (4) Le commentaire du modèle N'EST PAS une description : il est rendu à
+    #     part, pour qu'on ne le prenne pas pour ce qu'il n'est pas.
+    assert '"commentaire"' in route
+
+    # (5) Une description absente est DITE, pas passée sous silence.
+    assert 'sans description disponible' in js, \
+        'une alternative manquante doit s’annoncer'
+
+    # (6) Le compte rendu est copiable : c'est le produit du panneau pour
+    #     quelqu'un qui ne voit pas l'image.
+    cr = html[html.index('id="studio-retouche-compte-rendu"') - 200:]
+    cr = cr[:cr.index('</textarea>')]
+    assert '<textarea' in cr and 'readonly' in cr, \
+        'le compte rendu doit être un champ de texte copiable'
+
+    # (7) Pillow travaille en bloquant : hors de la boucle.
+    assert 'asyncio.to_thread(' in route, 'une grande image figerait le serveur'
+
+    # (8) Sans clé Gemini, la voie inventive refuse en EXPLIQUANT ce qui reste
+    #     possible, au lieu d'échouer sèchement.
+    assert 'recadrer, pivoter, agrandir' in route
+
+    # (9) La dépendance est déclarée.
+    req = open(os.path.join(racine, 'requirements.txt'), encoding='utf-8').read()
+    assert 'Pillow' in req, 'Pillow absent de requirements.txt'
+
+    # (10) Le panneau est bien dans le studio, avec ses étiquettes.
+    for ident in ('studio-retouche-fichier', 'studio-retouche-consigne',
+                  'studio-retouche-compte-rendu'):
+        assert ('for="%s"' % ident) in html, 'commande sans étiquette : %s' % ident
+    ok("retouche : câblée, voie annoncée d’avance, résultat décrit honnêtement")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -3911,6 +4137,8 @@ if __name__ == '__main__':
                test_live_confidentialite, test_live_contrat_interface_serveur,
                test_masque_illisible_ne_bloque_pas, test_tout_est_utf8,
                test_outils_tous_atteignables, test_outils_en_live,
-               test_outils_en_live_cables]:
+               test_outils_en_live_cables,
+               test_retouche_aiguillage, test_retouche_operations_locales,
+               test_retouche_cablee_et_honnete]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

@@ -2205,6 +2205,76 @@ Analyse les sentiments de : ..."
             <div id="studio-video-status" role="status" aria-live="polite" style="font-size:0.85rem;margin-top:10px;min-height:1.2em;"></div>
             <div id="studio-video-biblio" role="region" aria-label="Bibliothèque vidéo" style="margin-top:8px;max-height:40vh;overflow-y:auto;"></div>
         </details>
+        <!-- ── MANIPULER UNE IMAGE ──
+             Troisième volet du studio, à côté de « créer une image » et
+             « créer une vidéo ». Celui-ci part d'une image EXISTANTE.
+             L'ordre des champs suit l'ordre du travail : je choisis ma photo,
+             je dis ce que je veux, NIMM m'annonce comment il va s'y prendre,
+             je lance. -->
+        <details id="studio-retouche-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-top:10px;">
+            <summary style="cursor:pointer;font-weight:600;">🖌️ Manipuler une image</summary>
+            <p id="studio-retouche-note" style="font-size:0.8rem;color:var(--text-muted);margin:6px 0;"></p>
+
+            <label for="studio-retouche-fichier" style="font-size:0.85rem;">Image de départ</label>
+            <input type="file" id="studio-retouche-fichier"
+                   accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+                   aria-describedby="studio-retouche-fichier-aide"
+                   style="width:100%;box-sizing:border-box;margin:4px 0 2px;">
+            <p id="studio-retouche-fichier-aide" style="font-size:0.75rem;color:var(--text-muted);margin:0 0 10px;">
+                Une photo de ton ordinateur. 25 Mo au maximum.
+            </p>
+
+            <label for="studio-retouche-consigne" style="font-size:0.85rem;">Ce que tu veux changer</label>
+            <textarea id="studio-retouche-consigne" rows="3"
+                      aria-describedby="studio-retouche-voie"
+                      placeholder="recadre au format carré — ou — enlève la dame en arrière-plan avec son sac"
+                      style="width:100%;box-sizing:border-box;margin:4px 0 2px;
+                             background:var(--bg-input);border:1px solid var(--border);
+                             border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.9rem;"></textarea>
+
+            <!-- L'aiguillage est annoncé AVANT de lancer : savoir si l'image
+                 sera découpée ou redessinée change la confiance qu'on peut
+                 accorder au résultat. -->
+            <p id="studio-retouche-voie" role="status" aria-live="polite"
+               style="font-size:0.8rem;margin:2px 0 10px;min-height:1.2em;"></p>
+
+            <details style="margin-bottom:10px;">
+                <summary style="cursor:pointer;font-size:0.82rem;color:var(--text-muted);">Exemples de consignes</summary>
+                <div id="studio-retouche-exemples" style="font-size:0.8rem;margin-top:6px;"></div>
+            </details>
+
+            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.85rem;margin-bottom:10px;">
+                <input type="checkbox" id="studio-retouche-decrire" checked
+                       aria-describedby="studio-retouche-decrire-aide" style="margin-top:3px;flex:none;">
+                <span>Décrire l'image obtenue</span>
+            </label>
+            <p id="studio-retouche-decrire-aide" style="font-size:0.75rem;color:var(--text-muted);margin:-6px 0 12px 26px;">
+                NIMM regarde le résultat et dit ce qu'il contient — pas ce que tu avais demandé.
+                C'est le seul moyen de savoir si un recadrage a coupé quelque chose.
+            </p>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button id="studio-retouche-btn" class="btn-primary">Appliquer</button>
+                <button id="studio-retouche-reprendre" class="btn-secondary" hidden>
+                    Repartir de ce résultat
+                </button>
+            </div>
+
+            <div id="studio-retouche-status" role="status" aria-live="polite"
+                 style="font-size:0.85rem;margin-top:10px;min-height:1.2em;"></div>
+
+            <label for="studio-retouche-compte-rendu" style="font-size:0.85rem;margin-top:8px;display:block;">
+                Compte rendu (copiable)
+            </label>
+            <textarea id="studio-retouche-compte-rendu" readonly rows="6" spellcheck="false"
+                      style="width:100%;box-sizing:border-box;margin:4px 0 8px;resize:vertical;
+                             background:var(--bg-input);border:1px solid var(--border);
+                             border-radius:8px;padding:8px 12px;color:var(--text);
+                             font-size:0.88rem;line-height:1.5;"></textarea>
+
+            <div id="studio-retouche-out" role="region" aria-label="Image obtenue" style="margin-top:8px;"></div>
+        </details>
+
     </div>
 </div>
 
@@ -2358,7 +2428,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260826-live"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260828-retouche"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
