@@ -2391,19 +2391,25 @@ def test_imagerie_reglee():
     assert "vign.alt = im.alt ||" in app, 'jamais d’alt inventé quand la description manque'
     assert 'zone.readOnly = true' in app, 'la description doit être copiable'
 
-    # (7) UNE SEULE porte pour créer un média : le studio est passé de la barre
-    # du haut au menu « + », là où se prennent déjà les décisions « je crée ».
-    # Trois boutons pour deux idées, c'était trois tabulations pour rien.
+    # (7) UNE SEULE porte pour créer un média. RÈGLE RÉÉCRITE le 28/08.
+    #
+    # Le studio a vécu dans la barre du haut, puis derrière le menu « + »
+    # (30/07), et il vit désormais DANS le panneau Images. Motif du dernier
+    # déménagement : Fernando y a cherché la création d'image et de vidéo trois
+    # fois de suite sans les trouver. Le « + » sert ce qui s'ajoute au message
+    # en cours ; le panneau Images sert ce qui produit et conserve des fichiers.
+    #
+    # Ce qui n'a pas changé et reste vérifié : UNE porte, pas trois.
     assert 'id="toggle-studio"' not in html and 'toggle-studio' not in app, \
-        'le studio ne doit plus avoir de bouton propre dans la barre du haut'
-    assert 'id="plus-studio"' in html, 'il s’ouvre depuis le menu « + »'
-    assert "_btnStudio = document.getElementById('plus-studio')" in app
-    assert "_btnStudio.hidden = !(keys && keys.gemini)" in app, \
-        'toujours caché sans clé : une porte qui ne mène nulle part ne vaut rien'
-    # Le raccourci survit au déménagement — sinon c'est un accès direct perdu
-    assert "'Alt+Shift+I'" in app and 'window._ouvrirStudio' in app
-    assert "if (k === 'i')" in app and '_entree.hidden' in app, \
-        'le raccourci ne doit pas ouvrir un panneau inutilisable'
+        'le studio ne doit pas retrouver un bouton propre dans la barre'
+    assert 'id="studio-modal"' not in html and 'studio-modal' not in app, \
+        'la modale studio a fusionné : plus personne ne doit la chercher'
+    assert 'plus-studio' not in html and 'plus-studio' not in app, \
+        'l’entrée du menu « + » a été retirée avec la fusion'
+    debut_images = html.index('<div id="galerie-modal"')
+    assert html.index('id="studio-image-details"') > debut_images, \
+        'la création d’image doit vivre dans le panneau Images'
+    assert 'window._ouvrirStudio' in app, 'la fonction d’ouverture doit survivre'
     ok("imagerie : réglages complets, rien conservé chez Google, image décrite, une seule porte")
 
 
@@ -3628,7 +3634,7 @@ def test_live_contrat_interface_serveur():
 
     # Le numéro de version du script a changé : sans cela, le navigateur sert
     # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
-    assert 'app.js?v=20260828-cles' in html, 'cache-bust non mis à jour'
+    assert 'app.js?v=20260828-images' in html, 'cache-bust non mis à jour'
     ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
 
 
@@ -4154,32 +4160,44 @@ def test_focus_suit_l_ouverture():
 
 
 def test_retouche_atteignable_depuis_la_galerie():
-    """L'outil doit être là où on le cherche.
+    """L'outil doit être là où on le cherche — et il y est maintenant POUR DE BON.
 
     Fernando a cherché « Manipuler une image » dans la galerie, et c'est
     logique : c'est l'endroit où l'on pense aux images qu'on possède déjà.
-    L'outil vit dans le studio — rien n'oblige à ce que ce soit la seule porte.
+
+    Première réponse (28/08, matin) : un bouton dans la galerie qui renvoyait
+    au studio. Insuffisant — il a redemandé, en cherchant cette fois la
+    création d'image et de vidéo au même endroit. Une passerelle ne répare pas
+    un mauvais rangement, elle l'avoue.
+
+    Seconde réponse : le studio ENTRE dans le panneau. Plus de renvoi, plus de
+    porte intermédiaire. Ce test vérifie donc l'inverse de ce qu'il vérifiait :
+    la passerelle ne doit PLUS exister, et la retouche doit être sur place.
     """
     racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
     html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
 
-    assert 'id="galerie-vers-retouche"' in html, \
-        'aucune porte vers la retouche depuis la galerie'
-    assert 'aria-describedby="galerie-vers-retouche-aide"' in html, \
-        'le bouton doit dire où il mène'
-    assert 'galerie-vers-retouche' in js, 'la porte n’est pas câblée'
+    assert 'galerie-vers-retouche' not in html and 'galerie-vers-retouche' not in js, \
+        'la passerelle n’a plus lieu d’être : la retouche est dans le panneau'
 
-    # Le volet est DÉPLIÉ à l'arrivée : au lecteur d'écran, atterrir sur un
-    # titre fermé ressemble à une impasse.
-    passerelle = js[js.index("getElementById('galerie-vers-retouche')"):][:900]
-    assert 'det.open = true' in passerelle, 'le volet doit être déplié à l’arrivée'
-    assert '.focus()' in passerelle, 'le focus doit suivre'
-    assert "classList.add('hidden')" in passerelle, \
-        'la galerie doit se fermer, sinon deux dialogues se superposent'
-    ok("retouche : joignable depuis la galerie, volet déplié et focus déplacé")
+    debut = html.index('<div id="galerie-modal"')
+    assert html.index('id="studio-retouche-details"') > debut, \
+        'la retouche doit vivre DANS le panneau Images'
 
-
+    # Le volet reste câblé après le déménagement — c'est le risque de ce genre
+    # de fusion : le code survit, la page change, et rien ne lève.
+    for route in ('/api/retouche/options', '/api/retouche/analyser',
+                  '/api/retouche/appliquer'):
+        assert route in js, 'route %s plus appelée après la fusion' % route
+    for ident in ('studio-retouche-btn', 'studio-retouche-consigne',
+                  'studio-retouche-fichier', 'studio-retouche-reprendre'):
+        assert ("$('%s')" % ident) in js, '%s n’est plus câblé' % ident
+    corps = js[js.index('function _retoucheCabler'):]
+    corps = corps[:corps.index(chr(10) + '    }' + chr(10))]
+    assert 'addEventListener' in corps, \
+        'le corps de _retoucheCabler est vide : le panneau ne répondrait à rien'
+    ok("retouche : dans le panneau Images, sans passerelle, et toujours câblée")
 
 def test_cles_api_toutes_enregistrables():
     """Six services du catalogue ne pouvaient pas voir leur clé enregistrée.
@@ -4289,8 +4307,13 @@ def test_menu_plus_dit_ou_il_mene():
     assert m, 'le bouton « + » n’a pas de nom accessible'
     nom = m.group(1).lower()
     assert nom != 'ajouter', 'nom accessible trop pauvre : rien ne dit où il mène'
-    for mot in ('image', 'vidéo'):
-        assert mot in nom, '« %s » manque au nom du bouton « + »' % mot
+    # RÈGLE AJUSTÉE le 28/08 au soir : le « + » ne mène plus à la vidéo ni au
+    # studio, qui ont rejoint le panneau Images. Son nom ne doit donc PAS les
+    # promettre — un nom qui annonce plus qu'il ne donne fait perdre autant de
+    # temps qu'un nom trop pauvre.
+    assert 'image' in nom, 'le « + » crée bien une image dans la conversation'
+    assert 'vidéo' not in nom, \
+        'le « + » ne mène plus à la vidéo : ne pas la promettre'
     # ... mais COURT. Les deux exigences se tiennent : ce bouton est
     # traversé en permanence, et un nom de cinquante caractères y coûte du
     # temps à chaque passage. Règle posée par Fernando le 30/07 sur le
@@ -4309,15 +4332,85 @@ def test_menu_plus_dit_ou_il_mene():
     assert 'MutationObserver' in _zone, \
         'cinq endroits ouvrent ou ferment ce menu : les suivre un par un en rate un'
 
-    # L'entrée du studio dit ce qu'on y fait, pas seulement son nom, et annonce
-    # son raccourci.
-    entree = html[html.index('id="plus-studio"'):]
-    entree = entree[:entree.index('</button>')]
-    for mot in ('image', 'vidéo'):
-        assert mot in entree.lower(), '« %s » manque à l’entrée du studio' % mot
-    assert 'aria-keyshortcuts="Alt+Shift+I"' in entree, \
-        'le raccourci du studio doit être annoncé là où on le trouve'
+    # L'entrée du studio a disparu du menu : elle vit dans le panneau Images.
+    assert 'plus-studio' not in html, \
+        'l’entrée studio subsiste dans le « + » après la fusion'
     ok("menu « + » : son nom dit où il mène, et son état est vrai")
+
+
+
+def test_une_seule_porte_vers_les_images():
+    """Quatre portes menaient aux images. Il n'en reste qu'une.
+
+    Fernando a cherché la création d'image et de vidéo dans la GALERIE trois
+    fois de suite, sans les trouver. Après la deuxième, j'ai ajouté un bouton
+    qui renvoyait au studio ; après la troisième, il a fallu admettre que ce
+    n'était pas un défaut d'explication mais de rangement. C'est là que va le
+    réflexe quand on pense « image ».
+
+    Historique du va-et-vient, pour ne pas le refaire :
+      - le studio a d'abord vécu dans la barre du haut ;
+      - déplacé derrière le menu « + » le 30/07, pour réduire la redondance ;
+      - fusionné dans le panneau Images le 28/08, parce que le « + » n'est pas
+        l'endroit où l'on cherche des images.
+
+    Le menu « + » garde ce qui s'ajoute AU MESSAGE en cours (joindre un
+    fichier, créer une image dans la conversation, document Vibe). Le panneau
+    Images tient ce qui PRODUIT et CONSERVE des fichiers.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    # (1) La modale studio n'existe plus, et RIEN ne la cherche encore.
+    assert 'id="studio-modal"' not in html, 'la modale studio subsiste'
+    assert 'studio-modal' not in js, 'le script cherche encore une modale disparue'
+    assert 'plus-studio' not in html and 'plus-studio' not in js, \
+        'l’entrée studio subsiste dans le menu « + »'
+
+    # (2) Les trois volets ont bien SUIVI, dans le panneau Images.
+    volets = re.findall(r'<details id="(studio-[a-z-]+)"', html)
+    assert set(volets) == {'studio-image-details', 'studio-video-details',
+                           'studio-retouche-details'}, volets
+    debut = html.index('<div id="galerie-modal"')
+    for v in volets:
+        assert html.index('id="%s"' % v) > debut, \
+            '%s n’est pas dans le panneau Images' % v
+
+    # (3) Aucun élément cherché par le script n'a disparu dans le déménagement.
+    #     C'est le risque propre à ce genre de fusion : le code survit, la page
+    #     non, et rien ne lève — les fonctions cessent simplement de répondre.
+    ids_html = set(re.findall(r'id="([a-zA-Z0-9_-]+)"', html))
+    cherches = set(re.findall(r"getElementById\('(studio-[a-z-]+)'\)", js))
+    cherches |= set(re.findall(r"\$\('(studio-[a-z-]+)'\)", js))
+    absents = sorted(cherches - ids_html)
+    assert not absents, 'éléments cherchés mais disparus : %s' % absents
+    assert len(cherches) >= 15, 'contrôle trop maigre (%d éléments)' % len(cherches)
+
+    # (4) Une seule porte, donc un seul raccourci. Alt+Maj+I est rendu.
+    assert "if (k === 'i')" not in js, 'Alt+Maj+I désigne encore un studio disparu'
+    assert 'Alt+Shift+I' not in js, 'raccourci orphelin'
+    assert "'g': 'toggle-galerie'" in js, 'Alt+Maj+G doit rester la porte'
+
+    # (5) Le bouton dit ce qu'il y a derrière — sans dépasser trente
+    #     caractères, règle posée par Fernando le 30/07.
+    bouton = html[html.index('id="toggle-galerie"'):]
+    bouton = bouton[:bouton.index('>') + 1]
+    m = re.search(r'aria-label="([^"]+)"', bouton)
+    assert m and len(m.group(1)) <= 24, \
+        'nom du bouton Images absent ou trop long pour la barre du haut'
+    assert 'image' in (re.search(r'title="([^"]+)"', bouton).group(1).lower()), \
+        'l’infobulle doit détailler ce que contient le panneau'
+
+    # (6) Le menu « + » garde ce qui s'ajoute au MESSAGE, et rien d'autre.
+    menu = html[html.index('id="plus-menu"'):]
+    menu = menu[:menu.index('</div>')]
+    entrees = set(re.findall(r'<button id="(plus-[a-z-]+)"', menu))
+    assert 'plus-attach' in entrees, 'joindre un fichier a disparu'
+    assert 'plus-imagegen' in entrees, \
+        'créer une image DANS LA CONVERSATION est autre chose que le studio : à garder'
+    assert 'plus-studio' not in entrees
+    ok("images : une seule porte (Alt+Maj+G), rien d’injoignable après la fusion")
 
 
 if __name__ == '__main__':
@@ -4375,6 +4468,7 @@ if __name__ == '__main__':
                test_focus_suit_l_ouverture,
                test_retouche_atteignable_depuis_la_galerie,
                test_cles_api_toutes_enregistrables,
-               test_menu_plus_dit_ou_il_mene]:
+               test_menu_plus_dit_ou_il_mene,
+               test_une_seule_porte_vers_les_images]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
