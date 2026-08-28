@@ -1365,3 +1365,76 @@ Tests : 91 scénarios. Les contrôles de ce lot ont été éprouvés sur sources
 simulées (consigne déguisée en description, absence de description tue, Pillow
 dans la boucle, recadrage envoyé au modèle pour rien) : les quatre défauts sont
 bien vus.
+
+---
+
+## Deux défauts trouvés en cherchant un bouton (28/08/2026, soir)
+
+### La question
+
+Fernando : « il me semblait que fut un temps il y avait aussi un moteur pour
+générer une image, une vidéo, et je ne vois plus rien de tout ça : c'est
+normal ? »
+
+Rien n'avait été retiré. Le studio vit dans le menu « + » depuis le 30/07 —
+mais le nom accessible de ce bouton était **« Ajouter »**. L'infobulle disait
+bien « Ajouter un fichier, créer une image ou une vidéo », seulement un
+`aria-label` **écrase** le `title` pour le lecteur d'écran. La porte existait,
+son écriteau était faux.
+
+Corrigé, avec une contrainte que Fernando avait lui-même posée le 30/07 : ces
+boutons sont traversés en permanence, un nom de cinquante caractères y coûte du
+temps à chaque passage. La première correction faisait 48 et 71 caractères — le
+test de longueur l'a refusée sur-le-champ. Retenu : **« Fichier, image ou
+vidéo »** (23) et **« Studio image, vidéo, retouche »** (29).
+
+Ajouté au passage : `aria-expanded` sur le bouton de menu, **accroché à la
+classe** plutôt qu'aux cinq endroits qui ouvrent ou ferment le menu. Un
+attribut posé une fois pour toutes mentirait dès la première ouverture.
+
+### Le défaut trouvé en chemin, et il est plus grave
+
+En vérifiant pourquoi l'entrée du studio pouvait être masquée, ceci est apparu
+dans `main.py` :
+
+```python
+class ApiKeysSetting(BaseModel):
+    anthropic:  Optional[str] = None
+    deepseek:   Optional[str] = None
+    ...          # neuf champs, écrits à la main
+```
+
+Le catalogue `core/services.py` en compte **quinze**. Six services n'étaient
+pas déclarés : `groq`, `cerebras`, `exa`, `cohere`, `voyage`, `jina`.
+
+Or **Pydantic ignore en silence un champ qu'il ne connaît pas**. L'interface
+envoyait la clé Groq, le serveur répondait `{"status": "ok"}`, et rien n'était
+enregistré. **Groq et Cerebras étaient inutilisables depuis leur câblage du
+30/07** — déclarés partout, présents dans les listes, sans aucun moyen de leur
+donner une clé.
+
+La même énumération figée servait à la **lecture** : l'interface croyait ces
+clés absentes et grisait leurs options même lorsqu'elles existaient.
+
+Et un troisième décalage du même genre : la page demandait
+`data-needs-key="stability"` quand le catalogue dit `stability_ai`. L'option
+restait grisée pour toujours, sans que rien ne le signale.
+
+Les deux routes se **déduisent** désormais du catalogue, et le modèle accepte
+tout champ dont l'identifiant y figure. La réponse à l'enregistrement dit
+maintenant **quelles clés ont été retenues** — c'est précisément ce qui
+manquait pour s'apercevoir que six services partaient à la poubelle.
+
+### Le motif, pour la troisième fois
+
+Adresses de fournisseurs dupliquées trois fois (30/07), six listes de
+fournisseurs oubliées dans `app.js` (10/08), et maintenant les clés. À chaque
+fois : une énumération recopiée à la main, qui vieillit sans rien dire. À
+chaque fois la même correction — **une table, et tout le reste s'en déduit** —
+et un test qui ancre la dérivation plutôt que le contenu.
+
+Le nouveau test vérifie aussi que **chaque `data-needs-key` de la page désigne
+un service réel**. Un nom qui ne correspond à rien ne lève pas : il grise, en
+silence, pour toujours.
+
+Tests : 93 scénarios.
