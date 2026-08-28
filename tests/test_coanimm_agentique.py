@@ -3628,7 +3628,7 @@ def test_live_contrat_interface_serveur():
 
     # Le numéro de version du script a changé : sans cela, le navigateur sert
     # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
-    assert 'app.js?v=20260828-retouche' in html, 'cache-bust non mis à jour'
+    assert 'app.js?v=20260828-focus' in html, 'cache-bust non mis à jour'
     ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
 
 
@@ -4088,6 +4088,98 @@ def test_retouche_cablee_et_honnete():
     ok("retouche : câblée, voie annoncée d’avance, résultat décrit honnêtement")
 
 
+
+def test_focus_suit_l_ouverture():
+    """Ouvrir un panneau doit y emmener le focus. Au clic comme au clavier.
+
+    Défaut signalé par Fernando le 28/08 : en activant le bouton « Galerie
+    d'images », le panneau s'ouvrait mais le focus restait sur le bouton. Au
+    lecteur d'écran, rien ne se passe — il faut deviner qu'un panneau est
+    apparu, puis aller le chercher à la tabulation.
+
+    La cause tenait à l'histoire du code : le déplacement du focus n'existait
+    QUE dans le gestionnaire de raccourci Alt+Maj. Chaque bouton avait son
+    propre gestionnaire de clic, écrit à un moment différent, et aucun ne s'en
+    occupait. Onze panneaux, onze occasions d'oublier.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) Le clic déplace le focus, et pas seulement le raccourci.
+    assert 'LE FOCUS SUIT AUSSI LE CLIC' in js
+    bloc = js[js.index('LE FOCUS SUIT AUSSI LE CLIC'):]
+    bloc = bloc[:bloc.index('})();')]
+    assert "document.addEventListener('click'" in bloc, \
+        'le clic ne déclenche aucun déplacement de focus'
+    assert 'focusModal(' in bloc
+
+    # (2) PAR DÉLÉGATION, et c'est nécessaire : trois de ces boutons n'existent
+    #     pas dans la page. Ils sont créés par renderSidebar(), qui les recrée
+    #     à chaque rendu — un gestionnaire posé sur l'élément disparaîtrait.
+    assert 'closest(' in bloc, \
+        'sans délégation, les boutons créés dynamiquement ne sont pas couverts'
+    crees = ['toggle-memory', 'toggle-prompt-library', 'toggle-search-conversations']
+    ids_html = set(re.findall(r'id="([a-zA-Z0-9_-]+)"', html))
+    absents = [b for b in crees if b not in ids_html]
+    assert absents, ("ces boutons sont désormais dans la page : la justification "
+                     "de la délégation a vieilli, relire le commentaire")
+    for b in absents:
+        assert ("id        = '%s'" % b) in js or ("id = '%s'" % b) in js, \
+            '%s n’est ni dans la page ni créé par le script' % b
+
+    # (3) TOUS les panneaux de la table sont couverts — pas une liste écrite à
+    #     la main, qui laisserait le douzième derrière.
+    assert 'Object.keys(SHORTCUTS)' in bloc, \
+        'la couverture doit se déduire de la table, pas être recopiée'
+
+    # (4) Chaque panneau attendu existe vraiment : un appariement cassé ne
+    #     lève pas, il ne fait simplement rien — le pire des cas.
+    table = dict(re.findall(r"^\s{8}'([a-z])': '(toggle-[a-z-]+)'", js, re.M))
+    assert len(table) >= 8, 'relevé de la table trop maigre (%d)' % len(table)
+    casses = []
+    for _, bouton in table.items():
+        panneau = ('history-panel' if bouton == 'toggle-history'
+                   else bouton.replace('toggle-', '') + '-modal')
+        if panneau not in ids_html:
+            casses.append((bouton, panneau))
+    assert not casses, 'panneaux introuvables : %s' % casses
+
+    # (5) À la fermeture, le focus REVIENT d'où il venait. Sans cela on se
+    #     retrouve en haut de la page sans savoir où l'on était.
+    assert 'MutationObserver' in bloc, \
+        'la fermeture passe par plusieurs chemins : les suivre un par un les rate'
+    assert '_ouvreurs' in bloc
+    ok("focus : tout panneau ouvert reçoit le focus, et le rend en se fermant")
+
+
+def test_retouche_atteignable_depuis_la_galerie():
+    """L'outil doit être là où on le cherche.
+
+    Fernando a cherché « Manipuler une image » dans la galerie, et c'est
+    logique : c'est l'endroit où l'on pense aux images qu'on possède déjà.
+    L'outil vit dans le studio — rien n'oblige à ce que ce soit la seule porte.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    assert 'id="galerie-vers-retouche"' in html, \
+        'aucune porte vers la retouche depuis la galerie'
+    assert 'aria-describedby="galerie-vers-retouche-aide"' in html, \
+        'le bouton doit dire où il mène'
+    assert 'galerie-vers-retouche' in js, 'la porte n’est pas câblée'
+
+    # Le volet est DÉPLIÉ à l'arrivée : au lecteur d'écran, atterrir sur un
+    # titre fermé ressemble à une impasse.
+    passerelle = js[js.index("getElementById('galerie-vers-retouche')"):][:900]
+    assert 'det.open = true' in passerelle, 'le volet doit être déplié à l’arrivée'
+    assert '.focus()' in passerelle, 'le focus doit suivre'
+    assert "classList.add('hidden')" in passerelle, \
+        'la galerie doit se fermer, sinon deux dialogues se superposent'
+    ok("retouche : joignable depuis la galerie, volet déplié et focus déplacé")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -4139,6 +4231,8 @@ if __name__ == '__main__':
                test_outils_tous_atteignables, test_outils_en_live,
                test_outils_en_live_cables,
                test_retouche_aiguillage, test_retouche_operations_locales,
-               test_retouche_cablee_et_honnete]:
+               test_retouche_cablee_et_honnete,
+               test_focus_suit_l_ouverture,
+               test_retouche_atteignable_depuis_la_galerie]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

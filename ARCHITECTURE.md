@@ -1330,7 +1330,38 @@ une fonction ponctuelle. L'agrandissement local est un simple rééchantillonnag
 LANCZOS, et le journal **le dit** — « agrandissement simple, sans détail
 inventé ». Ne pas le dire aurait été laisser croire à mieux.
 
-Tests : 89 scénarios. Les contrôles de ce lot ont été éprouvés sur sources
+### Deux défauts trouvés par l'usage, dans la minute
+
+**Le focus ne suivait pas l'ouverture d'un panneau.** Fernando : « je vois que
+le focus n'est pas déplacé quand j'active le bouton Galerie d'images ». Le
+panneau s'ouvrait, mais le focus restait sur le bouton : au lecteur d'écran,
+rien ne se passe.
+
+La cause tenait à l'histoire du code. Le déplacement du focus n'existait que
+dans le gestionnaire de **raccourci** `Alt+Maj`. Chaque bouton avait son propre
+gestionnaire de **clic**, écrit à un moment différent, et aucun ne s'en
+occupait. Onze panneaux, onze occasions d'oublier — et onze corrections auraient
+laissé le douzième derrière.
+
+Corrigé **par délégation**, en une fois, à partir de la table qui recense déjà
+les panneaux. La délégation n'est pas un raffinement : trois de ces boutons
+(mémoire, promptothèque, recherches) **n'existent pas dans la page**, ils sont
+créés par `renderSidebar()` qui les recrée à chaque rendu — un gestionnaire posé
+sur l'élément disparaîtrait avec lui.
+
+Ajouté au passage : à la fermeture, **le focus revient d'où il venait**. La
+fermeture passe par plusieurs chemins (croix, clic à côté, Échap, bouton
+bascule) ; plutôt que de les suivre un par un, on observe la classe du panneau.
+
+**« Manipuler une image » n'était pas là où on le cherche.** Fernando l'a
+cherché dans la **galerie**, et c'est logique : c'est l'endroit où l'on pense
+aux images qu'on possède déjà. L'outil vit dans le studio, mais rien n'oblige à
+ce que ce soit la seule porte. La galerie en ouvre une, qui ferme la galerie,
+ouvre le studio, **déplie le volet** et y met le focus — arriver sur un titre
+fermé ressemble à une impasse au lecteur d'écran.
+
+Tests : 91 scénarios. Les contrôles de ce lot ont été éprouvés sur sources
+
 simulées (consigne déguisée en description, absence de description tue, Pillow
 dans la boucle, recadrage envoyé au modèle pour rien) : les quatre défauts sont
 bien vus.

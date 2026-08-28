@@ -11935,6 +11935,69 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
         dlg.setAttribute('tabindex', '-1');
         dlg.focus();
     }
+
+    // ── LE FOCUS SUIT AUSSI LE CLIC, PAS SEULEMENT LE RACCOURCI ──
+    //
+    // Défaut signalé par Fernando le 28/08 : en activant le bouton « Galerie
+    // d'images », le panneau s'ouvrait mais le focus restait sur le bouton. Au
+    // lecteur d'écran, rien ne se passe — il faut deviner qu'un panneau est
+    // apparu, puis aller le chercher à la tabulation.
+    //
+    // La cause : le déplacement du focus n'existait QUE dans le gestionnaire de
+    // raccourci Alt+Maj. Chaque bouton avait son propre gestionnaire de clic,
+    // écrit à un moment différent, et aucun ne s'en occupait.
+    //
+    // POURQUOI PAR DÉLÉGATION, ET NON BOUTON PAR BOUTON
+    // Trois de ces boutons (mémoire, promptothèque, recherches) n'existent pas
+    // dans la page : ils sont CRÉÉS par renderSidebar(), qui les recrée à
+    // chaque rendu. Un gestionnaire posé sur l'élément disparaîtrait avec lui.
+    // On écoute donc le document, et on reconnaît le bouton au moment du clic.
+    var _ouvreurs = {};
+    var _observes = {};
+
+    function _panneauDe(idBouton) {
+        return idBouton === 'toggle-history'
+            ? 'history-panel'
+            : idBouton.replace('toggle-', '') + '-modal';
+    }
+
+    function _surveiller(panneau, ouvreur) {
+        _ouvreurs[panneau.id] = ouvreur;
+        if (_observes[panneau.id]) return;
+        _observes[panneau.id] = true;
+        // La fermeture passe par plusieurs chemins (croix, clic à côté, Échap,
+        // bouton bascule). Plutôt que de les suivre un par un, on observe la
+        // classe : quel que soit le chemin, le focus revient d'où il venait —
+        // sinon on se retrouve en haut de la page sans savoir où l'on était.
+        try {
+            new MutationObserver(function () {
+                if (!panneau.classList.contains('hidden')) return;
+                var o = _ouvreurs[panneau.id];
+                _ouvreurs[panneau.id] = null;
+                if (!o || !document.body.contains(o)) return;
+                if (document.activeElement === document.body
+                    || panneau.contains(document.activeElement)) {
+                    o.focus();
+                }
+            }).observe(panneau, { attributes: true, attributeFilter: ['class'] });
+        } catch (e) { /* navigateur sans MutationObserver : on s'en passe */ }
+    }
+
+    document.addEventListener('click', function (e) {
+        var ids = Object.keys(SHORTCUTS).map(function (k) { return SHORTCUTS[k]; });
+        ids.push('plus-studio');
+        for (var n = 0; n < ids.length; n++) {
+            var btn = e.target.closest && e.target.closest('#' + ids[n]);
+            if (!btn) continue;
+            var panneau = document.getElementById(
+                ids[n] === 'plus-studio' ? 'studio-modal' : _panneauDe(ids[n]));
+            if (!panneau) return;
+            _surveiller(panneau, btn);
+            // Après le gestionnaire d'origine, qui ouvre le panneau.
+            setTimeout(function () { focusModal(panneau); }, 90);
+            return;
+        }
+    });
     document.addEventListener('keydown', function (e) {
         if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
         var k = (e.key || '').toLowerCase();
@@ -11979,10 +12042,13 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
                 btn.click();
                 // Déplace le focus dans le panneau ouvert (sinon le lecteur d'écran reste en arrière).
                 var targetId = (id === 'toggle-history') ? 'history-panel' : id.replace('toggle-', '') + '-modal';
-                setTimeout(function () { focusModal(document.getElementById(targetId)); }, 90);
+                var _p = document.getElementById(targetId);
+                if (_p) _surveiller(_p, btn);
+                setTimeout(function () { focusModal(_p); }, 90);
             }
         }
     });
+
 })();
 
 // ══════════════════════════════════════════
@@ -14551,6 +14617,20 @@ document.addEventListener('keydown', (e) => {
     function _retoucheCabler() {
         const det = $('studio-retouche-details');
         if (!det) return;
+
+        // Depuis la galerie : on ferme la galerie, on ouvre le studio, on
+        // déplie CE volet et on y met le focus. Sans le dépliage, le panneau
+        // s'ouvrirait sur une ligne repliée — et au lecteur d'écran, arriver
+        // sur un titre fermé ressemble à une impasse.
+        document.getElementById('galerie-vers-retouche')?.addEventListener('click', () => {
+            document.getElementById('galerie-modal')?.classList.add('hidden');
+            if (typeof window._ouvrirStudio === 'function') window._ouvrirStudio();
+            det.open = true;
+            setTimeout(() => {
+                det.querySelector('summary')?.setAttribute('tabindex', '-1');
+                det.querySelector('summary')?.focus();
+            }, 120);
+        });
 
         fetch('/api/retouche/options').then(r => r.json()).then(o => {
             _retoucheOptions = o;
