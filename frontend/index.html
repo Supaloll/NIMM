@@ -15,7 +15,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260826-2">
+<link rel="stylesheet" href="/static/styles.css?v=20260829-backup-fix">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -67,6 +67,11 @@
     <!-- BANNIÈRE PROVIDER MANQUANT -->
     <div id="no-provider-banner" class="hidden" role="alert" aria-live="assertive">
         ⚙️ Aucun fournisseur configuré — <button id="banner-open-settings">Configure ta clé API pour démarrer</button>
+    </div>
+
+    <!-- BANNIÈRE SAUVEGARDE NON CONFIGURÉE (réapparue après une perte lors d'un merge) -->
+    <div id="backup-warning-banner" class="hidden" role="alert" aria-live="assertive">
+        💾 <span id="backup-warning-text">Sauvegarde non configurée</span> — <button id="backup-banner-open-settings">Configure le dossier de sauvegarde</button>
     </div>
 
     <!-- BARRE ONGLETS -->
@@ -725,6 +730,33 @@
                     <label for="mcp-token">Jeton d'autorisation (facultatif)</label>
                     <input type="password" id="mcp-token" autocomplete="new-password">
                     <button type="button" id="mcp-add-btn" style="align-self:flex-start;font-size:0.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Ajouter ce serveur</button>
+                </div>
+            </details>
+        </div>
+
+        <!-- ── SAUVEGARDE (dossier synchronisé cloud-agnostique) ── -->
+        <div class="setting-group" id="backup-section">
+            <details id="backup-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+                <summary style="font-weight:600;cursor:pointer;">💾 Sauvegarde</summary>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0 10px;">
+                    Réservée au propriétaire : une sauvegarde couvre les données de toute la famille.
+                    Choisis un dossier synchronisé par ton service cloud (Google Drive, pCloud, Dropbox…) —
+                    NIMM y dépose ses fichiers, ton appli cloud envoie le reste.
+                </p>
+                <div style="display:flex;flex-direction:column;gap:6px;">
+                    <label for="backup-folder-path">Dossier de sauvegarde</label>
+                    <input type="text" id="backup-folder-path" autocomplete="off" placeholder="G:\Mon Drive\NIMM_Backups">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;">
+                        <input type="checkbox" id="backup-auto-enabled"> Sauvegarde automatique hebdomadaire
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;">
+                        <input type="checkbox" id="backup-dismissed"> Je ne souhaite pas de sauvegarde cloud — ne plus me prévenir
+                    </label>
+                    <div style="display:flex;gap:8px;">
+                        <button type="button" id="backup-save-btn" style="font-size:0.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Enregistrer</button>
+                        <button type="button" id="backup-run-btn" style="font-size:0.82rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);cursor:pointer;">Sauvegarder maintenant</button>
+                    </div>
+                    <p id="backup-status-line" style="font-size:0.8rem;color:var(--text-muted);margin:4px 0 0;">Chargement…</p>
                 </div>
             </details>
         </div>
@@ -2175,7 +2207,7 @@ Analyse les sentiments de : ..."
         </div>
         
 
-        <div id="galerie-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;max-height:65vh;overflow-y:auto;padding:4px 2px;">
+        <div id="galerie-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px;max-height:65vh;overflow-y:auto;padding:4px 2px;">
             <div id="galerie-empty" style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px 0;">Aucune image sauvegardée.</div>
         </div>
         <!-- ── LE STUDIO EST ICI, ET PLUS DERRIÈRE LE MENU « + » ──
@@ -2427,7 +2459,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260828-images"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260829-backup-fix"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

@@ -6750,12 +6750,14 @@ async function _galerieLoad() {
                     ? 'Image sans description enregistrée. Consigne d\'origine : ' + img.prompt
                     : 'Image sans description enregistrée : ' + displayName);
             card.innerHTML = `
-                <img src="/api/images/file/${encodeURIComponent(img.filename)}"
-                     alt="${_esc(altTexte)}"
-                     loading="lazy"
-                     style="width:100%;aspect-ratio:1;object-fit:cover;display:block;cursor:pointer;"
-                     title="${_esc(img.prompt || '')}"
-                     data-img-id="${img.id}">
+                <div style="position:relative;width:100%;padding-top:100%;overflow:hidden;background:var(--bg-surface);">
+                    <img src="/api/images/file/${encodeURIComponent(img.filename)}"
+                         alt="${_esc(altTexte)}"
+                         loading="lazy"
+                         style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;"
+                         title="${_esc(img.prompt || '')}"
+                         data-img-id="${img.id}">
+                </div>
                 <div style="padding:6px 8px;font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${displayName}">${displayName}</div>
                 <div style="display:flex;gap:4px;padding:0 6px 6px;flex-wrap:wrap;">
                     <button class="galerie-dl-btn" data-id="${img.id}" data-filename="${img.filename}"
