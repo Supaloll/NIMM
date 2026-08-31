@@ -6840,11 +6840,39 @@ document.getElementById('btn').addEventListener('click', async () => {
 
 @app.post("/api/update")
 async def do_update():
-    """Télécharge la dernière version depuis GitHub et remplace les fichiers."""
-    import zipfile, shutil, tempfile, pathlib
+    """Télécharge la dernière version depuis GitHub et remplace les fichiers.
 
-    GITHUB_REPO  = "Supaloll/NIMM"
-    SKIP_DIRS    = {"data", ".git"}
+    CE QUE CETTE ROUTE NE FAIT PAS, ET QU'IL FAUT DIRE
+    Elle copie des fichiers. Elle ne redémarre pas le serveur, et elle
+    n'installe aucune dépendance. Or :
+
+      - Python a déjà chargé `main.py`, `core/` et `modules/` en mémoire :
+        les remplacer sur le disque ne change RIEN au processus en cours.
+        Seuls les fichiers statiques (page, script, feuille de style) sont
+        relus par le navigateur.
+      - L'interface neuve appelle donc des routes que l'ancien serveur ne
+        connaît pas encore. C'est exactement la panne « contrat interface /
+        serveur » que nos tests traquent — sauf qu'ici elle se produit chez
+        l'utilisateur, à l'exécution.
+      - Et si la nouvelle version exige une bibliothèque de plus (Pillow pour
+        la retouche, websockets pour le mode Live), personne ne l'installe.
+
+    L'interface annonçait « Mise à jour appliquée ! Rechargement dans 3
+    secondes… » — ce qui est faux sur les trois quarts du logiciel. Elle dit
+    désormais la vérité, et cette route lui donne de quoi la dire : ce qui a
+    changé, si les dépendances ont bougé, et qu'il faut relancer NIMM.
+    """
+    import zipfile, shutil, tempfile, pathlib, filecmp
+
+    GITHUB_REPO = "Supaloll/NIMM"
+    SKIP_DIRS = {"data", ".git"}
+    # Ces fichiers appartiennent à la machine, pas au dépôt : les écraser
+    # ferait perdre des réglages locaux ou des traces de diagnostic.
+    SKIP_FICHIERS = {"nimm.log", "nimm.log.1", "nimm.err.log", ".env",
+                     "MESSAGE_COMMIT.txt"}
+    # Un changement dans l'un de ces dossiers n'est actif qu'après un
+    # redémarrage : Python les a déjà chargés en mémoire.
+    CODE_SERVEUR = {"main.py", "core", "modules", "requirements.txt"}
 
     try:
         import httpx
@@ -6858,14 +6886,24 @@ async def do_update():
         raise HTTPException(503, detail=f"Impossible de contacter GitHub : {e}")
 
     base = pathlib.Path(__file__).parent
+    modifies, redemarrage, deps_avant, deps_apres = [], False, '', ''
+    try:
+        deps_avant = (base / 'requirements.txt').read_text(encoding='utf-8')
+    except Exception:
+        deps_avant = ''
 
     with tempfile.TemporaryDirectory() as tmp_str:
         tmp = pathlib.Path(tmp_str)
         zip_path = tmp / "update.zip"
         zip_path.write_bytes(r.content)
 
-        with zipfile.ZipFile(zip_path) as z:
-            z.extractall(tmp / "src")
+        try:
+            with zipfile.ZipFile(zip_path) as z:
+                z.extractall(tmp / "src")
+        except Exception as e:
+            # L'archive est décompressée AVANT toute copie : une archive
+            # abîmée ne doit pas laisser l'installation à moitié remplacée.
+            raise HTTPException(502, detail=f"Archive GitHub illisible : {e}")
 
         extracted = [d for d in (tmp / "src").iterdir() if d.is_dir()]
         if not extracted:
@@ -6873,19 +6911,72 @@ async def do_update():
         src = extracted[0]
 
         for item in src.rglob("*"):
-            rel  = item.relative_to(src)
+            rel = item.relative_to(src)
             parts = rel.parts
-            if not parts or parts[0] in SKIP_DIRS:
+            if not parts or parts[0] in SKIP_DIRS or parts[-1] in SKIP_FICHIERS:
                 continue
             dst = base / rel
             if item.is_dir():
                 dst.mkdir(parents=True, exist_ok=True)
-            else:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(item, dst)
+                continue
+            # Ne recopier que ce qui DIFFÈRE : sans cela, « fichiers
+            # modifiés » vaudrait toujours la totalité du dépôt, et
+            # n'apprendrait rien.
+            identique = dst.exists() and filecmp.cmp(str(item), str(dst), shallow=False)
+            if identique:
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, dst)
+            modifies.append(str(rel).replace('\\', '/'))
+            if parts[0] in CODE_SERVEUR:
+                redemarrage = True
 
-    return {"status": "ok"}
+    try:
+        deps_apres = (base / 'requirements.txt').read_text(encoding='utf-8')
+    except Exception:
+        deps_apres = deps_avant
 
+    # Quelles bibliothèques sont apparues ? Les nommer, parce que personne ne
+    # les installera à la place de l'utilisateur.
+    def _paquets(texte):
+        noms = set()
+        for ligne in (texte or '').splitlines():
+            ligne = ligne.split('#')[0].strip()
+            if not ligne:
+                continue
+            noms.add(re.split(r'[<>=!\[ ]', ligne)[0].strip().lower())
+        return {n for n in noms if n}
+
+    nouvelles = sorted(_paquets(deps_apres) - _paquets(deps_avant))
+
+    if modifies:
+        _live_diag("Mise à jour : %d fichier(s), redémarrage %s"
+                   % (len(modifies), "requis" if redemarrage else "inutile"))
+
+    return {
+        "status": "ok",
+        "fichiers": len(modifies),
+        # Les vingt premiers suffisent à comprendre ce qui a bougé ; la liste
+        # complète serait illisible à la synthèse vocale.
+        "apercu": modifies[:20],
+        "redemarrage_requis": redemarrage,
+        "dependances_nouvelles": nouvelles,
+        "message": (
+            "Aucun changement : tu es déjà à jour."
+            if not modifies else
+            ("%d fichier%s mis à jour. " % (len(modifies), "s" if len(modifies) > 1 else ""))
+            + ("Il faut RELANCER NIMM pour que ça prenne effet : ferme la "
+               "fenêtre et relance LANCER_NIMM. Recharger la page ne suffit "
+               "pas — le serveur garde l'ancien code en mémoire."
+               if redemarrage else
+               "Ces fichiers sont relus par le navigateur : un simple "
+               "rechargement de la page suffit.")
+            + ("" if not nouvelles else
+               " ATTENTION : cette version a besoin de %s. Ouvre une invite de "
+               "commandes dans le dossier de NIMM et lance : pip install -r "
+               "requirements.txt" % ", ".join(nouvelles))
+        ),
+    }
 
 # ══════════════════════════════════════════
 # OLLAMA — PROXY MODÈLES

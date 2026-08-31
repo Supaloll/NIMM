@@ -3634,7 +3634,17 @@ def test_live_contrat_interface_serveur():
 
     # Le numéro de version du script a changé : sans cela, le navigateur sert
     # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
-    assert 'app.js?v=20260828-images' in html, 'cache-bust non mis à jour'
+    # RÈGLE RÉÉCRITE le 31/08 : la valeur était écrite en dur, donc ce test
+    # tombait dès que QUELQU'UN d'autre changeait le numéro — Laurent l'a
+    # légitimement passé à « 20260829-backup-fix ». Un test qui punit une
+    # bonne pratique est un mauvais test. On vérifie la FORME : un numéro
+    # daté doit exister sur le script ET sur la feuille de style, sans quoi le
+    # navigateur sert l'ancienne version depuis son cache.
+    for fichier in ('app.js', 'styles.css'):
+        m = re.search(r'/static/' + re.escape(fichier) + r'\?v=(\d{8})-[0-9a-z-]+', html)
+        assert m, 'aucun numéro de version daté sur %s' % fichier
+        assert m.group(1) >= '20260801', \
+            '%s porte un numéro de version qui date de %s' % (fichier, m.group(1))
     ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
 
 
@@ -4413,6 +4423,84 @@ def test_une_seule_porte_vers_les_images():
     ok("images : une seule porte (Alt+Maj+G), rien d’injoignable après la fusion")
 
 
+
+def test_mise_a_jour_dit_la_verite():
+    """« Mise à jour appliquée ! » était faux sur les trois quarts du logiciel.
+
+    Le backlog demandait un script de migration vers Git, parce qu'Éric et
+    Nando, installés depuis un ZIP, ne recevaient pas les mises à jour. Or ce
+    besoin est déjà couvert autrement : `/api/update` télécharge l'archive
+    GitHub et remplace les fichiers, sans Git du tout. La demande du backlog
+    est donc périmée.
+
+    Mais en la vérifiant, ceci est apparu : la route copie des fichiers, et
+    l'interface annonçait « Mise à jour appliquée ! Rechargement dans 3
+    secondes… » avant de recharger la page toute seule.
+
+    C'est faux. Python a déjà chargé `main.py`, `core/` et `modules/` en
+    mémoire : les remplacer sur le disque ne change RIEN au processus en
+    cours. Seuls les fichiers statiques sont relus par le navigateur. On
+    obtient donc une INTERFACE NEUVE SUR UN SERVEUR ANCIEN — précisément la
+    panne « contrat interface / serveur » que nos tests traquent, sauf qu'elle
+    se produit chez l'utilisateur, à l'exécution. Les routes du jour
+    (`/api/live/ws`, `/api/retouche/appliquer`) n'existeraient pas encore.
+
+    Et si la version exige une bibliothèque de plus — Pillow pour la retouche,
+    websockets pour le mode Live, tous deux ajoutés cette semaine — personne
+    ne l'installe.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    route = main[main.index('async def do_update'):]
+    route = route[:route.index(chr(10) + '@app')]
+
+    # (1) La route DIT s'il faut relancer, et pourquoi.
+    assert 'redemarrage_requis' in route, 'la route ne dit pas si un redémarrage s’impose'
+    assert 'CODE_SERVEUR' in route, \
+        'sans distinguer le code serveur des fichiers statiques, on ne peut pas le savoir'
+
+    # (2) Elle nomme les bibliothèques APPARUES : personne ne les installera
+    #     à la place de l'utilisateur.
+    assert 'dependances_nouvelles' in route
+    assert 'requirements.txt' in route
+
+    # (3) Elle ne recopie que ce qui DIFFÈRE — sinon « fichiers modifiés »
+    #     vaudrait toujours la totalité du dépôt, et n'apprendrait rien.
+    assert 'filecmp' in route, 'sans comparaison, le compte de fichiers ment'
+
+    # (4) Elle ne touche pas aux fichiers qui appartiennent à la machine.
+    assert 'SKIP_FICHIERS' in route and 'nimm.log' in route, \
+        'les journaux locaux seraient écrasés par ceux du dépôt'
+    assert '"data"' in route or "'data'" in route, 'les données doivent être préservées'
+
+    # (5) L'archive est décompressée AVANT toute copie : une archive abîmée ne
+    #     doit pas laisser l'installation à moitié remplacée.
+    assert route.index('extractall') < route.index('shutil.copy2'), \
+        'copie entamée avant d’avoir vérifié que l’archive s’ouvre'
+
+    # (6) L'interface ne ment plus, et ne recharge plus toute seule.
+    bloc = js[js.index("fetch('/api/update'"):][:3000]
+    assert 'Mise à jour appliquée' not in bloc, 'affirmation fausse restaurée'
+    assert 'setTimeout(() => location.reload(), 3000)' not in bloc, \
+        'le rechargement automatique donne à croire que tout est actif'
+    assert 'd.message' in bloc, 'le message du serveur doit être affiché tel quel'
+    assert 'redemarrage_requis' in bloc
+
+    # (7) Le message porte une INSTRUCTION (« relance NIMM ») : s'il n'est pas
+    #     annoncé, il n'existe pas pour qui n'a pas l'écran.
+    zone = html[html.index('id="update-status"'):]
+    zone = zone[:zone.index('>') + 1]
+    assert 'aria-live' in zone, 'l’instruction de redémarrage doit être annoncée'
+    assert '_coanimmAnnounce' in bloc, 'et annoncée aussi au moment où elle arrive'
+
+    # (8) La liste des fichiers est copiable — on ne dicte pas vingt chemins.
+    assert 'readOnly = true' in bloc, 'la liste des fichiers doit être copiable'
+    ok("mise à jour : dit ce qui a changé, réclame le redémarrage, nomme les dépendances")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -4469,6 +4557,7 @@ if __name__ == '__main__':
                test_retouche_atteignable_depuis_la_galerie,
                test_cles_api_toutes_enregistrables,
                test_menu_plus_dit_ou_il_mene,
-               test_une_seule_porte_vers_les_images]:
+               test_une_seule_porte_vers_les_images,
+               test_mise_a_jour_dit_la_verite]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
