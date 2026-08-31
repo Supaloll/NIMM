@@ -8968,8 +8968,52 @@ document.getElementById('btn-update').addEventListener('click', async () => {
             btn.textContent = 'Vérifier et installer les mises à jour';
             return;
         }
-        status.textContent = '✅ Mise à jour appliquée ! Rechargement dans 3 secondes…';
-        setTimeout(() => location.reload(), 3000);
+        // NE PAS RECHARGER TOUT SEUL, et ne pas prétendre que c'est appliqué.
+        //
+        // Recharger la page ne met à jour QUE l'interface. Le serveur Python a
+        // déjà chargé main.py, core/ et modules/ en mémoire : son code reste
+        // l'ancien. On obtient alors une interface neuve qui appelle des
+        // routes inexistantes — la panne « contrat interface / serveur », mais
+        // chez l'utilisateur, à l'exécution.
+        //
+        // Le serveur dit maintenant ce qui a changé et s'il faut relancer.
+        const d = await r.json().catch(() => ({}));
+        status.textContent = d.message || 'Mise à jour terminée.';
+        // Annoncé au lecteur d'écran : l'instruction « relance NIMM » est
+        // inutile si on ne l'entend pas.
+        if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(status.textContent);
+        if (d.apercu && d.apercu.length) {
+            const det = document.createElement('details');
+            det.style.marginTop = '8px';
+            det.innerHTML = '<summary style="cursor:pointer;font-size:0.85rem;">'
+                + 'Fichiers modifiés (' + d.fichiers + ')</summary>';
+            const zone = document.createElement('textarea');
+            zone.readOnly = true;
+            zone.rows = Math.min(12, d.apercu.length + 1);
+            zone.style.cssText = 'width:100%;box-sizing:border-box;margin-top:6px;'
+                + 'font-size:0.82rem;background:var(--bg-input);color:var(--text);'
+                + 'border:1px solid var(--border);border-radius:6px;padding:6px 10px;';
+            zone.value = d.apercu.join('\n')
+                + (d.fichiers > d.apercu.length
+                   ? '\n… et ' + (d.fichiers - d.apercu.length) + ' autre(s)' : '');
+            det.appendChild(zone);
+            status.appendChild(det);
+        }
+        btn.disabled = false;
+        btn.textContent = d.redemarrage_requis
+            ? 'Relance NIMM pour appliquer'
+            : 'Vérifier et installer les mises à jour';
+        // Sans redémarrage nécessaire, un rechargement suffit — mais c'est
+        // l'utilisateur qui décide quand, pas un compte à rebours.
+        if (!d.redemarrage_requis && d.fichiers) {
+            const rec = document.createElement('button');
+            rec.className = 'btn-secondary';
+            rec.style.marginTop = '8px';
+            rec.textContent = 'Recharger la page maintenant';
+            rec.addEventListener('click', () => location.reload());
+            status.appendChild(document.createElement('br'));
+            status.appendChild(rec);
+        }
     } catch (e) {
         status.textContent = '❌ Impossible de joindre le serveur.';
         btn.disabled = false;
