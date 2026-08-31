@@ -4095,7 +4095,11 @@ def test_retouche_cablee_et_honnete():
 
     # (9) La dépendance est déclarée.
     req = open(os.path.join(racine, 'requirements.txt'), encoding='utf-8').read()
-    assert 'Pillow' in req, 'Pillow absent de requirements.txt'
+    # Insensible à la casse : ce test cherchait « Pillow » avec une majuscule,
+    # exactement comme le code qui a créé un doublon en ne voyant pas le
+    # « pillow » déjà présent. Le contrôle reproduisait le défaut qu'il aurait
+    # dû empêcher. pip, lui, ne fait pas la différence.
+    assert 'pillow' in req.lower(), 'Pillow absent de requirements.txt'
 
     # (10) Le panneau est bien dans le studio, avec ses étiquettes.
     for ident in ('studio-retouche-fichier', 'studio-retouche-consigne',
@@ -4501,6 +4505,107 @@ def test_mise_a_jour_dit_la_verite():
     ok("mise à jour : dit ce qui a changé, réclame le redémarrage, nomme les dépendances")
 
 
+
+def test_requirements_complet_et_sans_doublon():
+    """Ce que NIMM importe pour démarrer doit être déclaré. Sans exception.
+
+    Question de Fernando le 31/08 : « en as-tu profité pour mettre à jour
+    requirements.txt ? ». La vérification a rapporté deux choses, dont une de
+    mon fait.
+
+    1. J'AVAIS CRÉÉ UN DOUBLON. `Pillow` était déjà déclaré plus bas, en
+       minuscules, pour l'OCR. Mon contrôle avant ajout était sensible à la
+       casse et ne l'a pas vu. Sans conséquence pour pip, mais c'est le genre
+       de désordre qui fait douter du reste du fichier.
+
+    2. `requests` N'ÉTAIT DÉCLARÉ NULLE PART, alors qu'il est importé EN TÊTE
+       de `net_guard.py` et de `websearch.py`. Un import en tête n'est pas
+       rattrapable : sans lui, ces deux modules ne se chargent pas du tout —
+       donc ni la recherche web, ni le garde-fou anti-SSRF. Ça ne se voyait
+       pas parce qu'une autre bibliothèque l'installe en passant. Sur une
+       installation neuve, ou le jour où cette autre bibliothèque cesse d'en
+       dépendre, la recherche web tombe sans explication.
+
+    LA DISTINCTION QUI FAIT TOUT
+    Un import placé dans un `try` ou dans une fonction est OPTIONNEL : son
+    absence est rattrapée, et le code le dit en français (kokoro, piper,
+    geopy, networkx sont dans ce cas — volontairement non déclarés). Un import
+    en TÊTE de module est OBLIGATOIRE. Ce test ne surveille que les seconds.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _norm(nom):
+        # pip traite « - », « _ » et « . » comme équivalents. Ne pas le faire,
+        # c'est produire de faux manquants — première version de ce test.
+        return re.sub(r'[-_.]+', '-', nom.strip().lower())
+
+    declares = {}
+    for n, ligne in enumerate(open(os.path.join(racine, 'requirements.txt'),
+                                   encoding='utf-8'), 1):
+        brut = ligne.split('#')[0].strip()
+        if not brut:
+            continue
+        declares.setdefault(_norm(re.split(r'[<>=!\[ ]', brut)[0]), []).append(n)
+
+    assert len(declares) >= 30, 'relevé trop maigre (%d)' % len(declares)
+
+    # (1) Aucun doublon : deux lignes pour un même paquet, c'est le signe que
+    #     personne ne sait plus ce que contient le fichier.
+    doublons = {k: v for k, v in declares.items() if len(v) > 1}
+    assert not doublons, 'paquets déclarés deux fois : %s' % doublons
+
+    # (2) Tout import EN TÊTE de module doit être déclaré.
+    std = set(sys.stdlib_module_names) | {'core', 'modules', 'main', 'tests'}
+    alias = {'PIL': 'pillow', 'yaml': 'pyyaml', 'bs4': 'beautifulsoup4',
+             'docx': 'python-docx', 'pptx': 'python-pptx', 'fitz': 'pymupdf',
+             'dotenv': 'python-dotenv', 'sklearn': 'scikit-learn',
+             'whisper': 'openai-whisper', 'multipart': 'python-multipart',
+             'fpdf': 'fpdf2', 'sentence_transformers': 'sentence-transformers',
+             'google': 'google-genai'}
+
+    obligatoires = {}
+    for dossier in ('.', 'core', 'modules'):
+        chemin_d = os.path.join(racine, dossier)
+        for f in sorted(os.listdir(chemin_d)):
+            if not f.endswith('.py'):
+                continue
+            p = os.path.join(chemin_d, f)
+            try:
+                arbre = ast.parse(open(p, encoding='utf-8').read())
+            except Exception:
+                continue
+            # SEULEMENT le premier niveau : un import sous `try` ou dans une
+            # fonction est un choix, pas une dépendance dure.
+            for n in arbre.body:
+                noms = []
+                if isinstance(n, ast.Import):
+                    noms = [a.name.split('.')[0] for a in n.names]
+                elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                    noms = [n.module.split('.')[0]]
+                for x in noms:
+                    if x not in std:
+                        obligatoires.setdefault(x, set()).add(
+                            os.path.relpath(p, racine).replace('\\', '/'))
+
+    assert len(obligatoires) >= 8, \
+        'relevé des imports obligatoires trop maigre (%d)' % len(obligatoires)
+
+    manquants = sorted(
+        '%s (%s)' % (nom, ', '.join(sorted(fichiers)))
+        for nom, fichiers in obligatoires.items()
+        if _norm(alias.get(nom, nom)) not in declares)
+    assert not manquants, (
+        'importés en tête de module mais absents de requirements.txt : '
+        + ' ; '.join(manquants))
+
+    # (3) Les deux ajouts de la semaine doivent y être : sans eux, la retouche
+    #     et le mode Live refusent de fonctionner sur une machine neuve.
+    for paquet in ('pillow', 'websockets', 'requests'):
+        assert paquet in declares, '%s absent de requirements.txt' % paquet
+    ok("requirements : %d paquets, aucun doublon, aucun import obligatoire oublié"
+       % len(declares))
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -4558,6 +4663,7 @@ if __name__ == '__main__':
                test_cles_api_toutes_enregistrables,
                test_menu_plus_dit_ou_il_mene,
                test_une_seule_porte_vers_les_images,
-               test_mise_a_jour_dit_la_verite]:
+               test_mise_a_jour_dit_la_verite,
+               test_requirements_complet_et_sans_doublon]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
