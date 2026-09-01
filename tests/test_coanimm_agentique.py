@@ -3634,7 +3634,7 @@ def test_live_contrat_interface_serveur():
 
     # Le numéro de version du script a changé : sans cela, le navigateur sert
     # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
-    assert 'app.js?v=20260828-images' in html, 'cache-bust non mis à jour'
+    assert 'app.js?v=20260829-2' in html, 'cache-bust non mis à jour'
     ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
 
 

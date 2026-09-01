@@ -2718,17 +2718,21 @@ async def _generate_mistral_image(prompt: str, api_keys: dict) -> dict:
 
 
 async def _generate_dalle(prompt: str, api_keys: dict) -> dict:
-    """dall-e-3 via OpenAI API."""
+    """gpt-image-1.5 via OpenAI API — dall-e-3 a été mis à la retraite par
+    OpenAI le 12/05/2026, remplacé par la famille GPT Image. Différence clé :
+    les modèles GPT Image ne renvoient JAMAIS d'URL, uniquement du base64
+    (le paramètre 'response_format' n'existe même plus pour eux — l'envoyer
+    déclenche l'erreur 'Unknown parameter')."""
     api_key = get_api_key('openai', api_keys)
     if not api_key:
         raise ValueError("Clé API OpenAI manquante (nécessaire pour la génération d'image).")
 
     payload = {
-        'model':           'dall-e-3',
-        'prompt':          prompt,
-        'n':               1,
-        'size':            '1024x1024',
-        'response_format': 'url',
+        'model':   'gpt-image-1.5',
+        'prompt':  prompt,
+        'n':       1,
+        'size':    '1024x1024',
+        'quality': 'high',
     }
     async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(
@@ -2741,11 +2745,10 @@ async def _generate_dalle(prompt: str, api_keys: dict) -> dict:
         )
         if not r.is_success:
             detail = r.text[:500]
-            raise ValueError(f"OpenAI dall-e-3 {r.status_code} : {detail}")
+            raise ValueError(f"OpenAI gpt-image-1.5 {r.status_code} : {detail}")
         data = r.json()
-        url            = data['data'][0].get('url', '')
-        revised_prompt = data['data'][0].get('revised_prompt', prompt)
-        return {'url': url, 'b64': '', 'provider': 'dall-e', 'revised_prompt': revised_prompt}
+        b64 = data['data'][0].get('b64_json', '')
+        return {'url': '', 'b64': b64, 'provider': 'dall-e', 'revised_prompt': prompt}
 
 
 async def _generate_stability(prompt: str, api_keys: dict) -> dict:
@@ -2798,7 +2801,17 @@ async def _generate_gemini_image(prompt: str, api_keys: dict) -> dict:
             detail = r.text[:500]
             raise ValueError(f"Gemini image {r.status_code} : {detail}")
         data = r.json()
-        b64  = data['candidates'][0]['content']['parts'][0]['inlineData']['data']
+        candidats = data.get('candidates') or []
+        if not candidats:
+            raison = (data.get('promptFeedback') or {}).get('blockReason', 'raison inconnue')
+            raise ValueError(f"Gemini n'a renvoyé aucune image (bloqué : {raison}).")
+        parts = candidats[0].get('content', {}).get('parts') or []
+        image_part = next((p for p in parts if 'inlineData' in p), None)
+        if not image_part:
+            fin = candidats[0].get('finishReason', 'raison inconnue')
+            texte = ''.join(p.get('text', '') for p in parts if 'text' in p)
+            raise ValueError(f"Gemini n'a pas produit d'image (arrêt : {fin}). {texte[:200]}")
+        b64 = image_part['inlineData']['data']
         return {'url': '', 'b64': b64, 'provider': 'gemini', 'revised_prompt': prompt}
 
 
