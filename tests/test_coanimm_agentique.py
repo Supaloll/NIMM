@@ -2513,8 +2513,15 @@ def test_reponse_muette_apres_outil():
     assert 'outils_interdits: bool = False,' in eng
     assert 'outils_interdits=outils_interdits' in eng
 
-    # (3) La phase 2 l'active quand elle redéclare les outils
-    assert 'outils_interdits=bool(_phase2_tools),' in hub
+    # (3) La phase 2 a cédé la place à une boucle agentique BORNÉE : le modèle
+    #     garde les outils actifs et peut enchaîner plusieurs appels (ex : lister
+    #     un fichier PUIS l'exécuter), plafonnée à _MAX_TOOL_LOOPS pour interdire
+    #     la boucle infinie. Le garde-fou l'annonce explicitement si le plafond
+    #     est atteint — et le REPLI SANS OUTILS (7) reste en dernier recours.
+    assert '_MAX_TOOL_LOOPS = 4' in hub
+    assert '_prochain_evt' in hub
+    assert 'call_llm_stream_with_tools(' in hub
+    assert "Je m'arrête là après plusieurs étapes" in hub
 
     # (4) GARDE-FOU : un silence ne doit JAMAIS passer inaperçu, quelle qu'en
     #     soit la cause. Une réponse muette est pire qu'une erreur — la synthèse
@@ -2551,7 +2558,7 @@ def test_reponse_muette_apres_outil():
     assert "_hist_plat[-1].get('role') == 'user'" in hub
     # Et si même le repli échoue, on le dit encore.
     assert 'repli sans outils compris' in hub
-    ok("réponse muette après outil : usage des outils interdit en phase 2, et silence impossible")
+    ok("réponse muette après outil : boucle agentique bornée, repli et silence impossible")
 
 
 
