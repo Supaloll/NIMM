@@ -3641,7 +3641,17 @@ def test_live_contrat_interface_serveur():
 
     # Le numéro de version du script a changé : sans cela, le navigateur sert
     # l'ancien fichier depuis son cache et rien de tout ceci n'existe.
-    assert 'app.js?v=20260829-2' in html, 'cache-bust non mis à jour'
+    # RÈGLE RÉÉCRITE le 31/08 : la valeur était écrite en dur, donc ce test
+    # tombait dès que QUELQU'UN d'autre changeait le numéro — Laurent l'a
+    # légitimement passé à « 20260829-backup-fix ». Un test qui punit une
+    # bonne pratique est un mauvais test. On vérifie la FORME : un numéro
+    # daté doit exister sur le script ET sur la feuille de style, sans quoi le
+    # navigateur sert l'ancienne version depuis son cache.
+    for fichier in ('app.js', 'styles.css'):
+        m = re.search(r'/static/' + re.escape(fichier) + r'\?v=(\d{8})-[0-9a-z-]+', html)
+        assert m, 'aucun numéro de version daté sur %s' % fichier
+        assert m.group(1) >= '20260801', \
+            '%s porte un numéro de version qui date de %s' % (fichier, m.group(1))
     ok("contrat Live : routes, éléments, dépendance et cache-bust cohérents")
 
 
@@ -4092,7 +4102,11 @@ def test_retouche_cablee_et_honnete():
 
     # (9) La dépendance est déclarée.
     req = open(os.path.join(racine, 'requirements.txt'), encoding='utf-8').read()
-    assert 'Pillow' in req, 'Pillow absent de requirements.txt'
+    # Insensible à la casse : ce test cherchait « Pillow » avec une majuscule,
+    # exactement comme le code qui a créé un doublon en ne voyant pas le
+    # « pillow » déjà présent. Le contrôle reproduisait le défaut qu'il aurait
+    # dû empêcher. pip, lui, ne fait pas la différence.
+    assert 'pillow' in req.lower(), 'Pillow absent de requirements.txt'
 
     # (10) Le panneau est bien dans le studio, avec ses étiquettes.
     for ident in ('studio-retouche-fichier', 'studio-retouche-consigne',
@@ -4420,6 +4434,185 @@ def test_une_seule_porte_vers_les_images():
     ok("images : une seule porte (Alt+Maj+G), rien d’injoignable après la fusion")
 
 
+
+def test_mise_a_jour_dit_la_verite():
+    """« Mise à jour appliquée ! » était faux sur les trois quarts du logiciel.
+
+    Le backlog demandait un script de migration vers Git, parce qu'Éric et
+    Nando, installés depuis un ZIP, ne recevaient pas les mises à jour. Or ce
+    besoin est déjà couvert autrement : `/api/update` télécharge l'archive
+    GitHub et remplace les fichiers, sans Git du tout. La demande du backlog
+    est donc périmée.
+
+    Mais en la vérifiant, ceci est apparu : la route copie des fichiers, et
+    l'interface annonçait « Mise à jour appliquée ! Rechargement dans 3
+    secondes… » avant de recharger la page toute seule.
+
+    C'est faux. Python a déjà chargé `main.py`, `core/` et `modules/` en
+    mémoire : les remplacer sur le disque ne change RIEN au processus en
+    cours. Seuls les fichiers statiques sont relus par le navigateur. On
+    obtient donc une INTERFACE NEUVE SUR UN SERVEUR ANCIEN — précisément la
+    panne « contrat interface / serveur » que nos tests traquent, sauf qu'elle
+    se produit chez l'utilisateur, à l'exécution. Les routes du jour
+    (`/api/live/ws`, `/api/retouche/appliquer`) n'existeraient pas encore.
+
+    Et si la version exige une bibliothèque de plus — Pillow pour la retouche,
+    websockets pour le mode Live, tous deux ajoutés cette semaine — personne
+    ne l'installe.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    route = main[main.index('async def do_update'):]
+    route = route[:route.index(chr(10) + '@app')]
+
+    # (1) La route DIT s'il faut relancer, et pourquoi.
+    assert 'redemarrage_requis' in route, 'la route ne dit pas si un redémarrage s’impose'
+    assert 'CODE_SERVEUR' in route, \
+        'sans distinguer le code serveur des fichiers statiques, on ne peut pas le savoir'
+
+    # (2) Elle nomme les bibliothèques APPARUES : personne ne les installera
+    #     à la place de l'utilisateur.
+    assert 'dependances_nouvelles' in route
+    assert 'requirements.txt' in route
+
+    # (3) Elle ne recopie que ce qui DIFFÈRE — sinon « fichiers modifiés »
+    #     vaudrait toujours la totalité du dépôt, et n'apprendrait rien.
+    assert 'filecmp' in route, 'sans comparaison, le compte de fichiers ment'
+
+    # (4) Elle ne touche pas aux fichiers qui appartiennent à la machine.
+    assert 'SKIP_FICHIERS' in route and 'nimm.log' in route, \
+        'les journaux locaux seraient écrasés par ceux du dépôt'
+    assert '"data"' in route or "'data'" in route, 'les données doivent être préservées'
+
+    # (5) L'archive est décompressée AVANT toute copie : une archive abîmée ne
+    #     doit pas laisser l'installation à moitié remplacée.
+    assert route.index('extractall') < route.index('shutil.copy2'), \
+        'copie entamée avant d’avoir vérifié que l’archive s’ouvre'
+
+    # (6) L'interface ne ment plus, et ne recharge plus toute seule.
+    bloc = js[js.index("fetch('/api/update'"):][:3000]
+    assert 'Mise à jour appliquée' not in bloc, 'affirmation fausse restaurée'
+    assert 'setTimeout(() => location.reload(), 3000)' not in bloc, \
+        'le rechargement automatique donne à croire que tout est actif'
+    assert 'd.message' in bloc, 'le message du serveur doit être affiché tel quel'
+    assert 'redemarrage_requis' in bloc
+
+    # (7) Le message porte une INSTRUCTION (« relance NIMM ») : s'il n'est pas
+    #     annoncé, il n'existe pas pour qui n'a pas l'écran.
+    zone = html[html.index('id="update-status"'):]
+    zone = zone[:zone.index('>') + 1]
+    assert 'aria-live' in zone, 'l’instruction de redémarrage doit être annoncée'
+    assert '_coanimmAnnounce' in bloc, 'et annoncée aussi au moment où elle arrive'
+
+    # (8) La liste des fichiers est copiable — on ne dicte pas vingt chemins.
+    assert 'readOnly = true' in bloc, 'la liste des fichiers doit être copiable'
+    ok("mise à jour : dit ce qui a changé, réclame le redémarrage, nomme les dépendances")
+
+
+
+def test_requirements_complet_et_sans_doublon():
+    """Ce que NIMM importe pour démarrer doit être déclaré. Sans exception.
+
+    Question de Fernando le 31/08 : « en as-tu profité pour mettre à jour
+    requirements.txt ? ». La vérification a rapporté deux choses, dont une de
+    mon fait.
+
+    1. J'AVAIS CRÉÉ UN DOUBLON. `Pillow` était déjà déclaré plus bas, en
+       minuscules, pour l'OCR. Mon contrôle avant ajout était sensible à la
+       casse et ne l'a pas vu. Sans conséquence pour pip, mais c'est le genre
+       de désordre qui fait douter du reste du fichier.
+
+    2. `requests` N'ÉTAIT DÉCLARÉ NULLE PART, alors qu'il est importé EN TÊTE
+       de `net_guard.py` et de `websearch.py`. Un import en tête n'est pas
+       rattrapable : sans lui, ces deux modules ne se chargent pas du tout —
+       donc ni la recherche web, ni le garde-fou anti-SSRF. Ça ne se voyait
+       pas parce qu'une autre bibliothèque l'installe en passant. Sur une
+       installation neuve, ou le jour où cette autre bibliothèque cesse d'en
+       dépendre, la recherche web tombe sans explication.
+
+    LA DISTINCTION QUI FAIT TOUT
+    Un import placé dans un `try` ou dans une fonction est OPTIONNEL : son
+    absence est rattrapée, et le code le dit en français (kokoro, piper,
+    geopy, networkx sont dans ce cas — volontairement non déclarés). Un import
+    en TÊTE de module est OBLIGATOIRE. Ce test ne surveille que les seconds.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _norm(nom):
+        # pip traite « - », « _ » et « . » comme équivalents. Ne pas le faire,
+        # c'est produire de faux manquants — première version de ce test.
+        return re.sub(r'[-_.]+', '-', nom.strip().lower())
+
+    declares = {}
+    for n, ligne in enumerate(open(os.path.join(racine, 'requirements.txt'),
+                                   encoding='utf-8'), 1):
+        brut = ligne.split('#')[0].strip()
+        if not brut:
+            continue
+        declares.setdefault(_norm(re.split(r'[<>=!\[ ]', brut)[0]), []).append(n)
+
+    assert len(declares) >= 30, 'relevé trop maigre (%d)' % len(declares)
+
+    # (1) Aucun doublon : deux lignes pour un même paquet, c'est le signe que
+    #     personne ne sait plus ce que contient le fichier.
+    doublons = {k: v for k, v in declares.items() if len(v) > 1}
+    assert not doublons, 'paquets déclarés deux fois : %s' % doublons
+
+    # (2) Tout import EN TÊTE de module doit être déclaré.
+    std = set(sys.stdlib_module_names) | {'core', 'modules', 'main', 'tests'}
+    alias = {'PIL': 'pillow', 'yaml': 'pyyaml', 'bs4': 'beautifulsoup4',
+             'docx': 'python-docx', 'pptx': 'python-pptx', 'fitz': 'pymupdf',
+             'dotenv': 'python-dotenv', 'sklearn': 'scikit-learn',
+             'whisper': 'openai-whisper', 'multipart': 'python-multipart',
+             'fpdf': 'fpdf2', 'sentence_transformers': 'sentence-transformers',
+             'google': 'google-genai'}
+
+    obligatoires = {}
+    for dossier in ('.', 'core', 'modules'):
+        chemin_d = os.path.join(racine, dossier)
+        for f in sorted(os.listdir(chemin_d)):
+            if not f.endswith('.py'):
+                continue
+            p = os.path.join(chemin_d, f)
+            try:
+                arbre = ast.parse(open(p, encoding='utf-8').read())
+            except Exception:
+                continue
+            # SEULEMENT le premier niveau : un import sous `try` ou dans une
+            # fonction est un choix, pas une dépendance dure.
+            for n in arbre.body:
+                noms = []
+                if isinstance(n, ast.Import):
+                    noms = [a.name.split('.')[0] for a in n.names]
+                elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                    noms = [n.module.split('.')[0]]
+                for x in noms:
+                    if x not in std:
+                        obligatoires.setdefault(x, set()).add(
+                            os.path.relpath(p, racine).replace('\\', '/'))
+
+    assert len(obligatoires) >= 8, \
+        'relevé des imports obligatoires trop maigre (%d)' % len(obligatoires)
+
+    manquants = sorted(
+        '%s (%s)' % (nom, ', '.join(sorted(fichiers)))
+        for nom, fichiers in obligatoires.items()
+        if _norm(alias.get(nom, nom)) not in declares)
+    assert not manquants, (
+        'importés en tête de module mais absents de requirements.txt : '
+        + ' ; '.join(manquants))
+
+    # (3) Les deux ajouts de la semaine doivent y être : sans eux, la retouche
+    #     et le mode Live refusent de fonctionner sur une machine neuve.
+    for paquet in ('pillow', 'websockets', 'requests'):
+        assert paquet in declares, '%s absent de requirements.txt' % paquet
+    ok("requirements : %d paquets, aucun doublon, aucun import obligatoire oublié"
+       % len(declares))
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -4476,6 +4669,8 @@ if __name__ == '__main__':
                test_retouche_atteignable_depuis_la_galerie,
                test_cles_api_toutes_enregistrables,
                test_menu_plus_dit_ou_il_mene,
-               test_une_seule_porte_vers_les_images]:
+               test_une_seule_porte_vers_les_images,
+               test_mise_a_jour_dit_la_verite,
+               test_requirements_complet_et_sans_doublon]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

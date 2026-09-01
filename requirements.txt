@@ -22,9 +22,6 @@ lameenc>=0.3.0               # encodeur MP3 pur Python (DAISY 2.02)
 # kokoro-onnx>=0.4.0
 # piper-tts>=1.2.0
 
-Pillow>=10.0.0           # retouche locale exacte (recadrer, pivoter,
-                         # agrandir, éclaircir) — aucune invention
-
 # ── Fichiers ──
 pypdf>=4.0.0
 python-docx>=1.1.0
@@ -47,7 +44,13 @@ mistralai>=1.0.0
 #   - poppler-utils (pour rasteriser les PDF)
 pytesseract>=0.3.10
 pdf2image>=1.17.0
-pillow>=10.0.0
+pillow>=10.0.0           # OCR local, ET retouche d'image locale exacte
+                         # (recadrer, pivoter, agrandir, éclaircir)
+
+requests>=2.31.0         # importé EN TÊTE de net_guard.py et websearch.py :
+                         # sans lui, la recherche web et le garde-fou
+                         # anti-SSRF ne se chargent pas. Jamais déclaré
+                         # jusqu'ici — il n'arrivait que par ricochet.
 
 # ── Web search ──
 # ddgs remplacé par Brave Search API (clé configurée dans les paramètres)
