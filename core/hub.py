@@ -4686,70 +4686,83 @@ async def process_message_stream(
                     yield f"data: [CITATIONS]{_json_cit.dumps(event['citations'], ensure_ascii=False)}\n\n"
 
                 elif event['type'] == 'tool_calls':
-                    # ── Exécution des outils demandés par le LLM ──
+                    # ── Boucle agentique bornée (façon Cline) ──
+                    # On exécute les outils demandés, puis on redonne la main au
+                    # modèle AVEC les outils toujours actifs, pour qu'il puisse en
+                    # enchaîner plusieurs à la suite (ex : lister un fichier PUIS
+                    # l'exécuter). Bornée par _MAX_TOOL_LOOPS : si le modèle se
+                    # trompe ou boucle sur lui-même, on s'arrête et on le dit,
+                    # plutôt que de tourner indéfiniment.
                     messages.append(event['assistant_msg'])
 
-                    for call in event['calls']:
-                        if call['name'] == 'search_web':
-                            yield "data: [WEB_SEARCH_LOADING]\n\n"
-                        else:
-                            yield "data: [TOOL_LOADING]" + call['name'] + chr(10) + chr(10)
-                        tool_result = await _execute_tool(call['name'], call['args'], thread_id)
-                        # Emettre les citations Mistral routing si presentes
-                        _cit_val = _pending_citations.get(None)
-                        if _cit_val is not None:
-                            import json as _jc3
-                            yield f"data: [CITATIONS]{_jc3.dumps(_cit_val, ensure_ascii=False)}\n\n"
-                            _pending_citations.set(None)
-                        messages.append({
-                            'role':         'tool',
-                            'tool_call_id': call['id'],
-                            'content':      tool_result,
-                        })
-
-                    # Phase 2 : stream de la réponse finale avec contexte enrichi
-                    # Ne repasser les outils qu'à Anthropic (seul provider qui l'exige
-                    # structurellement quand l'historique contient des blocs tool_use/tool_result).
-                    # Pour DeepSeek/Mistral/OpenAI/OpenRouter, repasser les outils ici permet au
-                    # modèle de retenter un appel d'outil au lieu de répondre en texte — et ce
-                    # chemin (call_llm_stream) ne sait pas traiter un deuxième tool_calls, d'où
-                    # un flux silencieux ou coupé en pleine phrase.
-                    _phase2_tools = NIMM_TOOLS if settings['provider'] == 'anthropic' else None
+                    _outils_dispo = (_gemini_gs_tools if _gemini_gs_tools else
+                                      (_mistral_ws_tools + NIMM_TOOLS) if _mistral_ws_tools else NIMM_TOOLS)
+                    _MAX_TOOL_LOOPS = 4
                     _avant_phase2 = len(full_reply)
-                    async for token in call_llm_stream(
-                        messages=messages,
-                        provider=settings['provider'],
-                        model=settings.get('model'),
-                        system_prompt=system_prompt,
-                        max_tokens=settings['max_tokens'],
-                        temperature=settings['temperature'],
-                        api_keys=settings['api_keys'],
-                        tools=_phase2_tools,
-                        # Les outils restent DÉCLARÉS — Anthropic l'exige dès que
-                        # l'historique contient un appel et son résultat — mais leur
-                        # usage est INTERDIT ici : ce chemin ne lit que du texte, et
-                        # un second appel d'outil y passait totalement inaperçu, d'où
-                        # une réponse entièrement muette après une recherche web.
-                        outils_interdits=bool(_phase2_tools),
-                    ):
-                        if isinstance(token, dict):
-                            if token.get('type') == 'usage':
-                                _last_usage = token
-                            elif token.get('__truncated__'):
-                                # Le frontend affiche alors le bouton « Continuer ».
+                    _prochain_evt = event
+
+                    for _tour in range(1, _MAX_TOOL_LOOPS + 1):
+                        for call in _prochain_evt['calls']:
+                            if call['name'] == 'search_web':
+                                yield "data: [WEB_SEARCH_LOADING]\n\n"
+                            else:
+                                yield "data: [TOOL_LOADING]" + call['name'] + chr(10) + chr(10)
+                            tool_result = await _execute_tool(call['name'], call['args'], thread_id)
+                            # Emettre les citations Mistral routing si presentes
+                            _cit_val = _pending_citations.get(None)
+                            if _cit_val is not None:
+                                import json as _jc3
+                                yield f"data: [CITATIONS]{_jc3.dumps(_cit_val, ensure_ascii=False)}\n\n"
+                                _pending_citations.set(None)
+                            messages.append({
+                                'role':         'tool',
+                                'tool_call_id': call['id'],
+                                'content':      tool_result,
+                            })
+
+                        _nouvel_appel = None
+                        async for event2 in call_llm_stream_with_tools(
+                            messages=messages,
+                            tools=_outils_dispo,
+                            provider=settings['provider'],
+                            model=settings.get('model'),
+                            system_prompt=system_prompt,
+                            max_tokens=settings['max_tokens'],
+                            temperature=settings['temperature'],
+                            api_keys=settings['api_keys'],
+                        ):
+                            if event2['type'] == 'token':
+                                full_reply += event2['text']
+                                _yield_buf += event2['text']
+                                for chunk in _flush_buf():
+                                    yield f"data: {chunk}\n\n"
+                            elif event2['type'] == 'usage':
+                                _last_usage = event2
+                            elif event2['type'] == 'truncated':
                                 yield "data: [TRUNCATED]\n\n"
-                            elif token.get('__raisonnement__'):
-                                import json as _jr
-                                yield ("data: [RAISONNEMENT]"
-                                       + _jr.dumps(token['__raisonnement__'], ensure_ascii=False)
-                                       + "\n\n")
-                            continue
-                        full_reply += token
-                        _yield_buf += token
-                        for chunk in _flush_buf():
-                            yield f"data: {chunk}\n\n"
+                            elif event2['type'] == 'raisonnement':
+                                import json as _json_rais
+                                yield f"data: [RAISONNEMENT]{_json_rais.dumps(event2['text'], ensure_ascii=False)}\n\n"
+                            elif event2['type'] == 'citations':
+                                import json as _json_cit2
+                                yield f"data: [CITATIONS]{_json_cit2.dumps(event2['citations'], ensure_ascii=False)}\n\n"
+                            elif event2['type'] == 'tool_calls':
+                                _nouvel_appel = event2
+                                messages.append(event2['assistant_msg'])
+
+                        if _nouvel_appel is None:
+                            break
+                        _prochain_evt = _nouvel_appel
+                    else:
+                        # _MAX_TOOL_LOOPS atteint sans que le modèle ne s'arrête de
+                        # lui-même : garde-fou anti-boucle infinie.
+                        _avert = ("\n\n⚠️ Je m'arrête là après plusieurs étapes à la "
+                                  "suite — dis-moi si je dois continuer.")
+                        full_reply += _avert
+                        yield f"data: {_avert}\n\n"
 
                     if len(full_reply) == _avant_phase2:
+
                         # REPLI SANS OUTILS — dernier recours, et le plus robuste.
                         #
                         # Anthropic exige que les outils restent déclarés tant que

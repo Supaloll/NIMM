@@ -2522,6 +2522,11 @@ async def call_llm_stream_with_tools(
                 except Exception:
                     continue
 
+    # Chaîne de pensée des modèles de raisonnement : captée pendant le stream,
+    # remontée en événement pour que le hub l'affiche (repliée dans l'interface).
+    if _raisonnement_acc.strip():
+        yield {"type": "raisonnement", "text": _raisonnement_acc.strip()}
+
     # ── Repli : appel d'outil écrit en texte (« <function=nom>{…} ») ──
     if not _tool_calls_acc and _contient_appel_texte(_raw_acc):
         _appels = _parse_appels_texte(_raw_acc)
