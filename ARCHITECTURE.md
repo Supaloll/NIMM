@@ -860,7 +860,7 @@ Audit mémoire du 09/06/2026 — décisions validées :
 **B — Chiralité symétrie** (fix court terme)
 `PREDICATS_INVERSES` : `prenom_pere` et équivalents génèrent `enfant_de` comme inverse, pas `parent`. Évite la lecture contre-intuitive dans la modale mémoire.
 
-**C — Poids initial à 0.5** (règle Occurrence / Coïncidence / Récurrence)
+**C — Poids initial à 0.5** — ÉCARTÉ le 31/08/2026 par Fernando (« non, on ne va pas faire ça »). Vérifié dans le code ce jour-là : tout triplet neuf entre encore avec `poids = 1.0`, la règle n'a donc jamais été appliquée. Ce n'est pas un oubli mais une décision — toucher au poids des souvenirs déjà en base pour un gain théorique ne valait pas le risque. À ne plus faire remonter comme priorité.
 Tout nouveau triplet entre avec `poids = 0.5` (fragile). La règle devient :
 - Occurrence 1 : poids 0.5 — fragile, soumis au decay normal
 - Occurrence 2 : poids 1.0 — coïncidence, survit mieux, remonte dans les recalls
@@ -912,7 +912,7 @@ Phase 2 possible : instruction directe ("fais-moi un DOCX sur X") via CoaNIMM ou
 **Objectif :** un script `MIGRER_VERS_GIT.bat` à exécuter une seule fois qui installe Git si absent, clone le repo, préserve `data/users.json` et `data/nimm_*.db`, puis branche le lancement sur le nouveau dossier.
 **Mécanisme d'entrée du chemin :** glisser-déposer le dossier NIMM sur le `.bat`.
 **Prérequis :** Éric et Nando sont déjà collaborateurs sur le repo GitHub privé.
-**Statut :** à construire lors d'un appel test avec Nando — session dédiée.
+**Statut : PÉRIMÉ (31/08/2026).** Le besoin — « Éric et Nando ne reçoivent pas les mises à jour » — est déjà couvert autrement, et SANS Git : `POST /api/update` télécharge l'archive GitHub et remplace les fichiers, en préservant `data/`. Aucun script de migration n'est nécessaire. En le vérifiant, un défaut bien plus gênant est apparu — voir l'entrée « La mise à jour annonçait le contraire de la vérité ».
 
 ### [FUTUR] Normaliseur prédicats libres (G)
 Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les prédicats libres sémantiquement proches vers leurs équivalents canoniques (ex : `conduit_camion` → `metier: chauffeur poids lourd`). Complexe : une fusion naïve perd l'information contenue dans le prédicat libre. Nécessite une UI de validation avant application. À affiner avant d'implémenter.
@@ -1503,3 +1503,79 @@ Le nouveau test vérifie qu'**aucun élément cherché par le script n'a disparu
 de la page**, et que le corps de `_retoucheCabler` n'est pas vide.
 
 Tests : 94 scénarios.
+
+---
+
+## La mise à jour annonçait le contraire de la vérité (31/08/2026)
+
+### Comment on y arrive
+
+Demande de Fernando : « je pense que dans les .md à la racine on a consigné des
+choses à faire : analyse et dis-moi ce qu'on pourrait faire ». Le BACKLOG date
+du 9 juin. Plutôt que de le lire, il a été **vérifié dans le code** — et
+l'écart est instructif :
+
+| Ligne du backlog | Réalité du code, 31/08 |
+|---|---|
+| Refonte mémoire A→G | 5 sur 7 déjà faites |
+| Fenêtre active + carnet progressif | fait le jour même de l'écriture |
+| Export, phase 2 | devenue possible : `write_file` était mort jusqu'au 28/08 |
+| Migration Git pour Éric et Nando | **périmée** : `/api/update` fait déjà le travail, sans Git |
+
+Un backlog non vérifié coûte plus qu'il ne rapporte : il fait travailler sur
+des choses faites, et il cache celles qui ne le sont pas.
+
+### Ce que la vérification a mis au jour
+
+`POST /api/update` télécharge l'archive GitHub et remplace les fichiers. Puis
+l'interface annonçait : « ✅ Mise à jour appliquée ! Rechargement dans 3
+secondes… ».
+
+**C'est faux sur les trois quarts du logiciel.** Python a déjà chargé
+`main.py`, `core/` et `modules/` en mémoire : les remplacer sur le disque ne
+change rien au processus en cours. Seuls les fichiers statiques — page, script,
+feuille de style — sont relus par le navigateur.
+
+Le résultat est une **interface neuve sur un serveur ancien**. C'est exactement
+la panne « contrat interface / serveur » que nos tests traquent depuis juillet,
+sauf qu'elle se produit chez l'utilisateur, à l'exécution. Le lot de cette
+semaine l'illustre : la nouvelle page appelle `/api/live/ws` et
+`/api/retouche/appliquer`, que l'ancien serveur ne connaît pas.
+
+Et si la version exige une bibliothèque de plus — **Pillow** pour la retouche,
+**websockets** pour le mode Live, tous deux ajoutés cette semaine — personne ne
+l'installe. Les modules le disent honnêtement à l'usage, mais après coup.
+
+### Ce que la route rend maintenant
+
+- **ce qui a changé** : seuls les fichiers réellement différents sont recopiés
+  (`filecmp`), sans quoi le compte vaudrait toujours la totalité du dépôt ;
+- **s'il faut relancer** : la route distingue le code serveur (`main.py`,
+  `core/`, `modules/`) des fichiers statiques ;
+- **les bibliothèques apparues**, nommées, avec la commande à taper ;
+- et elle ne touche plus aux fichiers qui appartiennent à la machine
+  (`nimm.log`, `.env`), qu'elle écrasait avec ceux du dépôt.
+
+L'archive est décompressée **avant** toute copie : une archive abîmée ne doit
+pas laisser l'installation à moitié remplacée. C'était déjà le cas ; le test
+l'ancre désormais.
+
+### Côté interface
+
+Plus de rechargement automatique — il donnait à croire que tout était actif. Le
+message du serveur est affiché tel quel, **annoncé au lecteur d'écran**
+(l'instruction « relance NIMM » n'existe pas si on ne l'entend pas), la liste
+des fichiers est **copiable**, et le bouton devient « Relance NIMM pour
+appliquer » quand c'est le cas.
+
+### Une bévue à consigner
+
+La première tentative d'écrire cette entrée a été **avalée en silence** : mon
+garde-fou testait la présence de la phrase-titre, or je venais de l'écrire dans
+le renvoi du backlog. Le script a conclu « déjà présent » et n'a rien fait —
+sans rien afficher, puisque le message de confirmation était à l'intérieur du
+`if`. Deux leçons : garder sur une chaîne qui n'existe QUE dans le bloc ajouté,
+et faire dire au script ce qu'il a fait **dans les deux cas**, pas seulement
+quand il agit.
+
+Tests : 95 scénarios.
