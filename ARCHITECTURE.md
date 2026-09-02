@@ -1579,3 +1579,63 @@ et faire dire au script ce qu'il a fait **dans les deux cas**, pas seulement
 quand il agit.
 
 Tests : 95 scénarios.
+---
+
+## coaNIMM s'arrêtait au milieu du travail (01/09/2026)
+
+### Un "<" et puis plus rien
+
+« Il me dit qu'il travaille, mais il ne fait rien. » Laurent demandait à
+coaNIMM de convertir un `.svg` en `.png` : le modèle confirmait le chemin du
+fichier, annonçait qu'il lançait la conversion — et s'arrêtait net, parfois
+sur un simple `<` orphelin affiché à l'écran. Il fallait relancer la
+conversation pour voir la suite.
+
+Deux symptômes, une seule cause : **coaNIMM n'avait le droit d'utiliser qu'un
+seul outil par tour de parole.** Le code avait été construit ainsi
+volontairement — un commentaire de l'époque explique qu'autoriser un second
+appel d'outil provoquait un flux muet ou coupé en pleine phrase. Le
+contournement retenu à l'époque avait été de **retirer les outils** dès le
+deuxième tour plutôt que de réparer l'enchaînement.
+
+Or une tâche réelle demande souvent plus d'une étape : lister le fichier,
+*puis* l'exécuter. Privé de la possibilité de rappeler un outil normalement,
+DeepSeek tentait parfois d'en écrire un en texte brut (un format spécial du
+modèle, commençant par `<`) — et c'est ce texte mal formé, coupé entre deux
+paquets du flux, qui laissait fuiter le `<` avant de couper l'affichage.
+
+### La boucle agentique bornée
+
+coaNIMM redonne maintenant la main au modèle **avec les outils toujours
+actifs** après chaque exécution, façon agent Cline : il peut enchaîner
+plusieurs appels à la suite, jusqu'à `_MAX_TOOL_LOOPS = 4`. Si le plafond est
+atteint sans que le modèle ne conclue de lui-même — erreur de raisonnement,
+boucle sur lui-même — coaNIMM s'arrête proprement et le dit : « ⚠️ Je m'arrête
+là après plusieurs étapes à la suite — dis-moi si je dois continuer. » plutôt
+que de rester silencieux.
+
+Le repli sans outils (dernier recours si même la boucle ne produit rien) est
+conservé tel quel.
+
+### Un oubli débusqué en cours de route
+
+Le chemin utilisé par la boucle (`call_llm_stream_with_tools`) accumulait déjà
+la chaîne de pensée des modèles de raisonnement (`reasoning_content`) mais ne
+l'avait **jamais émise** — contrairement à l'ancien chemin de phase 2. Sans
+correction, la boucle agentique aurait fait disparaître l'affichage du
+raisonnement replié dans les échanges concernés. Ajout du `yield` manquant
+côté `engine.py`, et de la branche correspondante côté `hub.py`.
+
+### Une fusion au passage
+
+Le merge avec la branche de Nando a touché deux fichiers sans lien avec la
+boucle : `index.html` et un test de cache-busting. Le test de Nando remplace
+une valeur figée (`v=20260829-2`, qui cassait à chaque changement de numéro)
+par une vérification de **forme** — un numéro daté doit exister sur `app.js`
+ET sur `styles.css`. En résolvant le conflit, `styles.css` référençait encore
+l'ancien numéro pendant que `app.js` avait le nouveau : navigateur servant un
+CSS périmé depuis son cache pendant que le JS était à jour. Harmonisé sur
+`20260831-maj`.
+
+Tests : 96 scénarios.
+---
