@@ -2394,8 +2394,19 @@ async def call_llm_stream_with_tools(
     if system_prompt:
         oai_messages.append({'role': 'system', 'content': system_prompt})
     for m in messages:
-        if m['role'] != 'system':
-            oai_messages.append({'role': m['role'], 'content': m['content']})
+        if m['role'] == 'system':
+            continue
+        # On ne garde pas que role+content : un message assistant qui a
+        # appelé un outil doit conserver son tool_calls (sinon il part vide
+        # aux yeux de l'API — "must have either content or tool_calls, but
+        # not none"), et un message tool doit conserver son tool_call_id
+        # (sinon l'API ne sait pas à quel appel il répond).
+        _msg = {'role': m['role'], 'content': m['content']}
+        if m.get('tool_calls'):
+            _msg['tool_calls'] = m['tool_calls']
+        if m['role'] == 'tool' and m.get('tool_call_id'):
+            _msg['tool_call_id'] = m['tool_call_id']
+        oai_messages.append(_msg)
 
     headers = {
         'Authorization': f'Bearer {api_key}',
@@ -2451,6 +2462,13 @@ async def call_llm_stream_with_tools(
             headers=headers,
             json=payload,
         ) as r:
+            if r.status_code >= 400:
+                # Le corps d'une réponse en flux n'est pas lu automatiquement :
+                # sans cette lecture explicite, l'exception ci-dessous porte une
+                # réponse "vide" et classer_erreur_fournisseur() ne peut plus
+                # afficher la vraie raison donnée par le fournisseur — juste
+                # "raison non précisée", qui ne dit rien à personne.
+                await r.aread()
             r.raise_for_status()
             _premiere_ligne = True
             async for line in r.aiter_lines():
