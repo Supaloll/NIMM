@@ -918,6 +918,22 @@ Phase 2 possible : instruction directe ("fais-moi un DOCX sur X") via CoaNIMM ou
 ### [FUTUR] Normaliseur prédicats libres (G)
 Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les prédicats libres sémantiquement proches vers leurs équivalents canoniques (ex : `conduit_camion` → `metier: chauffeur poids lourd`). Complexe : une fusion naïve perd l'information contenue dans le prédicat libre. Nécessite une UI de validation avant application. À affiner avant d'implémenter.
 
+### [PRIORITÉ] Persistance des images générées dans le fil de conversation
+
+Constat du 02/09/2026 (Laurent) : une image générée en conversation (`%%IMAGE:%%`) disparaît de la bulle du fil dès qu'on ferme et rouvre NIMM, alors qu'elle reste consultable dans la galerie 🖼️.
+
+**Cause identifiée :** deux sauvegardes séparées, jamais reliées.
+- Côté serveur (`hub.py`, point 10 du pipeline), le message assistant écrit en base ne contient que `[Système — image générée]\nPrompt : ...` — aucune référence au fichier.
+- Côté navigateur (`app.js`, gestionnaire `[IMAGE_GEN]`), l'appel `POST /api/images/save` a lieu APRÈS coup, une fois l'image reçue en streaming ; l'`id`/`filename` renvoyés ne sont posés que sur le `dataset` du DOM (perdu à la fermeture), jamais renvoyés vers le message stocké en base.
+
+**Objectif :** qu'une image générée reste visible dans sa bulle d'origine à la réouverture du fil, pas seulement dans la galerie.
+
+**Piste de résolution (à valider avant implémentation) :**
+1. Une fois `POST /api/images/save` confirmé côté navigateur, transmettre le `filename` obtenu au serveur pour qu'il vienne compléter le message assistant déjà enregistré (nouvelle route, ou extension d'une route existante de mise à jour de message).
+2. Côté affichage de l'historique (`renderMessages` / `appendAssistantMessage`), reconnaître ce marqueur et générer un `<img src="/api/images/file/{filename}">` au lieu d'afficher le texte brut `[Système — image générée]`.
+
+**Vigilance :** touche `hub.py` ET `app.js` — à signaler à Nando avant de s'y mettre pour éviter un conflit de fusion.
+
 ---
 
 | 19/06/2026 (session 2) | **Galerie images — correctif sauvegarde via chat + réparation encodage app.js**. [app.js] Bug : la sauvegarde automatique d'une image générée en langage naturel (chemin chat, gestionnaire `[IMAGE_GEN]`) référençait une variable inexistante `_currentThreadId` (au lieu de `currentTabId`/`currentThreadId`) — `ReferenceError` silencieuse interrompant le `fetch('/api/images/save')` avant son envoi. L'image s'affichait dans le fil mais n'atteignait jamais la table `images` ni le dossier `data/images/`. Corrigé : `thread_id: currentTabId || currentThreadId || ''`. Le chemin bouton dédié 🖼️ (`/api/image/generate`) n'était pas affecté. **Incident annexe découvert pendant la correction** : `frontend/app.js` contenait deux octets isolés en CP1252/Latin-1 au lieu d'UTF-8 (un `é` dans un commentaire de `_coanimmShowResult`, un espace insécable dans un message d'erreur) — héritage probable d'un éditeur mal configuré côté Mac/Linux. Cline (DeepSeek-chat) détectait l'échec de décodage strict et basculait automatiquement en lecture `latin-1` pour contourner, ce qui corrompait l'intégralité des accents/emojis/séparateurs du fichier à chaque réécriture. Les deux octets fautifs ont été localisés par script Python (position exacte + contexte) et corrigés en manipulation d'octets bruts, sans relecture `latin-1` du fichier entier. [.clinerules] Nouvelle section « Encodage — tous fichiers » : interdiction explicite de tout repli `latin-1`/`cp1252` en cas d'erreur de décodage UTF-8 ; obligation de s'arrêter et de remonter l'erreur exacte plutôt que de contourner silencieusement. Nando informé (commentaire fautif situé dans son apport CoaNIMM). Cache-busting : `20260619-1`. |
