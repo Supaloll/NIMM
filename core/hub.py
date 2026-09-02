@@ -1195,7 +1195,25 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               Retourne un texte alternatif accessible (WCAG).\n'
         '                               Appeler quand l\'utilisateur donne une URL d\'image\n'
         '                               ou demande de décrire/vérifier l\'accessibilité d\'une image.\n'
+        '• demander_precision(question, options) → poser UNE question de clarification\n'
+        '                               et s\'arrêter là, au lieu d\'agir sur une demande floue.\n'
+        '                               Voir la règle de retenue ci-dessous.\n'
         'Appliquer la règle SONDE du lexique.\n'
+        '\n--- Règle de retenue : agir ou demander ---\n'
+        "Les outils ci-dessus ne servent pas tous à chercher : certains PRODUISENT ou "
+        "MODIFIENT quelque chose (run_code, write_file, opérations sur fichiers). "
+        "Avant d'appeler un de ceux-là, vérifie que la demande est assez précise pour "
+        "être exécutée sans deviner :\n"
+        "  1. La cible est-elle nommée ou évidente (quel fichier, quel dossier, quel contenu) ?\n"
+        "  2. Le résultat attendu est-il déterminé (quel format, quelle destination) ?\n"
+        "  3. Un mot de la demande peut-il s'entendre de deux façons dans ce contexte ?\n"
+        "Si un seul de ces points reste ouvert, N'AGIS PAS : appelle demander_precision() "
+        "avec une seule question fermée, et attends la réponse. Demander coûte une phrase ; "
+        "se tromper de cible coûte à l'utilisateur un travail à refaire.\n"
+        "En sens inverse, n'abuse pas de cette règle : quand la demande est claire, agis "
+        "sans demander. Ne l'applique jamais aux outils de simple consultation (search_*, "
+        "get_*, lookup_*), ni à une conversation ordinaire — dans ces cas, réponds "
+        "directement.\n"
     )
 
     # FORMAT DE SORTIE — tags techniques
@@ -2212,7 +2230,50 @@ from modules.coanimm_ops import (OPS_TOOLS as _COANIMM_OPS_TOOLS,
                                  ASYNC_OPS_TOOLS as _COANIMM_ASYNC_TOOLS,
                                  ASYNC_OPS_NAMES as _COANIMM_ASYNC_NAMES,
                                  dispatch_async_op as _coanimm_dispatch_async_op)
-NIMM_TOOLS = NIMM_TOOLS + _COANIMM_OPS_TOOLS + _COANIMM_ASYNC_TOOLS
+# ── Outil de retenue : demander plutôt qu'agir sur une demande floue ──
+# Outil TERMINAL. Quand le modèle l'appelle, la boucle agentique s'arrête et la
+# question part telle quelle à l'utilisateur, sans repasser par le LLM. La
+# DÉCISION de demander reste au modèle ; la FORME de la question, elle, ne dépend
+# plus de lui — d'où un rendu identique quel que soit le fournisseur.
+DEMANDER_PRECISION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "demander_precision",
+        "description": (
+            "Pose UNE question de clarification à l'utilisateur et arrête-toi là, au lieu "
+            "d'agir sur une demande ambiguë. À utiliser avant tout outil qui produit ou "
+            "modifie quelque chose (run_code, write_file, opérations sur fichiers) lorsque "
+            "la cible, le format attendu, ou le sens d'un mot de la demande reste ouvert. "
+            "N'appelle PAS cet outil quand la demande est claire, ni pour les outils de "
+            "simple consultation, ni dans une conversation ordinaire."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": (
+                        "La question, en UNE seule phrase courte et fermée, en français. "
+                        "Pas de préambule, pas d'excuses, aucune mise en forme."
+                    )
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Facultatif : 2 à 4 réponses possibles, très courtes (quelques mots "
+                        "chacune). Elles seront numérotées pour que l'utilisateur puisse "
+                        "répondre par un simple chiffre."
+                    )
+                }
+            },
+            "required": ["question"]
+        }
+    }
+}
+
+NIMM_TOOLS = (NIMM_TOOLS + [DEMANDER_PRECISION_TOOL]
+              + _COANIMM_OPS_TOOLS + _COANIMM_ASYNC_TOOLS)
 
 
 async def _check_moderation(text: str, api_keys: dict) -> dict:
@@ -2775,6 +2836,36 @@ def _outils_exigeant_query() -> set:
 _OUTILS_A_QUERY = _outils_exigeant_query()
 
 
+def _formater_demande_precision(args: dict) -> str:
+    """
+    Met en forme la question posée par demander_precision().
+
+    Texte brut, court, sans balise ni symbole de mise en forme : la réponse est
+    lue par un lecteur d'écran et sur une plage braille. Les options éventuelles
+    sont numérotées pour qu'un chiffre suffise à répondre.
+    """
+    question = str((args or {}).get('question') or '').strip()
+    if not question:
+        return ("Précision nécessaire : peux-tu redire ta demande en précisant sur "
+                "quoi je dois travailler ?")
+    if not question.endswith(('?', '!', '.')):
+        question += ' ?'
+
+    lignes = ["Précision nécessaire avant d'agir.", '', question]
+
+    options = (args or {}).get('options') or []
+    if isinstance(options, str):
+        options = [options]
+    options = [str(o).strip() for o in options if str(o).strip()][:4]
+    if options:
+        lignes.append('')
+        for i, opt in enumerate(options, 1):
+            lignes.append('%d. %s' % (i, opt))
+        lignes.append('')
+        lignes.append('Réponds par le numéro, ou en une phrase si aucune ne convient.')
+    return chr(10).join(lignes)
+
+
 async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     """
     Exécute un outil demandé par le LLM et retourne le résultat en texte.
@@ -2791,6 +2882,15 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     query = (args.get('query') or '').strip()
     if not query and name in _OUTILS_A_QUERY:
         return '[Aucun résultat — paramètre query vide]'
+
+    if name == 'demander_precision':
+        # Filet de sécurité : cet outil est normalement intercepté en amont
+        # (outil terminal — la question part directement à l'utilisateur). Si un
+        # chemin d'appel oubliait cette interception, on renvoie au modèle la
+        # consigne de poser la question lui-même plutôt que de continuer à agir.
+        return ("[Question à poser telle quelle à l'utilisateur, puis arrête-toi et "
+                "attends sa réponse sans utiliser d'autre outil]" + chr(10)
+                + _formater_demande_precision(args))
 
     if name == 'search_memory':
         try:
@@ -4242,7 +4342,14 @@ async def process_message(
                 elif event['type'] == 'tool_calls':
                     # Exécuter les outils demandés
                     messages.append(event['assistant_msg'])
+                    _precision = None   # demander_precision : outil terminal
                     for call in event['calls']:
+                        if call['name'] == 'demander_precision':
+                            # Voir process_message_stream : la question part telle
+                            # quelle, la phase 2 est sautée.
+                            _precision = _formater_demande_precision(call['args'])
+                            print('[HUB] Demande de precision — phase 2 sautee')
+                            break
                         tool_result = await _execute_tool(call['name'], call['args'], thread_id)
                         print(f"[HUB] 🔍 Tool {call['name']}({call['args'].get('query','')!r}) → {len(tool_result)} chars")
                         messages.append({
@@ -4250,6 +4357,9 @@ async def process_message(
                             'tool_call_id': call['id'],
                             'content':      tool_result,
                         })
+                    if _precision is not None:
+                        raw_reply = _precision
+                        break
                     # Phase 2 : réponse finale avec contexte enrichi
                     # Même logique qu'en streaming (bloc #01) : seul Anthropic a besoin des
                     # outils ici. Les repasser aux providers OpenAI-compatible les inviterait
@@ -4701,8 +4811,19 @@ async def process_message_stream(
                     _avant_phase2 = len(full_reply)
                     _prochain_evt = event
 
+                    _precision = None   # demander_precision : outil terminal
+
                     for _tour in range(1, _MAX_TOOL_LOOPS + 1):
                         for call in _prochain_evt['calls']:
+                            if call['name'] == 'demander_precision':
+                                # Outil TERMINAL : la question part telle quelle,
+                                # sans repasser par le modèle. La décision de
+                                # demander appartient au LLM ; la forme de la
+                                # question, non — d'où un rendu identique quel
+                                # que soit le fournisseur branché.
+                                _precision = _formater_demande_precision(call['args'])
+                                print('[HUB] Demande de precision — boucle agentique arretee')
+                                break
                             if call['name'] == 'search_web':
                                 yield "data: [WEB_SEARCH_LOADING]\n\n"
                             else:
@@ -4719,6 +4840,9 @@ async def process_message_stream(
                                 'tool_call_id': call['id'],
                                 'content':      tool_result,
                             })
+
+                        if _precision is not None:
+                            break
 
                         _nouvel_appel = None
                         async for event2 in call_llm_stream_with_tools(
@@ -4761,7 +4885,12 @@ async def process_message_stream(
                         full_reply += _avert
                         yield f"data: {_avert}\n\n"
 
-                    if len(full_reply) == _avant_phase2:
+                    if _precision is not None:
+                        full_reply += _precision
+                        yield ('data: ' + _precision.replace(chr(10), '\\n')
+                               + chr(10) + chr(10))
+
+                    elif len(full_reply) == _avant_phase2:
 
                         # REPLI SANS OUTILS — dernier recours, et le plus robuste.
                         #
