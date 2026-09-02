@@ -4613,6 +4613,170 @@ def test_requirements_complet_et_sans_doublon():
        % len(declares))
 
 
+# ══════════════════════════════════════════════════════════════════════
+# AGIR OU DEMANDER — règle de retenue + outil demander_precision
+# (note de Laurent du 02/09/2026 : « discuter ou agir ? »)
+# ══════════════════════════════════════════════════════════════════════
+
+def _source_hub():
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+
+
+def _charger_formateur():
+    """Extrait _formater_demande_precision de hub.py et l'exécute isolément.
+
+    On n'importe pas core.hub pour une fonction de mise en forme : il tirerait
+    la base, les clés et une dizaine de modules. On prend son code source, et
+    rien d'autre.
+    """
+    arbre = ast.parse(_source_hub())
+    for n in arbre.body:
+        if isinstance(n, ast.FunctionDef) and n.name == '_formater_demande_precision':
+            ns = {}
+            exec(compile(ast.Module(body=[n], type_ignores=[]), 'hub_extrait', 'exec'), ns)
+            return ns['_formater_demande_precision']
+    raise AssertionError('_formater_demande_precision introuvable dans core/hub.py')
+
+
+def test_regle_de_retenue_dans_le_prompt():
+    """Le prompt disait quand agir, jamais quand s'abstenir.
+
+    Le bloc « Outils disponibles » ne contenait que des déclencheurs :
+    « Appeler dès que… », « Appeler quand… ». Pas une ligne sur le cas où la
+    demande est trop floue pour être exécutée. Résultat observé par Laurent le
+    02/09/2026 sur une même tâche (convertir un .svg en .png) : DeepSeek posait
+    une question, Mistral fonçait. Deux comportements opposés, même prompt —
+    parce que le prompt ne tranchait rien.
+
+    Ce test verrouille les deux moitiés de la règle. La première (quand
+    s'abstenir) est celle qu'on vient d'écrire ; la SECONDE (quand ne surtout
+    pas demander) compte autant : un assistant qui demande à chaque tour est
+    aussi inutilisable qu'un assistant qui se trompe de cible.
+    """
+    hub = _source_hub()
+    assert '--- Règle de retenue : agir ou demander ---' in hub, \
+        'la règle de retenue a disparu du bloc « Outils disponibles »'
+
+    debut = hub.index('--- Règle de retenue : agir ou demander ---')
+    bloc = hub[debut:debut + 2500]
+
+    # (1) Les trois questions de contrôle, celles qui rendent la règle vérifiable
+    #     plutôt que suggestive.
+    for repere in ('1. La cible', '2. Le résultat attendu', "3. Un mot de la demande"):
+        assert repere in bloc, 'question de contrôle manquante : %s' % repere
+
+    # (2) La consigne d'abstention, et l'outil vers lequel elle renvoie.
+    assert "N'AGIS PAS" in bloc, "la règle n'ordonne jamais de s'abstenir"
+    assert 'demander_precision()' in bloc, 'la règle ne renvoie pas vers l’outil'
+
+    # (3) La contre-règle. Sans elle, on remplace un défaut par l'autre.
+    assert "n'abuse pas" in bloc, 'aucun garde-fou contre l’excès de questions'
+    assert 'search_*' in bloc, \
+        'les outils de simple consultation ne sont pas exclus de la règle'
+
+    # (4) L'outil doit être annoncé dans la liste des outils, pas seulement
+    #     déclaré dans le schéma JSON : plusieurs fournisseurs lisent surtout
+    #     cette liste en texte.
+    assert '• demander_precision(' in hub, \
+        'demander_precision absent de la liste « Outils disponibles »'
+    ok('retenue : la règle dit quand s’abstenir ET quand ne pas demander')
+
+
+def test_demande_de_precision_accessible():
+    """La question part telle quelle : sa forme doit être lisible en braille.
+
+    C'est tout l'intérêt d'en faire un outil plutôt qu'une consigne de style :
+    le modèle décide QU'IL faut demander, mais il n'écrit pas la mise en page.
+    Pas d'astérisques, pas de titres, pas de puces — et des options numérotées,
+    pour qu'un chiffre suffise à répondre.
+    """
+    f = _charger_formateur()
+
+    txt = f({'question': 'Le PNG doit-il servir à imprimer ou à découper',
+             'options': ['Imprimer', 'Découper']})
+
+    # (1) Rien qui ne se lise mal à la synthèse vocale ou sur une plage braille.
+    for interdit in ('**', '##', '`', '<', '- ', '•'):
+        assert interdit not in txt, 'mise en forme interdite dans la question : %r' % interdit
+
+    # (2) Une question reste une question, même si le modèle oublie le signe.
+    assert txt.rstrip().count('?') >= 1
+    assert 'à découper ?' in txt
+
+    # (3) Options numérotées, et la façon d'y répondre écrite noir sur blanc.
+    assert chr(10) + '1. Imprimer' in txt
+    assert chr(10) + '2. Découper' in txt
+    assert 'Réponds par le numéro' in txt
+
+    # (4) Robustesse : le modèle peut envoyer n'importe quoi.
+    assert f({}).strip(), 'question vide → la réponse ne doit pas être vide'
+    assert f({'question': 'Quel dossier ?'}).count('?') == 1, 'ponctuation doublée'
+    trop = f({'question': 'Lequel ?', 'options': ['a', 'b', 'c', 'd', 'e', '', '  ']})
+    assert '4. d' in trop and '5. e' not in trop, 'les options ne sont pas bornées à 4'
+    assert f({'question': 'X ?', 'options': 'seule'}).count(chr(10) + '1. seule') == 1, \
+        'une option envoyée en chaîne au lieu d’une liste doit être acceptée'
+    ok('demander_precision : texte brut, options numérotées, entrées douteuses absorbées')
+
+
+def test_demander_precision_est_terminal():
+    """Demander doit ARRÊTER la boucle, sinon le modèle enchaîne quand même.
+
+    Si l'outil se contentait de renvoyer un résultat comme les autres, la
+    boucle agentique redonnerait la main au LLM avec les outils toujours
+    actifs — et un modèle pressé passerait à l'action juste après avoir posé sa
+    question. La question resterait affichée, mais l'action aurait eu lieu :
+    le pire des deux mondes.
+
+    D'où l'interception AVANT tout nouvel appel au modèle, dans les deux
+    chemins (streaming et non-streaming). Ce test vérifie l'ORDRE des
+    instructions, seul garant du comportement.
+    """
+    hub = _source_hub()
+    arbre = ast.parse(hub)
+    corps = {}
+    for n in arbre.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            corps[n.name] = ast.get_source_segment(hub, n) or ''
+
+    # (1) L'outil est déclaré, et réellement ajouté à ce qu'on envoie au modèle.
+    assert 'DEMANDER_PRECISION_TOOL' in hub
+    assert '[DEMANDER_PRECISION_TOOL]' in hub, \
+        'l’outil est défini mais jamais ajouté à NIMM_TOOLS'
+    declare = hub[hub.index('DEMANDER_PRECISION_TOOL = {'):]
+    declare = declare[:declare.index(chr(10) + '}')]
+    assert '"required": ["question"]' in declare, 'la question doit être obligatoire'
+    assert 'options' in declare, 'le paramètre options a disparu'
+
+    # (2) Streaming : interception, puis sortie, AVANT le rappel du modèle.
+    seg = corps.get('process_message_stream', '')
+    assert seg, 'process_message_stream introuvable'
+    i_int = seg.index("if call['name'] == 'demander_precision':")
+    i_sortie = seg.index('if _precision is not None:', i_int)
+    i_rappel = seg.index('_nouvel_appel = None', i_int)
+    assert i_int < i_sortie < i_rappel, \
+        'en streaming, le modèle est rappelé avant que la boucle ne soit coupée'
+    assert 'full_reply += _precision' in seg, 'la question n’est pas jointe à la réponse'
+    assert "_precision.replace(chr(10), '" + chr(92) + chr(92) + "n')" in seg, \
+        'sauts de ligne non échappés : le flux SSE serait coupé en plein milieu'
+
+    # (3) Non-streaming : même chose, la phase 2 doit être sautée.
+    seg2 = corps.get('process_message', '')
+    assert seg2, 'process_message introuvable'
+    j_int = seg2.index("if call['name'] == 'demander_precision':")
+    j_raw = seg2.index('raw_reply = _precision', j_int)
+    j_p2 = seg2.index('_phase2_tools', j_int)
+    assert j_int < j_raw < j_p2, 'la phase 2 s’exécute malgré la demande de précision'
+
+    # (4) Filet : même si un futur chemin d'appel oublie l'interception,
+    #     _execute_tool ne doit pas renvoyer une erreur d'outil inconnu.
+    exe = hub[hub.index('async def _execute_tool'):]
+    exe = exe[:exe.index(chr(10) + 'async def ', 10)]
+    assert "name == 'demander_precision'" in exe, \
+        'aucune branche de repli dans _execute_tool'
+    ok('demander_precision : outil terminal dans les deux chemins, filet compris')
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -4671,6 +4835,9 @@ if __name__ == '__main__':
                test_menu_plus_dit_ou_il_mene,
                test_une_seule_porte_vers_les_images,
                test_mise_a_jour_dit_la_verite,
-               test_requirements_complet_et_sans_doublon]:
+               test_requirements_complet_et_sans_doublon,
+               test_regle_de_retenue_dans_le_prompt,
+               test_demande_de_precision_accessible,
+               test_demander_precision_est_terminal]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
