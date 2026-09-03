@@ -15,7 +15,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260831-maj">
+<link rel="stylesheet" href="/static/styles.css?v=20260903-galerie-flex">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -2207,8 +2207,8 @@ Analyse les sentiments de : ..."
         </div>
         
 
-        <div id="galerie-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px;max-height:65vh;overflow-y:auto;padding:4px 2px;">
-            <div id="galerie-empty" style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px 0;">Aucune image sauvegardée.</div>
+        <div id="galerie-grid" style="display:flex;flex-wrap:wrap;align-content:flex-start;gap:10px;max-height:65vh;overflow-y:auto;padding:4px 2px;">
+            <div id="galerie-empty" style="width:100%;text-align:center;color:var(--text-muted);padding:40px 0;">Aucune image sauvegardée.</div>
         </div>
         <!-- ── LE STUDIO EST ICI, ET PLUS DERRIÈRE LE MENU « + » ──
              Fernando a cherché la création d'image et de vidéo dans la galerie
@@ -2225,6 +2225,13 @@ Analyse les sentiments de : ..."
                     placeholder="Une bibliothèque ancienne baignée de lumière rasante, plans larges."
                     aria-label="Description de l'image à générer"
                     style="width:100%;box-sizing:border-box;"></textarea>
+            </div>
+            <div class="setting-item">
+                <label for="studio-image-ref">Image de référence (optionnel)</label>
+                <input type="file" id="studio-image-ref" accept="image/*"
+                    aria-label="Ajouter une image de référence pour guider la génération"
+                    style="width:100%;box-sizing:border-box;">
+                <div id="studio-image-ref-preview" style="margin-top:6px;"></div>
             </div>
             <div class="setting-item">
                 <label for="studio-image-modele">Modèle</label>
@@ -2459,7 +2466,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260831-maj"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260903-galerie-flex"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

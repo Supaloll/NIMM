@@ -31,7 +31,10 @@ MODELES = {
         'libelle': 'Nano Banana (Flash) — rapide',
         'description': ("Le modèle de tous les jours. Rapide, jusqu'à 4K, "
                         "recherche Google possible pour coller au réel."),
-        'tailles': ('0.5K', '1K', '2K', '4K'),
+        # '512' et non '0.5K' : c'est la valeur que l'API Interactions accepte
+        # réellement pour ce palier (02/09/2026 — erreur 400 sur
+        # response_format.image_size, valeurs supportées listées par Gemini).
+        'tailles': ('512', '1K', '2K', '4K'),
     },
     'pro': {
         'id': 'gemini-3-pro-image',
@@ -51,10 +54,12 @@ MODELES = {
 # Google annonce ces rapports pour les modèles image de Gemini 3.
 RATIOS = ('1:1', '3:2', '2:3', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9')
 
-# Format demandé au modèle. PNG parce que NIMM range les images générées en .png
-# dans la galerie : demander le format qu'on écrit évite un fichier dont
-# l'extension ment sur le contenu.
-_MIME_DEMANDE = 'image/png'
+# Format demandé au modèle. JPEG car l'API Interactions de Gemini a cessé de
+# supporter le PNG en sortie (02/09/2026 — erreur 400 "not supported for
+# response_format.mime_type"). L'extension du fichier écrit sur disque suit
+# de toute façon le mime RÉEL de la réponse (extension_pour), donc ce
+# changement n'exige rien d'autre en aval.
+_MIME_DEMANDE = 'image/jpeg'
 
 # Extension de fichier à employer selon le format réellement rendu — c'est le
 # mime de la RÉPONSE qui fait foi, pas celui qu'on a demandé.
@@ -179,10 +184,13 @@ async def generer(prompt, modele='flash', ratio='1:1', taille='1K',
         'store': False,
         'response_format': {
             'type': 'image',
-            # « inline » = les octets de l'image arrivent dans la réponse. C'est
-            # ce que ce module sait lire ; ne pas le dire, c'est s'en remettre à
-            # un défaut qui pourrait rendre une simple référence.
-            'delivery': 'inline',
+            # Le champ 'delivery' n'est PAS envoyé : demander explicitement
+            # 'inline' (ou 'uri') fait échouer l'appel depuis le 02/09/2026
+            # ("Image delivery mode is not supported"), alors que la doc
+            # officielle le documente encore comme valide — décalage doc/API
+            # côté Google, confirmé sur leur forum développeur. Omettre le
+            # champ renvoie l'image inline par défaut, ce que ce module sait
+            # lire de toute façon.
             # Demandé explicitement pour que l'extension du fichier écrit sur
             # disque corresponde vraiment au contenu.
             'mime_type': _MIME_DEMANDE,

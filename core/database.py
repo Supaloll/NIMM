@@ -1598,6 +1598,25 @@ def update_last_message_usage(thread_id: str, tokens_in: int, tokens_out: int, c
     conn.commit()
     conn.close()
 
+def update_last_assistant_image(thread_id: str, filename: str):
+    """Complète le dernier message assistant d'un fil avec la référence du
+    fichier image généré (persistance images — associe la bulle du fil à la
+    galerie). N'agit que si un thread_id valide est fourni."""
+    if not thread_id or not filename:
+        return
+    conn = get_conn()
+    conn.execute(
+        '''UPDATE messages SET content = content || ?
+           WHERE id = (
+               SELECT id FROM messages
+               WHERE thread_id = ? AND role = 'assistant'
+               ORDER BY id DESC LIMIT 1
+           )''',
+        (f'\nFichier : {filename}', thread_id)
+    )
+    conn.commit()
+    conn.close()
+
 def get_messages(thread_id: str, limit: int = 200):
     conn = get_conn()
     rows = conn.execute(
