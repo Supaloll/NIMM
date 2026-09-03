@@ -2623,7 +2623,33 @@ function _wrapBareQuiz(text) {
     );
 }
 
+// Persistance images : reconnaît un message assistant qui référence une image
+// générée (chemin tag %%IMAGE:%% ou bouton dédié 🖼️, tous deux terminés par
+// une ligne "Fichier : ...") et en extrait le nom de fichier + la légende.
+// Retourne null si le message n'est pas de ce type — texte normal inchangé.
+function _extractGeneratedImage(rawText) {
+    const m = rawText.match(/^(?:\[Système — image générée\]|🎨 Image générée\.)[\s\S]*?\nFichier\s*:\s*(\S+)\s*$/);
+    if (!m) return null;
+    const filename  = m[1];
+    const capMatch  = rawText.match(/Prompt(?:\s+utilisé)?\s*:\s*(.+)/);
+    const caption   = capMatch ? capMatch[1].trim() : '';
+    return { filename, caption };
+}
+
 function _renderBubble(bubble, rawText) {
+    // Image générée persistée : rendu direct, on court-circuite le pipeline
+    // markdown/quiz qui n'a rien à faire sur ce type de message.
+    const _genImg = _extractGeneratedImage(rawText);
+    if (_genImg) {
+        const src = `/api/images/file/${encodeURIComponent(_genImg.filename)}`;
+        const alt = _genImg.caption || 'Image générée';
+        bubble.innerHTML = `<img src="${src}" alt="${_esc(alt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">`
+            + (_genImg.caption ? `<span style="font-size:0.8rem;color:var(--text-muted);">${_esc(_genImg.caption)}</span>` : '');
+        _attachQuizListeners(bubble);
+        _addCodeCopyButtons(bubble);
+        return;
+    }
+
     rawText = _wrapBareQuiz(rawText);
     const quizBlocks = [];
     let   hasBilan   = false;
@@ -4582,8 +4608,16 @@ async function sendMessage() {
             div.appendChild(bubble);
             document.getElementById('messages').appendChild(div);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            // Sauvegarde automatique galerie
+            // Persistance images : on écrit le message utilisateur tout de suite,
+            // mais on attend la confirmation de /api/images/save avant d'écrire
+            // le message assistant, pour pouvoir y glisser le nom du fichier.
+            const _tid = conversationId;
+            fetch(`/api/threads/${_tid}/messages`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({role:'user', content:'🖼️ ' + prompt})
+            }).catch(()=>{});
             (async () => {
+                let _filename = '';
                 try {
                     const saveResp = await fetch('/api/images/save', {
                         method: 'POST',
@@ -4593,29 +4627,28 @@ async function sendMessage() {
                             url:       data.url || '',
                             prompt:    prompt,
                             thread_id: conversationId || '',
+                            link_to_last_message: false,
                         })
                     });
                     if (saveResp.ok) {
                         const saved = await saveResp.json();
                         div.dataset.imgId = saved.id;
                         div.dataset.imgFilename = saved.filename;
+                        _filename = saved.filename || '';
                         console.log('[NIMM] Image sauvegardee :', saved.filename);
                     }
                 } catch(e) { console.warn('[NIMM] Sauvegarde image echouee :', e); }
+                // Sauvegarder en DB pour que le LLM voie l'image dans l'historique —
+                // le nom de fichier n'est ajouté que s'il a bien été obtenu.
+                const _assistantContent = (revisedPrompt
+                    ? `🎨 Image générée.\nPrompt utilisé : ${revisedPrompt}`
+                    : `🎨 Image générée.\nPrompt : ${prompt}`)
+                    + (_filename ? `\nFichier : ${_filename}` : '');
+                fetch(`/api/threads/${_tid}/messages`, {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({role:'assistant', content: _assistantContent})
+                }).catch(()=>{});
             })();
-            // Sauvegarder en DB pour que le LLM voit l'image dans l'historique
-            const _tid = conversationId;
-            const _assistantContent = revisedPrompt
-                ? `🎨 Image générée.\nPrompt utilisé : ${revisedPrompt}`
-                : `🎨 Image générée.\nPrompt : ${prompt}`;
-            fetch(`/api/threads/${_tid}/messages`, {
-                method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({role:'user', content:'🖼️ ' + prompt})
-            }).catch(()=>{});
-            fetch(`/api/threads/${_tid}/messages`, {
-                method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({role:'assistant', content: _assistantContent})
-            }).catch(()=>{});
         } catch(e) {
             removeLoader();
             appendAssistantMessage(`❌ Erreur génération image : ${e.message}`);
@@ -6726,18 +6759,18 @@ let _galerieRenameId = null;
 async function _galerieLoad() {
     const grid = document.getElementById('galerie-grid');
     if (!grid) return;
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px 0;">Chargement…</div>';
+    grid.innerHTML = '<div style="width:100%;text-align:center;color:var(--text-muted);padding:40px 0;">Chargement…</div>';
     try {
         const resp = await fetch('/api/images');
         const images = await resp.json();
         if (!images.length) {
-            grid.innerHTML = '<div id="galerie-empty" style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px 0;">Aucune image sauvegardée.</div>';
+            grid.innerHTML = '<div id="galerie-empty" style="width:100%;text-align:center;color:var(--text-muted);padding:40px 0;">Aucune image sauvegardée.</div>';
             return;
         }
         grid.innerHTML = '';
         images.forEach(img => {
             const card = document.createElement('div');
-            card.style.cssText = 'background:var(--bg-input);border:1px solid var(--border);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;';
+            card.style.cssText = 'width:110px;flex:0 0 110px;background:var(--bg-input);border:1px solid var(--border);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;';
             // Les images ne sont plus toutes des .png depuis que le format suit
             // celui rendu par le modèle : on retire l'extension, quelle qu'elle soit.
             const displayName = img.filename.replace(/\.(png|jpg|jpeg|webp)$/i, '');
@@ -6750,11 +6783,11 @@ async function _galerieLoad() {
                     ? 'Image sans description enregistrée. Consigne d\'origine : ' + img.prompt
                     : 'Image sans description enregistrée : ' + displayName);
             card.innerHTML = `
-                <div style="position:relative;width:100%;padding-top:100%;overflow:hidden;background:var(--bg-surface);">
+                <div style="position:relative;width:100%;aspect-ratio:1/1;overflow:hidden;background:var(--bg-surface);">
                     <img src="/api/images/file/${encodeURIComponent(img.filename)}"
                          alt="${_esc(altTexte)}"
                          loading="lazy"
-                         style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;"
+                         style="width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;"
                          title="${_esc(img.prompt || '')}"
                          data-img-id="${img.id}">
                 </div>
@@ -6807,7 +6840,7 @@ async function _galerieLoad() {
             grid.appendChild(card);
         });
     } catch(e) {
-        grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px 0;">Erreur de chargement.</div>';
+        grid.innerHTML = '<div style="width:100%;text-align:center;color:var(--text-muted);padding:40px 0;">Erreur de chargement.</div>';
         console.error('[NIMM] Erreur galerie :', e);
     }
 }
@@ -13466,6 +13499,37 @@ init();
     var _stImageModeles = [], _stVideoModeles = [];
     var _stVideoTimer = null, _stVideoDebut = 0;
     var _ST_INTERVALLE_MS = 30000;
+    var _stImageRef = null; // {b64, mime} — image de référence optionnelle du Studio
+
+    // Lit le fichier choisi, affiche une miniature + bouton de retrait.
+    document.getElementById('studio-image-ref')?.addEventListener('change', function (e) {
+        var file = e.target.files && e.target.files[0];
+        var preview = document.getElementById('studio-image-ref-preview');
+        if (!file) { _stImageRef = null; if (preview) preview.innerHTML = ''; return; }
+        var reader = new FileReader();
+        reader.onload = function () {
+            _stImageRef = { b64: reader.result, mime: file.type || 'image/png' };
+            if (preview) {
+                preview.innerHTML = '';
+                var vign = document.createElement('img');
+                vign.src = reader.result;
+                vign.alt = 'Aperçu de l\'image de référence';
+                vign.style.cssText = 'max-width:120px;max-height:120px;border-radius:6px;display:block;margin-bottom:4px;';
+                var retirer = document.createElement('button');
+                retirer.type = 'button';
+                retirer.textContent = '✕ Retirer';
+                retirer.style.cssText = 'font-size:0.78rem;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:2px 8px;cursor:pointer;';
+                retirer.addEventListener('click', function () {
+                    _stImageRef = null;
+                    document.getElementById('studio-image-ref').value = '';
+                    preview.innerHTML = '';
+                });
+                preview.appendChild(vign);
+                preview.appendChild(retirer);
+            }
+        };
+        reader.readAsDataURL(file);
+    });
 
     function _stImgStatus(m) {
         var e = document.getElementById('studio-image-status');
@@ -13528,7 +13592,8 @@ init();
                     modele: document.getElementById('studio-image-modele')?.value || 'flash',
                     ratio: document.getElementById('studio-image-ratio')?.value || '1:1',
                     taille: document.getElementById('studio-image-taille')?.value || '1K',
-                    decrire: !!document.getElementById('studio-image-decrire')?.checked
+                    decrire: !!document.getElementById('studio-image-decrire')?.checked,
+                    images_ref: _stImageRef ? [_stImageRef] : []
                 })
             });
             var d = await r.json();

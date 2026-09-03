@@ -2326,9 +2326,12 @@ def test_imagerie_reglee():
     # (2) RGPD : rien ne reste chez Google. Même choix que l'agent Vibe.
     assert "'store': False" in src, "l'API Interactions conserve TOUT par défaut"
 
-    # (2 bis) La livraison en ligne est DEMANDÉE, pas espérée : ce module lit des
-    # octets, pas une référence. Et le format demandé est celui qu'on écrira.
-    assert "'delivery': 'inline'" in src
+    # (2 bis) Le champ 'delivery' n'est PAS envoyé : demander explicitement
+    # 'inline' (ou 'uri') fait échouer l'API depuis le 02/09/2026
+    # ("Image delivery mode is not supported"), malgré la doc officielle —
+    # omettre le champ renvoie l'image inline par défaut, que ce module lit.
+    # Et le format demandé est celui qu'on écrira.
+    assert "'delivery':" not in src
     assert "'mime_type': _MIME_DEMANDE" in src
 
     # (2 ter) L'extension du fichier suit le format REÇU, pas celui demandé
@@ -2381,9 +2384,9 @@ def test_imagerie_reglee():
                    'gemini-3.1-flash-lite-image'], ids
     for nom, conf in I.MODELES.items():
         assert conf['tailles'], nom
-        assert set(conf['tailles']) <= {'0.5K', '1K', '2K', '4K'}, nom
-    assert '0.5K' not in I.MODELES['pro']['tailles'], \
-        'le 0,5K est propre au modèle Flash'
+        assert set(conf['tailles']) <= {'512', '1K', '2K', '4K'}, nom
+    assert '512' not in I.MODELES['pro']['tailles'], \
+        'le palier 512 est propre au modèle Flash'
 
     # (6) L'image générée est DÉCRITE : sans alt, une image est un fichier muet
     assert '_vibe_describe_image' in mn and 'alt' in mn

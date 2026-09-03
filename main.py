@@ -33,6 +33,7 @@ from core.database import (
     set_user_context, get_current_user,
     get_all_users, create_user, delete_user, update_user,
     save_image, get_images, rename_image, delete_image,
+    update_last_assistant_image,
     get_external_key, set_external_key, list_external_keys, delete_external_key,
     list_presets, save_preset, delete_preset, apply_preset,
     list_prompts, save_prompt, delete_prompt
@@ -7498,6 +7499,7 @@ class ImageSaveRequest(BaseModel):
     url:       str = ''
     prompt:    str = ''
     thread_id: str = ''
+    link_to_last_message: bool = True
 
 class ImageRenameRequest(BaseModel):
     filename: str
@@ -7525,6 +7527,16 @@ async def images_save(req: ImageSaveRequest):
         else:
             raise HTTPException(400, "b64 ou url requis")
         img_id = save_image(filename, req.prompt, req.thread_id)
+        # Complète le message assistant déjà écrit en base (chemin %%IMAGE:%%
+        # côté hub.py) avec la référence du fichier — persistance images.
+        # Désactivable via link_to_last_message=False : le chemin bouton dédié
+        # écrit son propre message APRÈS cet appel et gère déjà son lien lui-même
+        # (sinon ce correctif viserait le message assistant précédent du fil).
+        if req.thread_id and req.link_to_last_message:
+            try:
+                update_last_assistant_image(req.thread_id, filename)
+            except Exception as _e_link:
+                print(f"[MAIN] Lien image→message échoué (non bloquant) : {_e_link}")
         return {"id": img_id, "filename": filename}
     except HTTPException:
         raise
@@ -7893,6 +7905,7 @@ class ImagerieRequest(BaseModel):
     taille: Optional[str] = '1K'
     thread_id: Optional[str] = ''
     decrire: Optional[bool] = True
+    images_ref: Optional[List[Dict]] = None
 
 @app.get("/api/imagerie/options")
 async def imagerie_options():
@@ -7913,7 +7926,8 @@ async def imagerie_generer(req: ImagerieRequest):
     from core.database import get_api_keys, save_image
     api_keys = get_api_keys()
     res = await generer((req.prompt or "").strip(), req.modele or 'flash',
-                        req.ratio or '1:1', req.taille or '1K', api_keys)
+                        req.ratio or '1:1', req.taille or '1K', api_keys,
+                        images_ref=req.images_ref or [])
     if res.get('erreur'):
         raise HTTPException(400, res['erreur'])
 

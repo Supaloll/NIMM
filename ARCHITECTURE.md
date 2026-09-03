@@ -6,39 +6,271 @@ _Décrit l'état réel du code. Référence unique — mettre à jour quand une 
 
 ```
 nimm/
-├── main.py                  — Point d'entrée FastAPI, toutes les routes HTTP
-├── core/
-│   ├── hub.py               — Orchestrateur central (tout passe ici)
-│   ├── engine.py            — Moteur LLM multi-providers + génération image
-│   └── database.py          — Accès SQLite (nimm.db)
-├── modules/
-│   ├── memory.py            — Recall, extraction, normalisation, déduplication
-│   ├── intent_gate.py       — Filtre pré-LLM pour intentions simples
-│   ├── websearch.py         — Recherche web (Brave Search API)
-│   ├── tts.py               — Synthèse vocale (Kokoro / Piper / Edge)
-│   ├── stt.py               — Reconnaissance vocale Whisper (lazy via _get_model())
-│   ├── pdf_reader.py        — Extraction texte PDF
-│   ├── quiz.py              — Rattrapage tags %%QUIZ%% non balisés (wrap_bare_quiz)
-│   ├── bibliotheque.py      — Génération fiches archivage + recall thématique
-│   ├── coanimm.py           — Agent exécution code Python (run_script, run_generated, generate_plan, explore_directory)
-│   ├── enrichissement.py    — Ingestion documents web/fichiers → zone de référence RAG
-│   ├── export_nimm.py       — Export messages marqués (txt, docx, pdf, rtf, odt, epub, mp3)
-│   └── masks/               — Personnalités LLM (fichiers JSON)
-├── frontend/
-│   ├── index.html
+├── .clinerules                           — Règles permanentes pour l'assistant Cline
+├── .gdriveignore
+├── .gitattributes
+├── .gitignore
+├── CONTRIBUTING.md
+├── DESIGN.md
+├── INSTALLER_NIMM.bat                    — Installation automatique (Windows)
+├── INSTALLER_NIMM.sh                     — Installation automatique (macOS / Linux)
+├── LANCER_NIMM.bat                       — Lancement (Windows)
+├── LANCER_NIMM.sh                        — Lancement (macOS / Linux)
+├── LICENSE
+├── NIMM_DEBUG.bat                        — Lancement en mode debug
+├── README.md
+├── bretzel.ico                           — Icône de l'application
+├── clear_memory.py                       — Vide la mémoire sauf predicat=prenom
+├── fix_archi_37.py
+├── fix_bond_map.py                       — Met à jour le bond « Plan de trajet pédestre » en base
+├── kokoro-v1.0.onnx                      — Modèle de voix Kokoro (TTS local)
+├── main.py                               — Point d'entrée FastAPI, toutes les routes HTTP
+├── nimm_launch.vbs
+├── requirements.txt                      — Dépendances Python
+├── voices-v1.0.bin                       — Voix Kokoro (TTS local)
+├── core
+│   ├── database.py                       — Accès SQLite (base principale et bases par profil)
+│   ├── engine.py                         — Moteur LLM multi-providers + génération d'image
+│   ├── hub.py                            — Orchestrateur central (tout passe ici)
+│   └── services.py                       — Catalogue unique des services externes (fournisseurs, clés API)
+├── modules
+│   ├── accessible_doc.py                 — Génération de documents accessibles (outil CoaNIMM)
+│   ├── bibliotheque.py                   — Génération fiches archivage + recall thématique
+│   ├── coanimm.py                        — Agent exécution code Python (run_script, run_generated, generate_plan, explore_directory)
+│   ├── coanimm_ops.py                    — Opérations Fichiers vérifiées CoaNIMM (couche tool-calling)
+│   ├── coanimm_safety.py                 — Garde-fous sécurité CoaNIMM (classifieur AST + confinement runtime)
+│   ├── daisy.py                          — Génération de livres DAISY 2.02 accessibles (outil CoaNIMM)
+│   ├── enrichissement.py                 — Ingestion documents web/fichiers → zone de référence RAG
+│   ├── export_nimm.py                    — Export messages marqués (txt, docx, pdf, rtf, odt, epub, mp3)
+│   ├── file_writer.py                    — Écriture de fichiers depuis le chat (workspace CoaNIMM)
+│   ├── free_apis.py                      — Services gratuits sans clé (météo, jours fériés, change, géocodage…)
+│   ├── imagerie.py                       — Génération d'images (contrôles format / résolution / modèle)
+│   ├── intent_gate.py                    — Filtre pré-LLM pour intentions simples
+│   ├── live.py                           — Conversation Live : parler à NIMM et pouvoir le couper
+│   ├── memory.py                         — Recall, extraction, normalisation, déduplication
+│   ├── musique.py                        — Génération musicale (Lyria 3 / Gemini)
+│   ├── net_guard.py                      — Garde anti-SSRF pour les récupérations d'URL
+│   ├── pdf_reader.py                     — Extraction texte PDF
+│   ├── quiz.py                           — Rattrapage tags %%QUIZ%% non balisés (wrap_bare_quiz)
+│   ├── recherche.py                      — Recherche par sens dans l'historique des conversations
+│   ├── reranker.py                       — Réordonnancement des passages de la base de connaissances
+│   ├── retouche.py                       — Retouche d'images par description (exacte ou inventive)
+│   ├── sauvegarde.py                     — Sauvegarde cohérente des bases SQLite vers un dossier synchronisé
+│   ├── stt.py                            — Reconnaissance vocale Whisper (lazy via _get_model())
+│   ├── tts.py                            — Synthèse vocale (Kokoro / Piper / Edge)
+│   ├── veille.py                         — Veille documentaire par le sens (Exa) + sujets périodiques
+│   ├── video.py                          — Génération vidéo (Veo 3.1) — opérations longues en 3 temps
+│   ├── websearch.py                      — Recherche web (Brave Search API)
+│   └── masks                             — Personnalités LLM (fichiers JSON)
+│       ├── claudio.json
+│       ├── edna.json
+│       ├── eve.json
+│       ├── glaude.json
+│       ├── huit.json
+│       ├── iris_deepseek.json
+│       ├── lia.json
+│       ├── malik.json
+│       ├── maxime.json
+│       ├── mlle_liam.json
+│       ├── mon_nimm.json
+│       ├── morse_deepseek.json
+│       ├── morse_openai.json
+│       ├── rimelin.json
+│       ├── themis.json
+│       └── thyrion.json
+├── bonds
+│   ├── fix_bond_map.py                   — Met à jour le bond « Plan de trajet pédestre » en base
+│   ├── seed_bond_alttext_image.py        — Bond « Description accessible d'image par IA (alt text) »
+│   ├── seed_bond_audio_daisy.py          — Bond « Synthèse vocale et export audio DAISY »
+│   ├── seed_bond_audit_office.py         — Bond « Audit accessibilité document Office (PPTX/DOCX) »
+│   ├── seed_bond_axe.py
+│   ├── seed_bond_compare_docs.py         — Bond « Comparaison de deux versions d'un document »
+│   ├── seed_bond_compte_rendu.py         — Bond « Mise en forme de compte-rendu de réunion »
+│   ├── seed_bond_csv_analyse.py          — Bond « Analyse de fichier CSV en texte lisible »
+│   ├── seed_bond_epub_accessible.py      — Bond « Créer un EPUB3 accessible »
+│   ├── seed_bond_map.py                  — Bond « Plan de trajet pédestre (OpenStreetMap) »
+│   ├── seed_bond_pdf_accessible.py       — Bond « Créer un PDF accessible (tagué, structuré) »
+│   ├── seed_bond_pptx_accessible.py      — Bond « Créer une présentation PowerPoint accessible »
+│   ├── seed_bond_resume_doc.py           — Bond « Résumé accessible d'un document »
+│   ├── seed_bond_tableau_pdf.py          — Bond « Extraction de tableaux PDF en texte lisible »
+│   └── seed_bond_web_texte.py            — Bond « Conversion d'une page web en texte accessible »
+├── frontend
 │   ├── app.js
+│   ├── apple-touch-icon.png
+│   ├── bretzel.png
+│   ├── emoji                             — Expressions de l'avatar (PNG)
+│   │   ├── clignement.png
+│   │   ├── colere.png
+│   │   ├── confiance.png
+│   │   ├── joie.png
+│   │   ├── lia_idle.png
+│   │   ├── memoire.png
+│   │   ├── neutre.png
+│   │   ├── peur.png
+│   │   ├── reflexion.png
+│   │   ├── surprise.png
+│   │   ├── transition.png
+│   │   └── tristesse.png
+│   ├── icon-192.png
+│   ├── icon-512.png
+│   ├── index.html
+│   ├── manifest.json                     — Manifeste PWA
 │   └── styles.css
-├── data/
-│   ├── nimm.db              — Base SQLite principale
-│   └── mood_prompts.json    — Prompts par catégorie émotionnelle
-├── tests/
-│   ├── test_memory.py       — Test qualité mémoire (7 groupes, 28 assertions)
-│   ├── clear_memory.py      — Vide la mémoire sauf predicat=prenom
-│   ├── auto_fill.py         — Remplissage automatique par scénarios
-│   ├── seed_memory.py       — Peuple la mémoire avec données de test
-│   └── audit_routes.py      — Audit complet des routes API
-└── ARCHITECTURE.md          — Ce fichier
+├── data
+│   ├── backup_config.json                — Configuration des sauvegardes automatiques
+│   ├── mood_prompts.json                 — Prompts par catégorie émotionnelle
+│   ├── nimm.db                           — Base SQLite principale
+│   ├── nimm_global.json                  — Réglages globaux (multi-profils)
+│   ├── nimm_innes.db                     — Base SQLite du profil Innes
+│   ├── nimm_laurent.db                   — Base SQLite du profil Laurent
+│   ├── nimm_maya.db                      — Base SQLite du profil Maya
+│   ├── nimm_mei.db                       — Base SQLite du profil Mei
+│   ├── nimm_nadia.db                     — Base SQLite du profil Nadia
+│   ├── users.json                        — Comptes et profils utilisateurs
+│   ├── coanimm_workspace                 — Espace de travail CoaNIMM
+│   │   └── analyse_ecriture_optimisation.txt
+│   ├── images                            — Images générées (historique)
+│   │   ├── nimm_20260608_095033_7668.png
+│   │   ├── nimm_20260703_124149_8938.png
+│   │   ├── nimm_20260707_113321_9473.png
+│   │   ├── nimm_20260722_114700_9350.png
+│   │   ├── nimm_20260722_114833_7081.png
+│   │   ├── nimm_20260722_115002_5189.png
+│   │   ├── nimm_20260722_115101_7676.png
+│   │   ├── nimm_20260722_115200_8722.png
+│   │   ├── nimm_20260722_115249_4839.png
+│   │   ├── nimm_20260722_115339_1665.png
+│   │   ├── nimm_20260722_115559_9926.png
+│   │   ├── nimm_20260722_121705_6927.png
+│   │   ├── nimm_20260802_163328_2838.png
+│   │   ├── nimm_20260804_162423_0855.png
+│   │   ├── nimm_20260829_102024_2638.png
+│   │   ├── nimm_20260829_130045_7536.png
+│   │   ├── nimm_20260829_130949_9545.png
+│   │   └── nimm_20260829_131021_7346.png
+│   ├── musiques
+│   ├── prompts                           — Prompts système mémoire par fournisseur
+│   │   ├── memoire_anthropic.txt
+│   │   ├── memoire_deepseek.txt
+│   │   ├── memoire_default.txt
+│   │   ├── memoire_gemini.txt
+│   │   ├── memoire_mistral.txt
+│   │   ├── memoire_ollama.txt
+│   │   └── memoire_ollama_llama3_1_8b.txt
+│   └── videos
+├── docs
+│   ├── Ce que fait NIMM+questions.txt
+│   ├── Dette technique prompts.txt
+│   ├── Défi — Le Triple Filtre.txt
+│   ├── NIMM — Session de tests mémoire du.txt
+│   ├── Procédure de stress test extraction mémoire tripleets.md
+│   ├── Prompt demarrage.txt
+│   ├── Prompt demarrage2.txt
+│   ├── Session Whisper.txt
+│   ├── compilation et dll.md
+│   ├── note_pour_nando_coanimm_agentivite.md
+│   ├── rapport_revision_websearch.md
+│   ├── screenshot.png
+│   ├── screenshotmobile.jpg
+│   └── skill_version_adaptee.md
+├── piper_voices                          — Voix Piper (TTS local)
+│   ├── fr_FR-gilles-low.onnx
+│   ├── fr_FR-gilles-low.onnx.json
+│   ├── fr_FR-mls-medium.onnx
+│   ├── fr_FR-mls-medium.onnx.json
+│   ├── fr_FR-siwis-medium.onnx
+│   ├── fr_FR-siwis-medium.onnx.json
+│   ├── fr_FR-upmc-medium.onnx
+│   └── fr_FR-upmc-medium.onnx.json
+├── pour mac
+│   ├── LANCER_NIMM.command               — Lancement (macOS)
+│   └── themis.json
+├── tests
+│   ├── NIMM Stress Test v2.txt
+│   ├── NIMM Stress Test v3.txt
+│   ├── analyse_incoherences.py
+│   ├── audit_routes.py                   — Audit complet des routes API
+│   ├── auto_fill.py                      — Remplissage automatique par scénarios
+│   ├── carnet_rapport.txt
+│   ├── cleanup_db.py
+│   ├── corriger_incoherences.py
+│   ├── diag_extraction.py
+│   ├── diag_famille.py
+│   ├── diagnostic_memory.py
+│   ├── inspect_db.py
+│   ├── lister_cles_corriger.py
+│   ├── nettoyer_doublons.py
+│   ├── restaurer_relations_maissane.py
+│   ├── scenario_human.txt
+│   ├── seed_memory.py                    — Peuple la mémoire avec données de test
+│   ├── test_backbone.py
+│   ├── test_biblio_pipeline.py
+│   ├── test_c5_requete.py
+│   ├── test_carnet.py
+│   ├── test_carnet_boucle.py
+│   ├── test_coanimm.py
+│   ├── test_coanimm_agentique.py
+│   ├── test_comparatif_providers.py
+│   ├── test_context_dilution.py
+│   ├── test_context_window.py
+│   ├── test_export.py
+│   ├── test_format_instructions.py
+│   ├── test_gemini_tools.py
+│   ├── test_human_vs_nimm.py
+│   ├── test_humour_prompts.py
+│   ├── test_lexique_regression.py
+│   ├── test_longrun.py
+│   ├── test_mask_incarnation.py
+│   ├── test_mask_v6v7.py
+│   ├── test_mask_v8.py
+│   ├── test_memoire_maissane.py
+│   ├── test_memory.py                    — Test qualité mémoire (7 groupes, 28 assertions)
+│   ├── test_memory_apropos.py
+│   ├── test_memory_extraction.py
+│   ├── test_memory_long.py
+│   ├── test_memory_pipeline.py
+│   ├── test_memory_proches.py
+│   ├── test_memory_tags.py
+│   ├── test_mma_bilans.py
+│   ├── test_mma_confusion.py
+│   ├── test_mood_integration.py
+│   ├── test_mood_prompts.py
+│   ├── test_mood_refined.py
+│   ├── test_morse_formulations.py
+│   ├── test_multi_user.py
+│   ├── test_nimm_express.py
+│   ├── test_os_biblio.py
+│   ├── test_perf_message.py
+│   ├── test_presets.py
+│   ├── test_prompt_library.py
+│   ├── test_provider_credit.py
+│   ├── test_r1_judo.py
+│   ├── test_recherche_conversations.py
+│   ├── test_repro_conversion_svg.py
+│   ├── test_rule_density.py
+│   ├── test_task_routing.py
+│   ├── test_thread_tags.py
+│   ├── test_tool_calling.py
+│   ├── test_tool_diag.py
+│   ├── test_topic_f6_f8.py
+│   ├── test_topic_rule.py
+│   ├── test_user_simulation.py
+│   ├── test_worker_memoire.py
+│   ├── turbo_test.py
+│   ├── verif_finale.py
+│   ├── verif_fts_finale.py
+│   ├── verif_triggers.py
+│   ├── logs
+│   │   ├── carnet_20260826_215925.txt
+│   │   ├── carnet_20260826_220000.txt
+│   │   ├── carnet_20260826_220345.txt
+│   │   └── morse_formulations_20260826_221112.txt
+│   └── results
+│       └── mood_integration_20260826_221112.txt
+└── ARCHITECTURE.md                       — Ce fichier
 ```
+
+*Non représentés (artefacts) : caches `__pycache__/`, cache de synchro Drive `.tmp.driveupload/`, journaux `nimm*.log*`, sauvegardes de base `data/*.db.bak-*`, secrets locaux (`.env`, `data/.nimm_api_keyfile`, `data/.nimm_unlock_secret`) et scripts de travail ponctuels (`_fix_*.py`, `_tmp_*.py`).*
 
 ---
 
@@ -1656,3 +1888,142 @@ CSS périmé depuis son cache pendant que le JS était à jour. Harmonisé sur
 
 Tests : 96 scénarios.
 ---
+
+## Persistance des images dans le fil, image de référence au Studio, et trois pannes Google (03/09/2026)
+
+### Le backlog qui attendait
+
+La persistance des images générées était en tête de backlog depuis un moment :
+une image générée dans le fil disparaissait (remplacée par du texte brut) à la
+réouverture du fil, alors qu'elle restait bien dans la galerie. Deux chemins
+génèrent des images dans une conversation — le tag `%%IMAGE:%%` (traité côté
+`core/hub.py`) et le bouton dédié 🖼️ (entièrement côté `frontend/app.js`) —
+et les deux souffraient du même défaut : le fichier sauvegardé n'était jamais
+relié au message stocké en base.
+
+### La persistance : deux chemins, un même principe
+
+Le principe retenu : le message assistant stocké en base porte une ligne
+`Fichier : <nom>`, et l'affichage sait la reconnaître.
+
+- [core/database.py] `update_last_assistant_image(thread_id, filename)` —
+  concatène `\nFichier : {filename}` au dernier message assistant d'un fil.
+- [main.py] `POST /api/images/save` appelle cette fonction quand `thread_id`
+  est fourni — c'est le cas du chemin `%%IMAGE:%%`, où hub.py a déjà écrit le
+  message assistant *avant* que le navigateur ne confirme la sauvegarde.
+- [frontend/app.js] Chemin bouton 🖼️ dédié : reséquencé — le message
+  utilisateur part immédiatement, mais le message assistant n'est écrit
+  **qu'après** confirmation de `/api/images/save`, avec le nom de fichier
+  déjà dans son contenu (ce chemin connaît le filename avant d'écrire, pas
+  besoin du relais serveur).
+- [frontend/app.js] `_extractGeneratedImage()` + court-circuit en tête de
+  `_renderBubble()` : reconnaît les deux formats de marqueur
+  (`[Système — image générée]` côté hub.py, `🎨 Image générée.` côté bouton
+  dédié) suivis de `Fichier :`, et affiche directement l'`<img>` au lieu du
+  texte brut. Un seul point d'accroche suffit : `_renderBubble` sert aussi
+  bien au flux live qu'au rechargement d'un fil.
+
+### Un mauvais ciblage failli passer
+
+En reséquençant le chemin bouton dédié (`/api/images/save` appelé avant
+l'écriture du message assistant), le relais serveur visait le **mauvais**
+message : sans garde-fou, il aurait complété le dernier message assistant du
+fil — potentiellement un message ancien, sans rapport — avec une ligne
+`Fichier :` fantôme. Repéré par Cline avant validation. Correctif : nouveau
+champ `link_to_last_message` (défaut `true`) dans `ImageSaveRequest` ; le
+chemin bouton dédié l'envoie à `false` puisqu'il gère déjà son lien lui-même.
+
+### L'image de référence, plus simple que prévu
+
+Laurent a ensuite demandé la possibilité de fournir une image de référence
+dans le Studio image (`/api/imagerie/generer`). Diagnostic : `modules/imagerie.py`
+acceptait déjà un paramètre `images_ref` (jusqu'à 10 images, nettoyage du
+data URL, mime détecté) — seul le relais bout en bout manquait.
+- [frontend/index.html] Champ `<input type="file">` + aperçu, dans le panneau
+  Studio image.
+- [frontend/app.js] Lecture en `FileReader`/data URL, vignette + bouton
+  « ✕ Retirer », transmis en `images_ref: [{b64, mime}]`.
+- [main.py] `ImagerieRequest.images_ref` ajouté et relayé à `generer()`.
+
+En testant, Laurent a aussi découvert le panneau « Manipuler une image »
+(`modules/retouche.py`, route `/api/retouche/appliquer`) — une fonctionnalité
+de retouche par référence déjà existante, dont il ignorait l'existence.
+
+### Trois pannes Google, découvertes en testant
+
+Chaque test a fait apparaître une erreur 400 différente de l'API Interactions
+de Gemini, sur trois champs distincts de `response_format` — toutes datées du
+02-03/09/2026, aucune liée à nos changements :
+
+1. **`mime_type`** : `image/png` n'est plus une valeur acceptée en sortie,
+   seul `image/jpeg` l'est désormais (`_MIME_DEMANDE` dans
+   `modules/imagerie.py`). L'extension du fichier écrit sur disque suivait
+   déjà le mime *réel* de la réponse (`extension_pour`), donc rien d'autre à
+   changer en aval.
+2. **`image_size`** : le palier `0.5K` du modèle Flash n'existe plus côté
+   API, renommé `512` (`MODELES['flash']['tailles']`). Test de contrat
+   `test_imagerie_reglee` mis à jour pour refléter le nouveau jeu de valeurs.
+3. **`delivery`** : envoyer `inline` (ou `uri`) fait échouer l'appel
+   (« Image delivery mode is not supported »), alors que la documentation
+   officielle de Google le liste encore comme valide — confirmé sur leur
+   forum développeur. Le champ est retiré de la requête ; l'API renvoie
+   l'image inline par défaut, ce que le module sait lire de toute façon.
+
+Les trois correctifs vivent dans `generer()`, donc bénéficient aussi bien au
+Studio qu'au panneau « Manipuler une image », qui appelle la même fonction.
+
+### Leçon
+
+L'API Interactions est en beta et bouge vite — trois champs cassés en une
+seule session de test, sur un module qui n'avait pourtant pas été touché.
+Prévoir que ce module redemande une vérification si un test échoue à
+nouveau sans lien apparent avec un changement récent côté NIMM.
+
+### La galerie qui s'écrasait sur mobile — trois pistes avant la bonne
+
+En redécouvrant le panneau galerie pendant les tests de persistance, Laurent
+a signalé l'absence du bouton de suppression — en réalité présent (barre
+`⬇ ✏️ 🗑️` sous chaque vignette) mais **invisible à 100% de zoom sur PC**, et
+visible seulement en dézoomant. Trois corrections successives, chacune
+révélant un symptôme différent :
+
+1. **`padding-top:100%` → `aspect-ratio:1/1`** (bloc #12) : corrige le zoom
+   PC, mais reproduit sur mobile le défaut inverse déjà rencontré le
+   29/08 — vignettes écrasées en bandes plates.
+2. **`align-items:start` sur la grille** (bloc #13) : les cartes ne sont
+   plus écrasées, mais désormais **se chevauchent** comme des cartes à
+   jouer étalées sur une table — seules les dernières lignes restent
+   entières.
+3. **Abandon de `display:grid` pour `display:flex;flex-wrap:wrap`**
+   (bloc #14) : chaque vignette passe à une largeur fixe (110px) au lieu
+   de dépendre d'une piste de grille calculée automatiquement. Plus de
+   chevauchement, plus d'écrasement, confirmé sur mobile ET desktop.
+
+Au passage, 3 divs d'état de la galerie (« Chargement… », « Aucune image
+sauvegardée. », « Erreur de chargement. ») portaient encore `grid-column:1/-1`,
+devenu sans effet en flex — repassées en `width:100%`.
+
+### La cause commune aux deux premiers échecs
+
+Les tentatives 1 et 2 corrigeaient chacune un symptôme sans traiter la
+cause : le calcul automatique de la hauteur de ligne (`grid-auto-rows`)
+d'une grille CSS contenant des cases à ratio d'aspect, à l'intérieur d'un
+conteneur lui-même défilant (`overflow-y:auto`), est peu fiable sur le
+navigateur mobile de Laurent — le residu, sur PC comme sur mobile,
+dépendait du zoom ou de la largeur de fenêtre, signe d'un calcul de mise
+en page à la limite plutôt que d'une règle manquante. `display:flex` évite
+complètement ce calcul : la hauteur de chaque ligne vient directement du
+contenu réel des cartes qu'elle contient.
+
+Détail cosmétique restant, noté pour une prochaine session : les vignettes
+à largeur fixe (110px) ne remplissent pas toute la largeur disponible sur
+mobile — à revoir (largeur en pourcentage, ou viser un nombre de colonnes
+fixe selon la largeur d'écran).
+
+### Leçon
+
+Après un deuxième échec sur la même famille de solution (CSS Grid), le bon
+réflexe a été de changer de mécanique plutôt que de tenter une troisième
+variante de la même piste — comme pour le silence Anthropic du 16/08 :
+préférer une solution qui ne suppose rien du comportement fragile du
+moteur de rendu à une solution élégante qui en suppose beaucoup.
