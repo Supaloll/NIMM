@@ -2027,3 +2027,68 @@ réflexe a été de changer de mécanique plutôt que de tenter une troisième
 variante de la même piste — comme pour le silence Anthropic du 16/08 :
 préférer une solution qui ne suppose rien du comportement fragile du
 moteur de rendu à une solution élégante qui en suppose beaucoup.
+
+---
+
+## Branchement du bouton « Créer une image » et toilettage de la modale Images (04/09/2026)
+
+### Le bouton qui n'ouvrait rien
+
+Dans le menu « + » de la barre de saisie, le bouton « 🖼️ Créer une image »
+ne faisait qu'injecter le préfixe `🖼️ ` dans le champ de texte du chat —
+un vestige de l'époque où la génération d'image passait par ce chemin.
+Depuis la fusion du Studio dans la modale Images (session du 03/09), la
+bonne porte d'entrée est `window._ouvrirStudio()`. Le bouton l'appelle
+maintenant directement.
+
+[frontend/app.js] `plus-imagegen` : remplace l'injection de texte par un
+appel à `window._ouvrirStudio()`.
+
+### Toilettage visuel de la modale Images
+
+La modale (galerie + Studio image/vidéo/retouche) fonctionnait bien mais
+paraissait austère : champs de formulaire sans aucun style dédié (fond,
+bordure, focus), et aucune hiérarchie visuelle entre le geste principal
+(« Décris l'image ») et les réglages techniques (modèle, format,
+résolution).
+
+- [frontend/styles.css] `#galerie-modal .setting-item` — habillage des
+  champs (textarea, select, input file) : fond `--bg-input`, bordure
+  arrondie, état focus avec halo `--accent`.
+- [frontend/styles.css] `#studio-image-prompt` / `#studio-video-prompt` et
+  leurs labels — mis en avant (taille, couleur, bordure plus marquée) pour
+  que le champ de description soit le premier repère visuel, avant les
+  réglages techniques.
+- [frontend/styles.css] Textes d'aide (`p[id$="-note"]`, `p[id$="-aide"]`)
+  — contraste remonté (`color-mix` avec `--text`), trop proches de
+  `--text-muted` seul ils se lisaient mal sur fond sombre.
+
+Attention mobile : les boutons d'action de la galerie (⬇ ✏️ 🗑️) restent
+**toujours visibles**, pas de logique d'apparition au survol envisagée —
+Laurent n'a pas de survol sur mobile, ça lui aurait bloqué l'accès à la
+suppression.
+
+### La vraie cause du flou sur le texte en gras
+
+Laurent a repéré des « bavures » sur le texte en gras des `<summary>` de
+la modale (captures à l'appui). Cause : la police Inter n'était chargée
+qu'en graisses 400 et 500 (`Inter:wght@400;500` dans l'URL Google Fonts),
+alors que plusieurs endroits de l'interface — dont ces `<summary>` —
+demandent `font-weight:600`. Cette graisse absente, le navigateur la
+simule (gras synthétique), ce qui produit un flou net à l'affichage,
+surtout avec la mise à l'échelle Windows.
+
+- [frontend/index.html] URL Google Fonts : ajout de `;600` à la famille
+  Inter (`Inter:wght@400;500;600`). Correction potentiellement visible
+  bien au-delà de la modale Images, partout où du texte est en
+  `font-weight:600` avec la police Inter.
+
+### Leçon
+
+Un flou visuel sur du texte n'est pas toujours un problème de contraste
+ou de taille de police — vérifier d'abord si la graisse demandée en CSS
+est réellement chargée. Une graisse manquante se traduit par un gras
+synthétique, souvent perçu comme un défaut de rendu plutôt que comme un
+problème de police.
+
+Cache-busting : `20260904-studio-modale` (styles.css et app.js).

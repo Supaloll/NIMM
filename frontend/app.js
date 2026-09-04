@@ -8594,15 +8594,12 @@ function setupUpload() {
         input.click();
     });
 
-    // Option 2 : Créer une image → injecte le préfixe 🖼️ dans la saisie
+    // Option 2 : Créer une image → ouvre la modale Images (studio + galerie)
     document.getElementById('plus-imagegen')?.addEventListener('click', () => {
         menu.classList.add('hidden');
-        const inp = document.getElementById('user-input');
-        if (!inp.value.startsWith('🖼️ ')) {
-            inp.value = '🖼️ ' + inp.value;
+        if (typeof window._ouvrirStudio === 'function') {
+            window._ouvrirStudio();
         }
-        inp.focus();
-        inp.setSelectionRange(inp.value.length, inp.value.length);
     });
 
 
