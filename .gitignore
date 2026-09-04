@@ -308,13 +308,9 @@ commit_*.bat
 logs.txt
 _edit_archi.py
 data/.fuse_hidden*
-data/images/nimm_20260722_114700_9350.png
-data/images/nimm_20260722_114833_7081.png
-data/images/nimm_20260722_115002_5189.png
-data/images/nimm_20260722_115101_7676.png
-data/images/nimm_20260722_115200_8722.png
-data/images/nimm_20260722_115249_4839.png
-data/images/nimm_20260722_115339_1665.png
-data/images/nimm_20260722_115559_9926.png
-data/images/nimm_20260722_121705_6927.png
-/data/images
+
+# Images créées / modifiées par le studio (galerie NIMM) : données utilisateur.
+# Elles restent sur le disque local, jamais versionnées ni poussées sur GitHub.
+# Le 04/09/2026 : retirées du suivi git (git rm --cached) — les anciennes
+# entrées par fichier individuel sont remplacées par cette règle de dossier.
+/data/images/

@@ -1045,6 +1045,71 @@ body {
 }
 .close-modal:hover { background: var(--bg-input); color: var(--text); }
 
+/* ── MODALE IMAGES — champs du studio (Décris l'image, Modèle, Format...) ──
+   Avant : label + input bruts, aucun style. On donne à chaque champ un
+   vrai fond, une bordure arrondie et un état focus visible. Scopé à
+   #galerie-modal pour ne pas toucher les autres modales qui réutilisent
+   .setting-item (Réglages, Musique). */
+#galerie-modal .setting-item {
+    margin-bottom: 14px;
+}
+#galerie-modal .setting-item label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+#galerie-modal .setting-item textarea,
+#galerie-modal .setting-item select,
+#galerie-modal .setting-item input[type="file"] {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+#galerie-modal .setting-item textarea:focus,
+#galerie-modal .setting-item select:focus,
+#galerie-modal .setting-item input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+#galerie-modal .setting-item textarea:hover,
+#galerie-modal .setting-item select:hover {
+    border-color: var(--accent);
+}
+
+/* Netteté : le gris atténué à petite taille sur fond sombre "s'efface" à
+   l'œil et donne une impression de flou. On garde ces textes discrets
+   mais plus lisibles. */
+#galerie-modal p[id$="-note"],
+#galerie-modal p[id$="-aide"] {
+    color: color-mix(in srgb, var(--text-muted) 65%, var(--text) 35%);
+}
+#galerie-modal summary {
+    letter-spacing: 0.01em;
+}
+
+/* "Décris l'image" / "Décris la vidéo" : le geste principal, il doit
+   sauter aux yeux avant les réglages techniques (modèle, format...). */
+#galerie-modal label[for="studio-image-prompt"],
+#galerie-modal label[for="studio-video-prompt"] {
+    font-size: 1rem;
+    color: var(--accent-hover);
+}
+#galerie-modal #studio-image-prompt,
+#galerie-modal #studio-video-prompt {
+    font-size: 1rem;
+    min-height: 90px;
+    border-width: 1.5px;
+    border-color: var(--accent);
+}
+
 /* ── MODALE PIN — pavé numérique ── */
 .pin-modal-box {
     max-width: 320px;
