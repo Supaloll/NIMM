@@ -4662,7 +4662,7 @@ def test_regle_de_retenue_dans_le_prompt():
         'la règle de retenue a disparu du bloc « Outils disponibles »'
 
     debut = hub.index('--- Règle de retenue : agir ou demander ---')
-    bloc = hub[debut:debut + 2500]
+    bloc = hub[debut:debut + 4500]
 
     # (1) Les trois questions de contrôle, celles qui rendent la règle vérifiable
     #     plutôt que suggestive.
@@ -4672,6 +4672,24 @@ def test_regle_de_retenue_dans_le_prompt():
     # (2) La consigne d'abstention, et l'outil vers lequel elle renvoie.
     assert "N'AGIS PAS" in bloc, "la règle n'ordonne jamais de s'abstenir"
     assert 'demander_precision()' in bloc, 'la règle ne renvoie pas vers l’outil'
+
+    # (2 bis) Leçon du banc d'essai du 05/09/2026 : les deux fournisseurs
+    #         s'abstenaient bien d'agir sur du flou — Mistral 9 fois sur 10 —
+    #         mais posaient la question EN PROSE, sans jamais appeler l'outil
+    #         (Mistral 0/10, DeepSeek 3/10). La règle doit donc interdire
+    #         explicitement la question en texte libre, sinon l'outil est mort-né.
+    assert 'en texte libre' in bloc, \
+        'la règle n’interdit pas de poser la question en prose — mesuré le 05/09 : ' \
+        'c’est exactement ce que les modèles font quand on ne l’interdit pas'
+    assert 'braille' in bloc, \
+        'la règle ordonne sans dire pourquoi ; la raison (lecture en braille et à ' \
+        'la synthèse vocale) est ce qui rend la consigne tenable'
+
+    # (2 ter) Ne pas demander ce qui est vérifiable : DeepSeek a réclamé une
+    #         précision sur un chemin de fichier pourtant complet.
+    assert 'VÉRIFIER' in bloc, 'rien n’invite à vérifier plutôt qu’à demander'
+    assert 'indécidable sans lui' in bloc, \
+        'la limite de ce qu’on a le droit de demander n’est pas posée'
 
     # (3) La contre-règle. Sans elle, on remplace un défaut par l'autre.
     assert "n'abuse pas" in bloc, 'aucun garde-fou contre l’excès de questions'
@@ -4923,7 +4941,40 @@ def test_banc_retenue_coherent():
     assert not fantomes, ('le banc range des outils qui n\'existent plus : '
                           + ', '.join(sorted(fantomes)))
 
-    # (3) Le banc ne doit jamais écrire dans la base : c'est ce qui le rend
+    # (3) La logique de jugement, éprouvée sur ses cas limites.
+    #     Le premier jet du banc confondait « a demandé en prose » et « a répondu
+    #     sans rien demander » : Mistral en est ressorti à 0/10 sur les cas
+    #     ambigus alors qu'il demandait dans neuf cas sur dix. Deux situations
+    #     opposées, deux correctifs différents — la distinction ne doit pas se
+    #     refermer par inadvertance.
+    for n in arbre_banc.body:
+        if isinstance(n, ast.FunctionDef) and n.name == 'juger':
+            espace = {}
+            exec(compile(ast.Module(body=[n], type_ignores=[]), 'banc', 'exec'), espace)
+            juger = espace['juger']
+            break
+    else:
+        raise AssertionError('juger() introuvable dans le banc d\'essai')
+
+    attendus = [
+        # (étiquette, décision, outils) -> (comportement, forme)
+        (('ambigu', 'demande', ['demander_precision']), (True, True)),
+        (('ambigu', 'demande_prose', []), (True, False)),
+        (('ambigu', 'texte', []), (False, False)),
+        (('ambigu', 'agit', ['write_file']), (False, False)),
+        (('clair', 'demande', ['demander_precision']), (False, None)),
+        (('clair', 'agit', ['run_code']), (True, None)),
+        (('discussion', 'demande', ['demander_precision']), (False, None)),
+        (('discussion', 'demande_prose', []), (True, None)),
+        (('discussion', 'agit', ['write_file']), (False, None)),
+    ]
+    for (et, dec, outils), (c_attendu, f_attendu) in attendus:
+        comportement, forme, _ = juger(et, dec, outils)
+        assert (comportement, forme) == (c_attendu, f_attendu), (
+            'juger(%r, %r) rend %r au lieu de %r'
+            % (et, dec, (comportement, forme), (c_attendu, f_attendu)))
+
+    # (4) Le banc ne doit jamais écrire dans la base : c'est ce qui le rend
     #     relançable sans salir le profil de personne.
     assert 'set_setting(' not in banc, \
         'le banc écrit un réglage en base — il doit rester en lecture seule'

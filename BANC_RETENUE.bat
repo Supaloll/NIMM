@@ -19,13 +19,16 @@ echo  1. Verification a sec  (gratuit, aucun appel)
 echo  2. Les 10 cas ambigus  (le plus informatif : coaNIMM demande-t-il ?)
 echo  3. Les 30 cas          (fournisseur du profil)
 echo  4. Les 30 cas sur deux fournisseurs  (deepseek et mistral)
+echo  5. Les 10 ambigus sur deux fournisseurs, avec le detail des reponses
+echo     (le passage a refaire apres chaque changement de la regle)
 echo.
-set /p CHOIX="Ton choix (1, 2, 3 ou 4) puis Entree : "
+set /p CHOIX="Ton choix (1 a 5) puis Entree : "
 
 if "%CHOIX%"=="1" py tests\banc_essai_retenue.py --a-sec
 if "%CHOIX%"=="2" py tests\banc_essai_retenue.py --etiquette ambigu
 if "%CHOIX%"=="3" py tests\banc_essai_retenue.py
 if "%CHOIX%"=="4" py tests\banc_essai_retenue.py --fournisseurs deepseek,mistral
+if "%CHOIX%"=="5" py tests\banc_essai_retenue.py --fournisseurs deepseek,mistral --etiquette ambigu --verbeux
 
 echo.
 echo ================================================================
