@@ -314,3 +314,6 @@ data/.fuse_hidden*
 # Le 04/09/2026 : retirées du suivi git (git rm --cached) — les anciennes
 # entrées par fichier individuel sont remplacées par cette règle de dossier.
 /data/images/
+
+# Rapports du banc d'essai de la regle de retenue (sortie locale, jamais versionnee)
+tests/results/retenue_*.txt

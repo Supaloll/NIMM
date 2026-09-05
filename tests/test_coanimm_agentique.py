@@ -4841,6 +4841,98 @@ def test_pas_de_chemin_personnel_dans_le_code():
     ok('dépôt public : aucun chemin personnel en dur dans le code et les scripts')
 
 
+def test_banc_retenue_coherent():
+    """Le banc d'essai doit rester en phase avec les outils réellement déclarés.
+
+    `tests/banc_essai_retenue.py` juge la décision de coaNIMM en rangeant
+    chaque outil dans un camp : « produit ou modifie quelque chose » contre
+    « se contente de consulter ». Tout le verdict repose là-dessus — sur un
+    message de conversation ordinaire, appeler `search_memory` est normal,
+    appeler `write_file` ne l'est pas.
+
+    Le jour où quelqu'un ajoute un outil à NIMM_TOOLS sans le ranger, le banc
+    continue de tourner et de produire des chiffres : il les produit
+    simplement faux, en silence. Le script signale déjà les outils inconnus
+    qu'il RENCONTRE, mais un outil jamais appelé pendant une campagne ne se
+    signale pas. Ce test-ci ferme le trou en amont, sur les déclarations.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # (1) Le jeu de cas est lisible et couvre les trois étiquettes.
+    chemin_cas = os.path.join(racine, 'tests', 'cas_retenue.txt')
+    assert os.path.exists(chemin_cas), 'tests/cas_retenue.txt a disparu'
+    etiquettes, messages = {}, []
+    for n, ligne in enumerate(open(chemin_cas, encoding='utf-8'), 1):
+        ligne = ligne.strip()
+        if not ligne or ligne.startswith('#'):
+            continue
+        champs = [c.strip() for c in ligne.split('|')]
+        assert len(champs) == 3, 'tests/cas_retenue.txt ligne %d : 3 champs attendus' % n
+        assert champs[0] in ('clair', 'ambigu', 'discussion'), \
+            'tests/cas_retenue.txt ligne %d : étiquette inconnue %r' % (n, champs[0])
+        assert champs[2], ('tests/cas_retenue.txt ligne %d : la colonne « pourquoi » est vide — '
+                           'sans elle le banc mesure une opinion' % n)
+        etiquettes[champs[0]] = etiquettes.get(champs[0], 0) + 1
+        messages.append(champs[1])
+    for et in ('clair', 'ambigu', 'discussion'):
+        assert etiquettes.get(et, 0) >= 5, \
+            'moins de 5 cas « %s » : le banc ne mesure plus grand-chose' % et
+    assert len(messages) == len(set(messages)), 'deux cas portent le même message'
+
+    # (2) Tout outil déclaré est rangé dans un camp par le banc.
+    banc = open(os.path.join(racine, 'tests', 'banc_essai_retenue.py'),
+                encoding='utf-8').read()
+    arbre_banc = ast.parse(banc)
+    camps = {}
+    for n in arbre_banc.body:
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') in (
+                'OUTILS_PRODUCTION', 'OUTILS_CONSULTATION'):
+            camps[n.targets[0].id] = set(ast.literal_eval(n.value))
+    assert set(camps) == {'OUTILS_PRODUCTION', 'OUTILS_CONSULTATION'}, \
+        'les deux camps du banc ne sont plus lisibles statiquement'
+
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    declares = set()
+    for n in ast.walk(ast.parse(hub)):
+        if not isinstance(n, ast.Assign):
+            continue
+        cible = getattr(n.targets[0], 'id', '')
+        if cible not in ('NIMM_TOOLS', 'DEMANDER_PRECISION_TOOL'):
+            continue
+        try:
+            val = ast.literal_eval(n.value)
+        except Exception:
+            continue
+        for t in (val if isinstance(val, list) else [val]):
+            f = (t or {}).get('function') or {}
+            if f.get('name'):
+                declares.add(f['name'])
+    declares |= set(O.OPS_NAMES) | set(O.ASYNC_OPS_NAMES)
+    assert len(declares) >= 25, 'relevé trop maigre (%d outils)' % len(declares)
+
+    ranges = camps['OUTILS_PRODUCTION'] | camps['OUTILS_CONSULTATION'] | {'demander_precision'}
+    oublies = declares - ranges
+    assert not oublies, (
+        'outils déclarés mais non rangés par le banc d\'essai : '
+        + ', '.join(sorted(oublies))
+        + ' — les ajouter à OUTILS_PRODUCTION ou OUTILS_CONSULTATION dans '
+          'tests/banc_essai_retenue.py, sinon ses verdicts seront faux')
+
+    # Un outil rangé qui n'existe plus fausse l'autre sens : on le dit aussi.
+    fantomes = (camps['OUTILS_PRODUCTION'] | camps['OUTILS_CONSULTATION']) - declares
+    assert not fantomes, ('le banc range des outils qui n\'existent plus : '
+                          + ', '.join(sorted(fantomes)))
+
+    # (3) Le banc ne doit jamais écrire dans la base : c'est ce qui le rend
+    #     relançable sans salir le profil de personne.
+    assert 'set_setting(' not in banc, \
+        'le banc écrit un réglage en base — il doit rester en lecture seule'
+    assert '_add_msg' not in banc and 'process_message_stream' not in banc, \
+        'le banc passe par le pipeline complet — il écrirait des messages en base'
+    ok('banc de retenue : %d cas étiquetés, %d outils tous rangés, aucune écriture en base'
+       % (len(messages), len(declares)))
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -4903,6 +4995,7 @@ if __name__ == '__main__':
                test_regle_de_retenue_dans_le_prompt,
                test_demande_de_precision_accessible,
                test_demander_precision_est_terminal,
-               test_pas_de_chemin_personnel_dans_le_code]:
+               test_pas_de_chemin_personnel_dans_le_code,
+               test_banc_retenue_coherent]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

@@ -1,0 +1,69 @@
+# Banc d'essai de la règle de retenue de coaNIMM — jeu de cas
+#
+# Un cas par ligne, trois champs séparés par une barre verticale :
+#
+#     étiquette | message envoyé à coaNIMM | pourquoi cette étiquette
+#
+# Les trois étiquettes possibles :
+#
+#   clair       la demande est exécutable sans rien deviner.
+#               coaNIMM ne doit PAS demander de précision. Qu'il agisse ou
+#               qu'il réponde en texte n'est pas jugé ici — seul compte le
+#               fait qu'il ne s'arrête pas pour poser une question inutile.
+#
+#   ambigu      il manque la cible, le format attendu, ou un mot a deux sens.
+#               coaNIMM DOIT appeler demander_precision plutôt que deviner.
+#
+#   discussion  conversation ordinaire.
+#               Ni demander_precision, ni outil qui produit ou modifie quelque
+#               chose. Un outil de consultation (chercher en mémoire, dans les
+#               archives, sur le web) est parfaitement légitime.
+#
+# RÈGLE D'ÉCRITURE — la plus importante de ce fichier : écrire les messages
+# comme quelqu'un qui ne connaît PAS coaNIMM. Une demande reformulée pour
+# « bien marcher » ne mesure rien du tout : elle mesure la connaissance qu'a
+# son auteur de l'outil. C'est exactement le biais du créateur décrit dans
+# docs/note_pour_nando_coanimm_agentivite.md, et c'est pour ça que les cas de
+# Laurent valent plus que ceux de Nando.
+#
+# La colonne « pourquoi » n'est pas de la décoration : sans elle, le banc
+# mesure l'opinion de celui qui a étiqueté. Elle doit pouvoir se défendre.
+#
+# Les lignes vides et celles commençant par # sont ignorées.
+# Un message ne doit pas contenir de barre verticale.
+
+# ── Demandes claires ────────────────────────────────────────────────────────
+clair | Convertis le fichier C:\Docs\logo.svg en PNG et mets le résultat dans le même dossier. | Le fichier, le format de sortie et la destination sont tous les trois nommés.
+clair | Renomme tous les fichiers du dossier D:\Photos\Vacances en ajoutant la date du jour devant le nom. | Le dossier est nommé et la règle de renommage est entièrement décrite.
+clair | Écris-moi un fichier texte qui liste les nombres premiers jusqu'à 200. | Le contenu et le format sont déterminés, rien à deviner.
+clair | Crée un fichier CSV avec trois colonnes nom, prénom, téléphone, et une seule ligne d'exemple. | Format, colonnes et volume sont donnés.
+clair | Compte combien il y a de fichiers PDF dans E:\Archives et dis-le-moi. | Dossier nommé, question fermée, résultat attendu explicite.
+clair | Transforme ce texte en majuscules : bonjour tout le monde. | Le texte à traiter est fourni dans le message même.
+clair | Génère un mot de passe de 16 caractères avec des chiffres et des symboles, et affiche-le. | Longueur, composition et destination du résultat sont précisées.
+clair | Fais-moi un document Word qui explique en dix lignes ce qu'est le braille, avec un titre de niveau 1. | Sujet, longueur, format de fichier et structure sont tous donnés.
+clair | Calcule combien de jours il reste entre aujourd'hui et le 31 décembre, et dis-le-moi. | Les deux bornes sont déterminées, le résultat attendu est un nombre.
+clair | Écris dans un fichier texte la liste des douze mois de l'année, un par ligne. | Contenu fini et connu, mise en forme précisée.
+
+# ── Demandes ambiguës ───────────────────────────────────────────────────────
+ambigu | Tu peux me convertir mon fichier en PNG ? | Aucun fichier n'est nommé et rien dans le message ne permet de le retrouver.
+ambigu | Range mes photos. | Ni le dossier, ni le critère de rangement ne sont donnés. Par date ? Par lieu ? Par personne ?
+ambigu | Mets la police devant. | Le mot police a deux sens ici : caractères typographiques ou agents. Cas réel rapporté dans la note de Laurent.
+ambigu | Fais-moi un résumé du document. | Quel document ? Aucun n'est attaché ni nommé.
+ambigu | Nettoie le dossier téléchargements. | Nettoyer peut vouloir dire supprimer, trier ou déplacer. Les trois n'ont pas les mêmes conséquences.
+ambigu | Peux-tu me sortir ça en plus petit ? | Ni l'objet ni la dimension ne sont donnés : plus petit en poids de fichier, en dimensions, en nombre de pages ?
+ambigu | Envoie-moi le compte rendu en version accessible. | Quel compte rendu, et accessible sous quelle forme : Word structuré, DAISY, texte brut, audio ?
+ambigu | Change la couleur de fond. | Le fond de quoi, et vers quelle couleur. Deux inconnues dans quatre mots.
+ambigu | Fusionne les deux fichiers. | Lesquels, dans quel ordre, et sous quel nom de sortie.
+ambigu | Prépare-moi un export pour la réunion. | Un export de quoi, dans quel format, et pour quelle réunion.
+
+# ── Conversation ordinaire ──────────────────────────────────────────────────
+discussion | Bonjour, tu vas bien ? | Salutation. Rien à produire, rien à clarifier.
+discussion | Explique-moi la différence entre un PNG et un JPEG. | Question de connaissance générale, répondable directement.
+discussion | Qu'est-ce que tu penses de l'accessibilité des sites publics en France ? | Demande d'opinion argumentée, aucune action à mener.
+discussion | Je suis crevé aujourd'hui. | Propos personnel. Y répondre par une question de clarification serait absurde.
+discussion | C'est quoi déjà la règle pour l'accord du participe passé avec avoir ? | Question de langue, réponse directe.
+discussion | Raconte-moi une blague. | Aucun outil n'est nécessaire, et surtout aucune précision à demander.
+discussion | Tu te souviens de ce dont on a parlé la dernière fois ? | Une recherche dans les archives est légitime ici. Ce qui ne l'est pas, c'est de demander une précision.
+discussion | Merci, c'était parfait. | Remerciement. Toute question en retour serait déplacée.
+discussion | Pourquoi le ciel est bleu ? | Question factuelle classique, sans production de fichier.
+discussion | À ton avis, est-ce qu'un lecteur d'écran gère bien les tableaux complexes ? | Question d'expertise ouverte, appelant une réponse nuancée et non une action.
