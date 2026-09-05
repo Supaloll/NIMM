@@ -1006,6 +1006,7 @@ Route : `POST /api/export` — retourne le fichier en téléchargement direct.
 
 | Session | Changements clés |
 |---|---|
+| 05/09/2026 (toilettage) | **Le backlog mentait depuis deux mois et demi, et un nom de client était parti dans le dépôt public**. (1) BACKLOG RELU LIGNE À LIGNE CONTRE LE CODE — sur huit entrées reprises, **cinq étaient déjà livrées ou périmées** et continuaient de s'annoncer comme des priorités. Chantiers de l'audit mémoire du 09/06 : **A** livré (`core/hub.py` ~3946 — l'inférence ne part plus sur minuterie mais seulement si le cycle a écrit un triplet, avec la branche `else` qui le dit), **B** livré autrement qu'écrit (`modules/memory.py` ~277-280 : l'inverse de `enfant_de`/`prenom_pere` est `enfant`, pas `parent` — la lecture contre-intuitive visée est évitée), **C** écarté le 31/08 par Fernando, **D** livré (`apply_decay_on_startup`, `main.py` ~101-107), **E** livré (`modules/memory.py` ~1084, le plus récent prime sur le plus lourd). Ne restent que **F** (installation silencieuse de `sentence-transformers` — le status et le warmup existent, l'installation non) et **G** (passe rétroactive sur les prédicats libres — la normalisation à l'écriture existe déjà, ~529-542). « Agrandissement fenêtre active + Carnet progressif » : **livré depuis le 19/06**, les trois constantes demandées le 09/06 sont aux valeurs cibles (`CARNET_WINDOW = 50`, `CARNET_INTERVAL = 5`, historique à 60 aux deux endroits du pipeline) — l'entrée est restée `[PRIORITÉ]` deux mois et demi. « Persistance des images » : livrée le 03/09, jamais reclassée. Le résidu le plus dangereux : sous le chantier **C écarté**, le paragraphe décrivant la règle des poids 0,5/1,0/1,5 était resté **intact juste en dessous de la ligne disant qu'on ne la ferait pas** — il se lisait comme une consigne à appliquer. Retiré. La section porte maintenant en tête la règle qui manquait : une entrée sans référence vérifiable (`fichier:ligne`) n'a pas été vérifiée. (2) UN NOM DE CLIENT DANS UN DÉPÔT PUBLIC — `tests/test_repro_conversion_svg.py` (outil de diagnostic de Laurent, 02/09) portait en dur le chemin du bureau de Laurent, le nom d'un fichier client et son identifiant de profil. Deux dégâts et non un : une donnée qui n'avait rien à faire là, et un script que personne d'autre ne pouvait relancer sans l'éditer. Réécrit en outil paramétrable (`--profil`, `--fournisseur`, `--message`, profil par défaut = le premier de la base), avec un en-tête qui dit ce qu'il est : **pas un test permanent** — il appelle la vraie API et écrit dans la vraie base, au même titre que `tests/test_perf_message.py`. Son intention et son origine sont conservées dans le docstring. Précédent identique le 10/08 avec `data/backup_config.json` (arborescence du disque de Laurent), retiré du suivi git depuis — **vérifié ce jour, il ne l'est plus**. D'où un test permanent : `test_pas_de_chemin_personnel_dans_le_code` balaie tout `.py`/`.js`/`.bat`/`.sh`/`.json`/`.vbs` versionné et refuse les chemins `C:\Users\<nom>`, `/Users/<nom>`, `X:\Mon Drive`, `\Desktop\`, `\Bureau\`, en tolérant les noms d'emprunt (`moi`, `%USERNAME%`, `...`). **La documentation est volontairement hors du contrôle** : ARCHITECTURE.md doit pouvoir raconter ces incidents en nommant les chemins fautifs, sinon le journal ne sert plus à rien. (3) Commentaire périmé corrigé au passage dans `core/hub.py` (~3618) : il annonçait une note de Carnet « toutes les 14 messages » alors que `CARNET_INTERVAL = 5` en donne une toutes les 10. 1 test permanent ajouté — 100 scénarios. |
 | 02/09/2026 (agir ou demander) | **Règle de retenue + outil `demander_precision` — la décision « agir ou discuter » ne dépend plus du modèle branché**. Note de Laurent : sur une même tâche (convertir un .svg en .png), DeepSeek posait une question avant d'agir, Mistral fonçait sur l'outil. Même prompt, deux comportements opposés. Diagnostic complété par lecture du code : le bloc « Outils disponibles » de `build_system_prompt` ne contenait QUE des déclencheurs (« Appeler dès que… », « Appeler quand… ») et pas une ligne sur le cas où la demande est trop floue pour être exécutée — DeepSeek demandait *malgré* le prompt, pas grâce à lui. (1) LEVIER 1 — [hub.py] section « Règle de retenue : agir ou demander » ajoutée au bloc outils : trois questions de contrôle (la cible est-elle nommée ? le résultat attendu est-il déterminé ? un mot peut-il s'entendre de deux façons ?) ; si un seul point reste ouvert, ne pas agir. La CONTRE-RÈGLE est écrite au même endroit et compte autant : ne jamais l'appliquer aux outils de simple consultation (`search_*`, `get_*`, `lookup_*`) ni à une conversation ordinaire — un assistant qui demande à chaque tour est aussi inutilisable qu'un assistant qui se trompe de cible. (2) LEVIER 2 — [hub.py] `DEMANDER_PRECISION_TOOL` (`demander_precision(question, options)`) ajouté à `NIMM_TOOLS`, **outil TERMINAL** : intercepté dans les deux chemins (`process_message_stream` ET `process_message`) AVANT tout nouvel appel au modèle, il coupe la boucle agentique et la question part telle quelle. Sans cette interception, la boucle rendrait la main au LLM outils actifs et un modèle pressé agirait juste après avoir posé sa question — la question affichée ET l'action faite, le pire des deux mondes. Aucune latence ajoutée : c'est le même appel, pas un appel de tri supplémentaire. (3) ACCESSIBILITÉ — `_formater_demande_precision()` : la DÉCISION de demander reste au modèle, la FORME de la question ne lui appartient plus. Texte brut, pas d'astérisques ni de puces, options numérotées (`1.`, `2.`…, bornées à 4) pour qu'un chiffre suffise à répondre ; sauts de ligne échappés comme dans `_flush_buf` (un `\n\n` brut couperait le flux SSE en plein milieu). Entrées douteuses absorbées : question vide, options en chaîne au lieu d'une liste, ponctuation déjà présente. Filet dans `_execute_tool` si un futur chemin d'appel oubliait l'interception. (4) NON RETENU POUR L'INSTANT — le routeur d'intention LLM dans `modules/intent_gate.py` (proposition initiale de la note) : il trancherait AVANT d'avoir le contexte du fil, du document attaché et de la mémoire — or « convertis-le en png » n'est interprétable qu'avec ce qui précède ; avec ce contexte, il coûterait aussi cher que l'appel principal. À reconsidérer, sous la forme d'une évaluation de la CLARTÉ de la demande injectée comme consigne (et non comme aiguillage dur), si la variance résiduelle entre fournisseurs le justifie après mesure. 3 tests permanents ajoutés (`test_regle_de_retenue_dans_le_prompt`, `test_demande_de_precision_accessible`, `test_demander_precision_est_terminal`) — 99 scénarios. |
 | 29/08/2026 (sauvegarde + galerie) | **Section "💾 Sauvegarde" et bannière d'alerte réapparues après une perte lors d'un merge Git — HTML absent, logique JS/CSS intacte**. Diagnostic : `app.js` (37 occurrences `backup`) et `main.py` (routes `/api/backup/{status,config,run}`) totalement fonctionnels, mais `index.html` ne contenait plus aucune trace de la section ni de la bannière — perdues silencieusement (aucune erreur, tous les `getElementById` protégés par `?.`). Réinsérées à l'identique des IDs attendus : bannière `#backup-warning-banner` (à côté de `#no-provider-banner`), section `#backup-section` dans les Paramètres (entre MCP et Veille). **Galerie d'images — vignettes écrasées (bandes plates au lieu de carrés), invisibles sur mobile**. Cause : `aspect-ratio:1` en style inline mal interprété dans la grille imbriquée (`display:grid` + carte `display:flex`), plus marqué sur mobile. Remplacé par la technique universelle du cadre par ratio de padding (`padding-top:100%` + `<img>` en `position:absolute`), fiable sur tout navigateur. Vignettes resserrées (`minmax(160px,1fr)` → `minmax(110px,1fr)`, `gap` 12px → 10px) à la demande de Laurent — plus de vignettes visibles d'un coup pour repérer rapidement celles à garder. **Documentation rattrapée** : apport de Nando — nouveau volet "🖌️ Manipuler une image" (module `modules/retouche.py`, routes `/api/retouche/{options,analyser,appliquer}`) intégré au Studio, lui-même déplacé dans la modale Galerie (`#galerie-modal`) plutôt que derrière le menu "+". Aiguillage annoncé avant lancement (retouche exacte locale vs redessinée par modèle), compte rendu en trois parties (voie, journal, description honnête du résultat obtenu). Cache-busting : `20260829-backup-fix`. |
 | 09/08/2026 (sauvegarde) | **Sauvegarde automatique multi-profils vers un dossier synchronisé — cloud-agnostique**. Point aveugle identifié en session : `nimm_{uid}.db` n'était sauvegardé nulle part, perte irréversible en cas de panne disque. Plutôt qu'une intégration séparée par fournisseur cloud (Google Drive, pCloud, Dropbox…), choix d'une approche générique : Google Drive, pCloud et Dropbox proposent tous une appli de bureau qui synchronise un dossier local — NIMM dépose un fichier dans ce dossier, l'appli du fournisseur envoie le reste. Zéro clé API, zéro jeton, une seule logique de code pour tous les fournisseurs, chaque profil (Laurent, Nando, Éric) choisissant le sien indépendamment. [database.py] `data/backup_config.json` (config MACHINE, hors du système de settings par profil car une sauvegarde couvre TOUS les profils à la fois) : `get_backup_config()`/`set_backup_config()` (`folder_path`, `auto_enabled`, `dismissed`, `last_backup_at`, `last_backup_ok`, `last_backup_message`) ; `list_user_db_paths()` (scan `nimm_*.db`, avec repli si `users.json` absent). [modules/sauvegarde.py] (nouveau module) `run_backup()` : copie COHÉRENTE via l'API native `sqlite3.Connection.backup()` (sûre en mode WAL, même si NIMM écrit pendant la copie), fichiers horodatés `nimm_{uid}_{YYYYMMDD_HHMMSS}.db`, AUCUNE purge automatique (choix de Laurent : espace Drive abondant, une sauvegarde étant toujours un instantané COMPLET de l'historique — supprimer une ancienne sauvegarde ne fait perdre aucune donnée, seulement un point de restauration). [hub.py] `trigger_backup()` (délégation pure au module, Hub-and-Spoke respecté, diagnostic consigné) ; `backup_scheduler_worker()` (tick horaire, déclenche si `auto_enabled` et dernière sauvegarde RÉUSSIE vieille de +7 jours ; retente à chaque tick si la dernière tentative a échoué plutôt que d'attendre une semaine en silence). [main.py] routes `GET/POST /api/backup/{status,config,run}`, réservées au propriétaire (`is_current_user_admin()` — une sauvegarde couvre les données de toute la famille). [frontend] section « 💾 Sauvegarde » dans les Paramètres (dossier, case auto hebdo, case « je ne souhaite pas de sauvegarde cloud — ne plus me prévenir », bouton manuel, statut horodaté) ; bannière d'alerte (`#backup-warning-banner`, même thème visuel que la bannière fournisseur manquant) si dossier non configuré ou dernière sauvegarde en échec, silencieuse pour les non-propriétaires et pour quiconque a explicitement coché « ne plus me prévenir ». Testé en conditions réelles par Laurent : 5/5 profils sauvegardés vers `G:\Mon Drive\NIMM_Backups`. Cache-busting : `20260809`. |
@@ -1083,88 +1084,128 @@ Route : `POST /api/export` — retourne le fichier en téléchargement direct.
 
 ## BACKLOG
 
-### [PRIORITÉ] Refonte cycle de vie mémoire — 6 chantiers liés
+> **Relu ligne à ligne contre le code le 05/09/2026.** Un backlog qu'on ne
+> confronte jamais au code se met à mentir : sur les huit entrées reprises ce
+> jour-là, **cinq étaient déjà livrées ou périmées** et continuaient pourtant de
+> s'annoncer comme des priorités — dont un chantier entier dont les trois
+> constantes étaient aux valeurs cibles depuis juin. Ce qui suit ne garde en
+> priorité que ce qui est réellement ouvert ; le reste est déplacé plus bas,
+> avec la preuve dans le code. À refaire à chaque toilettage : une entrée sans
+> référence vérifiable (`fichier:ligne`) n'a pas été vérifiée.
 
-Audit mémoire du 09/06/2026 — décisions validées :
+### [PRIORITÉ] Installation silencieuse des embeddings (chantier F)
 
-**A — Inférence déclenchée après extraction** (au lieu du polling toutes les 30s)
-`run_inference_engine()` ne se déclenche plus sur timer aveugle mais uniquement après qu'une extraction worker ait effectivement écrit un ou plusieurs triplets. Économie CPU + cohérence causale.
+Seul chantier de l'audit mémoire du 09/06/2026 qui reste entier.
 
-**B — Chiralité symétrie** (fix court terme)
-`PREDICATS_INVERSES` : `prenom_pere` et équivalents génèrent `enfant_de` comme inverse, pas `parent`. Évite la lecture contre-intuitive dans la modale mémoire.
+**Ce qui existe déjà :** `GET /api/embeddings/status` (`disabled` / `loading` /
+`ready` / `error`, lecture seule), `POST /api/embeddings/warmup`, et le
+préchargement au démarrage réparé le 06/08/2026 (il vérifiait le réglage dans un
+thread sans contexte utilisateur, donc concluait toujours « désactivé »).
 
-**C — Poids initial à 0.5** — ÉCARTÉ le 31/08/2026 par Fernando (« non, on ne va pas faire ça »). Vérifié dans le code ce jour-là : tout triplet neuf entre encore avec `poids = 1.0`, la règle n'a donc jamais été appliquée. Ce n'est pas un oubli mais une décision — toucher au poids des souvenirs déjà en base pour un gain théorique ne valait pas le risque. À ne plus faire remonter comme priorité.
-Tout nouveau triplet entre avec `poids = 0.5` (fragile). La règle devient :
-- Occurrence 1 : poids 0.5 — fragile, soumis au decay normal
-- Occurrence 2 : poids 1.0 — coïncidence, survit mieux, remonte dans les recalls
-- Occurrence 3+ : poids ≥ 1.5 → consolidé, immune au decay, éligible Profil certain
-Seuils existants `POIDS_PERMANENT_SEUIL = 2.5` et `REPETITIONS_PERMANENT_SEUIL = 3` conservés.
+**Ce qui manque :** si `sentence-transformers` n'est pas installé, l'utilisateur
+doit s'en occuper lui-même. Objectif : au premier démarrage, lancer
+`pip install sentence-transformers` en sous-processus non bloquant, poser un
+drapeau en base (`embeddings_status : installing / ready`), et laisser
+`_get_model()` consulter ce drapeau — mode mots-clés pendant l'installation,
+modèle chargé une fois prête. Si l'installation est interrompue, elle aboutit au
+démarrage suivant. L'utilisateur n'a rien à faire et rien à comprendre.
 
-**D — Decay actif** (tâche au démarrage de session)
-Appliquer `DECAY_RATES` aux mémoires non-permanentes au démarrage du serveur (une fois par session). Objectif : un fait vu une seule fois (poids 0.5) disparaît du recall entre 3 et 6 mois. Taux cibles à calibrer — base de travail : 0.3–0.5%/24h selon catégorie. Seuil d'invisibilité : `POIDS_RECALL_MIN = 0.1` (déjà en place).
+**Vigilance :** ne jamais bloquer le démarrage ni la première réponse ; et dire
+l'état réel dans l'interface plutôt que de laisser croire que la recherche
+sémantique fonctionne alors qu'elle est encore en mode mots-clés.
 
-**E — Résolution conflit par récence**
-Si deux triplets ont même sujet + prédicat mais objets différents, le plus récent (`timestamp`) prime sur le plus lourd (`poids`). Évite qu'un fait ancien bien renforcé écrase une mise à jour récente (ex : ancien employeur qui prime sur le nouveau).
+### [OUVERT] Normaliseur de prédicats libres — passe rétroactive (chantier G)
 
-**F — Embeddings installation silencieuse**
-Au premier démarrage : lancer `pip install sentence-transformers` en subprocess non-bloquant, poser un flag en base (`embeddings_status : installing / ready`). `_get_model()` consulte ce flag — mode keyword si installing, modèle chargé si ready. L'utilisateur n'a rien à faire, l'installation aboutit au prochain démarrage si interrompue.
+**Ce qui existe déjà :** la normalisation à l'ÉCRITURE fonctionne
+(`modules/memory.py` ~529-542, y compris les fautes de frappe, avec trace
+console `🔀 Prédicat normalisé`). Tout triplet neuf entre déjà canonique.
 
-**G — Normaliseur prédicats libres** (à la demande)
-Passe manuelle déclenchable depuis l'interface (bouton dans la modale mémoire ?) qui tente de fusionner les prédicats libres sémantiquement proches vers leurs équivalents canoniques. Évite les doublons du type `conduit_camion` + `metier`.
+**Ce qui manque :** rien ne rattrape les prédicats libres **déjà en base**, écrits
+avant cette normalisation ou hors catalogue (`conduit_camion` à côté de `metier`).
+Une passe manuelle déclenchable depuis la modale mémoire, avec **validation avant
+application** : une fusion naïve perd l'information portée par le prédicat libre.
+Complexe, et sans urgence tant que l'écriture est propre — d'où [OUVERT] et non
+[PRIORITÉ].
 
-**Ordre d'implémentation suggéré :** B → C → D → E → A → F → G
+### [OUVERT] Éprouver « agir ou demander » sur des cas réels
+
+Le mécanisme livré le 02/09/2026 (règle de retenue + outil terminal
+`demander_precision`) est verrouillé par trois tests **statiques** : la règle est
+présente, la question est lisible en braille, et l'outil coupe bien la boucle.
+Aucun de ces tests ne dit s'il se déclenche **au bon moment**.
+
+**Ce qu'il faut :** une trentaine de messages étiquetés (demande claire / demande
+ambiguë / conversation ordinaire), rejouables **par fournisseur** — sur le modèle
+des prompts de mémoire, déjà adaptés par modèle. Les cas doivent venir de Laurent
+et non de Nando : le biais du créateur est précisément l'objet du problème (voir
+`docs/note_pour_nando_coanimm_agentivite.md`), et des messages reformulés pour
+« bien marcher » ne mesurent rien.
+
+**À quoi ça sert vraiment :** c'est la seule façon de savoir si le routeur
+d'intention LLM — écarté le 02/09 faute de contexte au moment où il trancherait —
+apporterait quelque chose. Sans mesure, on ne saura jamais s'il faut le faire.
 
 ---
 
-### [PRIORITÉ] Agrandissement fenêtre active + Carnet progressif
+## Sorti du backlog — ce qui était déjà fait, et où le vérifier
 
-Décision du 09/06/2026 — objectif : supporter les fils très longs (style de l'utilisateur principal).
+### Refonte du cycle de vie mémoire (audit du 09/06/2026) : 4 chantiers sur 6 livrés
 
-**Problème actuel :** fenêtre de 30 messages trop courte — Lia perd le fil d'une conversation soutenue bien avant que le Carnet intervienne (seuil 80 messages).
+- **A — Inférence déclenchée après extraction : LIVRÉ.** `core/hub.py` ~3946-3953 :
+  l'inférence ne part plus sur minuterie aveugle mais uniquement si le cycle a
+  écrit au moins un triplet, avec la branche `else` qui le dit explicitement
+  (« Aucun nouveau triplet — inférence ignorée »). L'appel unique au démarrage
+  (`main.py` ~119) est autre chose et reste légitime.
+- **B — Chiralité des prédicats inverses : LIVRÉ**, par une valeur différente de
+  celle écrite en 2026 mais avec le même but. `modules/memory.py` ~277-280 :
+  `enfant_de` et `prenom_pere` ont pour inverse `enfant`, et non `parent`. Le
+  backlog demandait `enfant_de` ; la lecture contre-intuitive visée est évitée
+  dans les deux cas. Rien à refaire.
+- **C — Poids initial à 0,5 : ÉCARTÉ le 31/08/2026 par Fernando** (« non, on ne
+  va pas faire ça »). Vérifié ce jour-là : tout triplet neuf entre avec
+  `poids = 1.0`, la règle n'a donc jamais été appliquée. Ce n'est pas un oubli
+  mais une décision — toucher au poids de souvenirs déjà en base pour un gain
+  théorique ne valait pas le risque. **Ne plus faire remonter.** (Le détail des
+  seuils qui traînait ici sous l'entrée écartée a été retiré le 05/09 : il se
+  lisait comme une consigne à appliquer, juste sous la ligne qui disait le
+  contraire.)
+- **D — Decay actif au démarrage : LIVRÉ.** `modules/memory.py:1366`
+  `apply_decay_on_startup()`, appelée par utilisateur depuis `main.py` ~101-107.
+- **E — Résolution de conflit par récence : LIVRÉ.** `modules/memory.py` ~1084 :
+  à sujet et prédicat identiques, le triplet le plus récent l'emporte sur le plus
+  lourd — un ancien employeur ne peut plus écraser le nouveau.
+- **F et G** : seuls restants, remontés en tête de ce fichier.
 
-**Trois constantes à modifier dans `hub.py` :**
-- Nombre de messages chargés : 30 → 60
-- `CARNET_WINDOW` : 80 → 50 (Carnet se déclenche avant que les vieux messages sortent de fenêtre)
-- `CARNET_INTERVAL` : 7 → 5 (résumés plus fréquents = plus granulaires = moins de perte)
+### Agrandissement fenêtre active + Carnet progressif : LIVRÉ
 
-**Résultat attendu sur un fil de 200 messages :**
-- Messages 141-200 : fenêtre active complète (tout le détail)
-- Messages 1-140 : ~28 notes Carnet courtes, fil conducteur narratif
-- Faits importants : mémoire triplet, permanents en parallèle
+Les trois constantes demandées le 09/06/2026 sont aux valeurs cibles, vérifiées
+le 05/09/2026 : `CARNET_WINDOW = 50` et `CARNET_INTERVAL = 5` (`core/hub.py`
+~219-220), historique chargé à 60 messages aux deux endroits du pipeline
+(streaming et non-streaming). Livré au plus tard le 19/06/2026 avec le passage du
+Carnet en mode pull ; l'entrée est simplement restée en `[PRIORITÉ]` deux mois et
+demi de plus.
 
-**Vigilance à l'implémentation :** vérifier qu'il n'y a pas d'effet de bord sur la génération des notes Carnet (fréquence, déduplication anti-doublon).
+### Persistance des images générées dans le fil : LIVRÉ le 03/09/2026
 
----
+Ouverte le 02/09 par Laurent, traitée le lendemain pour les **deux** chemins de
+génération (tag `%%IMAGE:%%` côté `core/hub.py`, bouton dédié côté
+`frontend/app.js`). Voir la section de journal du 03/09/2026.
 
-### [LIVRÉ 16/06/2026] Export messages marqués
-Marquer des réponses depuis le menu "La réponse" → export `POST /api/export` → 7 formats.
-Phase 2 possible : instruction directe ("fais-moi un DOCX sur X") via CoaNIMM ou intent_gate.
+### Export messages marqués : LIVRÉ le 16/06/2026
 
-### [PRIORITÉ] Migration Git pour Éric et Nando
-Éric et Nando ont NIMM installé depuis un ZIP (`NIMM-main`). Le `git pull` automatique dans `LANCER_NIMM.bat` ne fonctionne pas chez eux — pas de lien Git.
-**Objectif :** un script `MIGRER_VERS_GIT.bat` à exécuter une seule fois qui installe Git si absent, clone le repo, préserve `data/users.json` et `data/nimm_*.db`, puis branche le lancement sur le nouveau dossier.
-**Mécanisme d'entrée du chemin :** glisser-déposer le dossier NIMM sur le `.bat`.
-**Prérequis :** Éric et Nando sont déjà collaborateurs sur le repo GitHub privé.
-**Statut : PÉRIMÉ (31/08/2026).** Le besoin — « Éric et Nando ne reçoivent pas les mises à jour » — est déjà couvert autrement, et SANS Git : `POST /api/update` télécharge l'archive GitHub et remplace les fichiers, en préservant `data/`. Aucun script de migration n'est nécessaire. En le vérifiant, un défaut bien plus gênant est apparu — voir l'entrée « La mise à jour annonçait le contraire de la vérité ».
+Marquage depuis le menu « La réponse » → `POST /api/export` → 7 formats.
+La phase 2 envisagée à l'époque (« fais-moi un DOCX sur X » en instruction
+directe) reste possible et sans propriétaire ; noter qu'elle passerait
+aujourd'hui par l'outil `write_file` de la boucle CoaNIMM plutôt que par
+`intent_gate`, qui n'a pas été rouvert.
 
-### [FUTUR] Normaliseur prédicats libres (G)
-Passe manuelle déclenchable depuis l'interface qui tenterait de fusionner les prédicats libres sémantiquement proches vers leurs équivalents canoniques (ex : `conduit_camion` → `metier: chauffeur poids lourd`). Complexe : une fusion naïve perd l'information contenue dans le prédicat libre. Nécessite une UI de validation avant application. À affiner avant d'implémenter.
+### Migration Git pour Éric et Nando : PÉRIMÉ le 31/08/2026
 
-### [PRIORITÉ] Persistance des images générées dans le fil de conversation
-
-Constat du 02/09/2026 (Laurent) : une image générée en conversation (`%%IMAGE:%%`) disparaît de la bulle du fil dès qu'on ferme et rouvre NIMM, alors qu'elle reste consultable dans la galerie 🖼️.
-
-**Cause identifiée :** deux sauvegardes séparées, jamais reliées.
-- Côté serveur (`hub.py`, point 10 du pipeline), le message assistant écrit en base ne contient que `[Système — image générée]\nPrompt : ...` — aucune référence au fichier.
-- Côté navigateur (`app.js`, gestionnaire `[IMAGE_GEN]`), l'appel `POST /api/images/save` a lieu APRÈS coup, une fois l'image reçue en streaming ; l'`id`/`filename` renvoyés ne sont posés que sur le `dataset` du DOM (perdu à la fermeture), jamais renvoyés vers le message stocké en base.
-
-**Objectif :** qu'une image générée reste visible dans sa bulle d'origine à la réouverture du fil, pas seulement dans la galerie.
-
-**Piste de résolution (à valider avant implémentation) :**
-1. Une fois `POST /api/images/save` confirmé côté navigateur, transmettre le `filename` obtenu au serveur pour qu'il vienne compléter le message assistant déjà enregistré (nouvelle route, ou extension d'une route existante de mise à jour de message).
-2. Côté affichage de l'historique (`renderMessages` / `appendAssistantMessage`), reconnaître ce marqueur et générer un `<img src="/api/images/file/{filename}">` au lieu d'afficher le texte brut `[Système — image générée]`.
-
-**Vigilance :** touche `hub.py` ET `app.js` — à signaler à Nando avant de s'y mettre pour éviter un conflit de fusion.
+Le besoin — « ils ne reçoivent pas les mises à jour » — est couvert autrement et
+sans Git : `POST /api/update` télécharge l'archive GitHub et remplace les
+fichiers en préservant `data/`. Aucun script de migration nécessaire. C'est en le
+vérifiant qu'est apparu un défaut bien plus gênant — voir « La mise à jour
+annonçait le contraire de la vérité ».
 
 ---
 
