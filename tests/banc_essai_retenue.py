@@ -111,25 +111,50 @@ def lire_cas():
 
 
 def juger(etiquette, decision, outils):
-    """Rend (succès, explication courte) à partir de la décision observée."""
+    """Rend (comportement_ok, forme_ok, explication). forme_ok vaut None quand
+    la question ne se pose pas.
+
+    Deux verdicts distincts, et c'est le coeur du banc :
+      - comportement : le modèle a-t-il fait ce qu'il fallait — agir, s'abstenir,
+        demander ?
+      - forme : quand il fallait demander, est-il passé par demander_precision
+        plutôt que par un paragraphe rédigé ?
+
+    Les confondre donne des chiffres illisibles. Le premier jet de ce banc
+    (05/09/2026) comptait « a répondu en texte » comme un échec sec : Mistral
+    est ressorti à 0/10 sur les cas ambigus alors qu'il demandait bel et bien
+    une précision dans neuf cas sur dix — simplement en prose. Un modèle qui
+    demande toujours au bon moment mais toujours en prose n'a PAS le même
+    défaut qu'un modèle qui fonce sur l'outil sans réfléchir, et on ne les
+    corrige pas au même endroit.
+    """
+    faits = {'agit': 'a agi', 'cherche': 'a cherché', 'texte': 'a répondu',
+             'demande_prose': 'a répondu en posant une question'}
     if etiquette == 'ambigu':
         if decision == 'demande':
-            return True, 'a demandé, comme attendu'
+            return True, True, 'a demandé via l outil, comme attendu'
+        if decision == 'demande_prose':
+            return True, False, 'a demandé, mais en prose au lieu de demander_precision'
         if decision == 'agit':
-            return False, 'a AGI sur une demande incomplète (%s)' % ', '.join(outils)
+            return False, False, 'a AGI sur une demande incomplète (%s)' % ', '.join(outils)
         if decision == 'cherche':
-            return False, 'a cherché (%s) au lieu de demander' % ', '.join(outils)
-        return False, 'a répondu en texte au lieu de demander'
+            return True, False, ('a cherché (%s) sans poser la question — le banc '
+                                 'n observe que la première décision'
+                                 % ', '.join(outils))
+        return False, False, 'a répondu sans rien demander'
     if etiquette == 'clair':
         if decision == 'demande':
-            return False, 'a demandé une précision alors que tout était donné'
-        return True, {'agit': 'a agi', 'cherche': 'a cherché', 'texte': 'a répondu'}[decision]
-    # discussion
+            return False, None, 'a demandé une précision alors que tout était donné'
+        return True, None, faits[decision]
+    # discussion : poser une question en prose est banal dans une conversation
+    # (« ça va, et toi ? ») — ce n'est pas jugé. Seuls l'outil de retenue et un
+    # outil de production sont des écarts ici.
     if decision == 'demande':
-        return False, 'a demandé une précision dans une conversation ordinaire'
+        return False, None, 'a demandé une précision dans une conversation ordinaire'
     if decision == 'agit':
-        return False, 'a déclenché un outil de production (%s) sans raison' % ', '.join(outils)
-    return True, {'cherche': 'a cherché', 'texte': 'a répondu'}[decision]
+        return False, None, ('a déclenché un outil de production (%s) sans raison'
+                             % ', '.join(outils))
+    return True, None, faits[decision]
 
 
 async def passer_un_cas(cas, provider, reglages, system_prompt, inconnus):
@@ -154,16 +179,22 @@ async def passer_un_cas(cas, provider, reglages, system_prompt, inconnus):
     except Exception as e:
         return 'erreur', outils, repr(e)[:200]
 
+    extrait = texte.strip()[:200]
     if OUTIL_RETENUE in outils:
-        return 'demande', outils, texte.strip()[:200]
+        return 'demande', outils, extrait
     for nom in outils:
         if nom not in OUTILS_PRODUCTION and nom not in OUTILS_CONSULTATION:
             inconnus.add(nom)
     if any(n in OUTILS_PRODUCTION for n in outils):
-        return 'agit', outils, texte.strip()[:200]
+        return 'agit', outils, extrait
     if outils:
-        return 'cherche', outils, texte.strip()[:200]
-    return 'texte', outils, texte.strip()[:200]
+        return 'cherche', outils, extrait
+    # Aucun outil appelé : le modèle a répondu. Mais a-t-il POSÉ UNE QUESTION ?
+    # Sur un cas ambigu, « a demandé en prose » et « a répondu sans rien
+    # demander » sont deux situations opposées — voir juger().
+    if '?' in texte:
+        return 'demande_prose', outils, extrait
+    return 'texte', outils, extrait
 
 
 async def main(args):
@@ -249,7 +280,8 @@ async def main(args):
             dire('Clé API absente pour %s — fournisseur sauté.' % provider)
             continue
 
-        scores = {'clair': [0, 0], 'ambigu': [0, 0], 'discussion': [0, 0]}
+        # [comportement réussis, comportement jugés, forme réussies, forme jugées]
+        scores = {'clair': [0, 0, 0, 0], 'ambigu': [0, 0, 0, 0], 'discussion': [0, 0, 0, 0]}
         ecarts = []
         for i, c in enumerate(cas, 1):
             decision, outils, extrait = await passer_un_cas(
@@ -257,32 +289,53 @@ async def main(args):
             if decision == 'erreur':
                 dire('%2d. [ERREUR] %s — %s' % (i, c['message'][:50], extrait))
                 continue
-            succes, explication = juger(c['etiquette'], decision, outils)
-            scores[c['etiquette']][1] += 1
-            if succes:
-                scores[c['etiquette']][0] += 1
+            comportement, forme, explication = juger(c['etiquette'], decision, outils)
+            sc = scores[c['etiquette']]
+            sc[1] += 1
+            if comportement:
+                sc[0] += 1
+            if forme is not None:
+                sc[3] += 1
+                if forme:
+                    sc[2] += 1
+            if not comportement:
+                marque = 'ÉCART'
+            elif forme is False:
+                marque = 'FORME'          # bon réflexe, mauvaise présentation
             else:
-                ecarts.append((c, decision, outils, explication, extrait))
-            dire('%2d. %-10s %-8s %s | %s' % (
-                i, c['etiquette'], 'OK' if succes else 'ÉCART',
-                c['message'][:44], explication))
+                marque = 'OK'
+            if marque != 'OK':
+                ecarts.append((c, decision, outils, explication, extrait, marque))
+            dire('%2d. %-10s %-6s %s | %s' % (
+                i, c['etiquette'], marque, c['message'][:44], explication))
+            if args.verbeux and extrait:
+                dire('      → %s' % extrait.replace(chr(10), ' ')[:150])
             if args.pause:
                 time.sleep(args.pause)
 
         dire()
-        total_ok = sum(s[0] for s in scores.values())
-        total = sum(s[1] for s in scores.values())
+        comp_ok = sum(v[0] for v in scores.values())
+        comp_n = sum(v[1] for v in scores.values())
+        forme_ok = sum(v[2] for v in scores.values())
+        forme_n = sum(v[3] for v in scores.values())
         for et in ('clair', 'ambigu', 'discussion'):
-            ok_, n_ = scores[et]
-            dire('  %-11s %d/%d' % (et, ok_, n_))
-        dire('  %-11s %d/%d' % ('TOTAL', total_ok, total))
-        bilan[provider] = (total_ok, total)
+            a, b, c2, d = scores[et]
+            detail = ('   forme %d/%d' % (c2, d)) if d else ''
+            dire('  %-11s comportement %d/%d%s' % (et, a, b, detail))
+        dire('  %-11s comportement %d/%d%s' % (
+            'TOTAL', comp_ok, comp_n,
+            ('   forme %d/%d' % (forme_ok, forme_n)) if forme_n else ''))
+        dire()
+        dire('  comportement = a-t-il agi, s abstenu ou demandé au bon moment ?')
+        dire('  forme        = quand il fallait demander, est-il passé par')
+        dire('                 demander_precision plutôt que par un paragraphe ?')
+        bilan[provider] = (comp_ok, comp_n, forme_ok, forme_n)
 
         if ecarts:
             dire()
             dire('  Écarts en détail :')
-            for c, decision, outils, explication, extrait in ecarts:
-                dire('   • [%s] %s' % (c['etiquette'], c['message']))
+            for c, decision, outils, explication, extrait, marque in ecarts:
+                dire('   • [%s / %s] %s' % (c['etiquette'], marque, c['message']))
                 dire('     attendu : %s' % c['pourquoi'])
                 dire('     observé : %s%s' % (explication,
                                               (' — outils : ' + ', '.join(outils)) if outils else ''))
@@ -298,8 +351,9 @@ async def main(args):
 
     dire()
     dire('=' * 70)
-    for provider, (ok_, n_) in bilan.items():
-        dire('%-12s %d/%d' % (provider, ok_, n_))
+    for provider, (a, b, c2, d) in bilan.items():
+        dire('%-12s comportement %d/%d%s' % (
+            provider, a, b, ('   forme %d/%d' % (c2, d)) if d else ''))
     rapport.close()
     print()
     print('[BANC] Rapport écrit dans %s' % sortie)
@@ -318,6 +372,9 @@ def lire_arguments():
     a.add_argument('--sortie', default=None, help='chemin du rapport')
     a.add_argument('--a-sec', action='store_true', dest='a_sec',
                    help='tout vérifier sans appeler l API (gratuit)')
+    a.add_argument('--verbeux', action='store_true',
+                   help='afficher le début de la réponse pour TOUS les cas, pas '
+                        'seulement les écarts')
     return a.parse_args()
 
 
