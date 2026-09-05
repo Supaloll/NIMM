@@ -4780,6 +4780,67 @@ def test_demander_precision_est_terminal():
     ok('demander_precision : outil terminal dans les deux chemins, filet compris')
 
 
+def test_pas_de_chemin_personnel_dans_le_code():
+    """Un nom de client est parti dans le dépôt public, dans un script de debug.
+
+    `tests/test_repro_conversion_svg.py` (02/09/2026) portait en dur le chemin
+    du bureau de Laurent et le nom d'un fichier client, plus son identifiant de
+    profil. Deux dégâts, pas un : une donnée qui n'avait rien à faire dans un
+    dépôt public, et un script que personne d'autre ne pouvait relancer sans
+    l'éditer. Ce n'est pas le premier — `data/backup_config.json` publiait déjà
+    l'arborescence du disque de Laurent avant d'être retiré du suivi le
+    10/08/2026.
+
+    Le contrôle ne porte QUE sur le code et les scripts, pas sur la
+    documentation : ARCHITECTURE.md doit pouvoir raconter ces incidents en
+    nommant les chemins fautifs, sinon le journal ne sert plus à rien.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    exts = ('.py', '.js', '.bat', '.sh', '.json', '.vbs')
+    ignores = {'__pycache__', '.git', '.claude', 'node_modules', 'cache',
+               'logs', 'data', 'NIMM'}
+    # Noms d'emprunt : un exemple de documentation n'est pas une fuite.
+    faux_noms = {'moi', 'user', 'users', 'utilisateur', 'nom', 'votrenom',
+                 'xxx', 'exemple', 'username', 'public', 'default', 'all users'}
+    motifs = [
+        (re.compile(r'[Cc]:\\+Users\\+([^\\\s"\']+)'),  'chemin utilisateur Windows'),
+        (re.compile(r'/Users/([A-Za-z][^/\s"\']*)'),    'chemin utilisateur macOS'),
+        (re.compile(r'[A-Z]:\\+Mon Drive'),             'dossier Drive personnel'),
+        (re.compile(r'\\+(Desktop|Bureau)\\+[^\s"\']'), 'chemin de bureau personnel'),
+    ]
+
+    fautes = []
+    for dossier, sous, fichiers in os.walk(racine):
+        sous[:] = [d for d in sous if d not in ignores]
+        for f in fichiers:
+            if not f.endswith(exts):
+                continue
+            chemin = os.path.join(dossier, f)
+            try:
+                lignes = open(chemin, encoding='utf-8', errors='ignore').read().split(chr(10))
+            except Exception:
+                continue
+            for i, ligne in enumerate(lignes, 1):
+                for motif, quoi in motifs:
+                    m = motif.search(ligne)
+                    if not m:
+                        continue
+                    # Un groupe capturé = un nom d'utilisateur : tolérer les emprunts.
+                    if m.groups():
+                        nom = (m.group(1) or '').strip().lower().strip('\\/')
+                        if (nom in faux_noms
+                                or not nom.strip('.\u2026*?')      # « ... », « … », « * »
+                                or nom.startswith(('%', '$', '<', '{'))):
+                            continue
+                    fautes.append('%s:%d — %s : %s'
+                                  % (os.path.relpath(chemin, racine), i, quoi,
+                                     ligne.strip()[:90]))
+
+    assert not fautes, ('donnée personnelle dans un fichier versionné :' + chr(10)
+                        + chr(10).join(fautes[:10]))
+    ok('dépôt public : aucun chemin personnel en dur dans le code et les scripts')
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -4841,6 +4902,7 @@ if __name__ == '__main__':
                test_requirements_complet_et_sans_doublon,
                test_regle_de_retenue_dans_le_prompt,
                test_demande_de_precision_accessible,
-               test_demander_precision_est_terminal]:
+               test_demander_precision_est_terminal,
+               test_pas_de_chemin_personnel_dans_le_code]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

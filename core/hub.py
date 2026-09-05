@@ -3615,7 +3615,7 @@ async def maybe_generate_carnet_note(thread_id: str, settings: dict):
 
     Calendrier :
       - Note #0 : après le 1er échange (n == 2)
-      - Note #n : tous les CARNET_INTERVAL échanges suivants (toutes les 14 messages)
+      - Note #n : tous les CARNET_INTERVAL échanges suivants (soit 10 messages)
     Injection dans le system prompt uniquement si n > CARNET_WINDOW.
     """
     # Mode confidentiel : aucune note de carnet pour un fil fantôme.
