@@ -247,6 +247,15 @@ _a_supprimer/
 # Regles de reecriture de l historique : contient par nature les chaines a
 # effacer. Ne doit jamais etre versionne.
 remplacements_historique.txt
+_NETTOYER_HISTORIQUE.bat
+_rapport_historique.log
+_PUBLIER_HISTORIQUE.bat
+_DIAGNOSTIC_HISTORIQUE.bat
+_rapport_diagnostic.log
+_FINALISER_HISTORIQUE.bat
+_rapport_final.log
+_rapport_publication.log
+_sortie.log
 
 # Fichier de config local (clés API en fallback)
 .env
