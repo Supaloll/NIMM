@@ -80,6 +80,17 @@ def _warmup_embeddings():
             print("[WARMUP] Embeddings désactivé pour tous les profils, abandon.")
             return
         print(f"[WARMUP] Embeddings actives pour '{enabled_for}', chargement...")
+        # Le paquet peut tout simplement ne pas etre installe — cas d'une
+        # machine neuve. On lance l'installation en arriere-plan et on s'arrete
+        # la : NIMM demarre normalement, en mode mots-cles, et la recherche par
+        # sens s'activera au prochain demarrage.
+        from modules.memory import (paquet_embeddings_present,
+                                    installer_embeddings_en_fond)
+        if not paquet_embeddings_present():
+            etat = installer_embeddings_en_fond()
+            print(f"[WARMUP] Paquet sentence-transformers absent -> {etat}. "
+                  f"NIMM tourne en mode mots-cles en attendant.")
+            return
         from modules.memory import _get_model
         print("[WARMUP] Appel _get_model()...")
         model = _get_model()
@@ -351,6 +362,20 @@ async def embeddings_status():
     import modules.memory as _mem
     if _mem._embed_model is not None:
         return {"status": "ready"}
+    # Le paquet peut manquer : dans ce cas l'etat utile n'est pas « erreur »
+    # mais « installation en cours » ou « installation impossible ». Dire
+    # « erreur » a quelqu'un dont le paquet s'installe tout seul en fond, c'est
+    # l'inviter a chercher une panne qui n'existe pas.
+    _inst = _mem.etat_installation_embeddings()
+    if _inst['etat'] == 'installing':
+        return {"status": "installing",
+                "detail": "Installation du moteur de recherche par sens en cours. "
+                          "NIMM fonctionne en mode mots-cles en attendant."}
+    if _inst['etat'] == 'failed':
+        return {"status": "install_failed", "detail": _inst['detail']}
+    if _inst['etat'] == 'absent':
+        return {"status": "absent",
+                "detail": "Moteur de recherche par sens non installe."}
     if _mem._embed_error is not None:
         return {"status": "error", "detail": _mem._embed_error}
     return {"status": "loading"}

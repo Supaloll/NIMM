@@ -1006,6 +1006,8 @@ Route : `POST /api/export` — retourne le fichier en téléchargement direct.
 
 | Session | Changements clés |
 |---|---|
+| 06/09/2026 (mesure, et une intuition démentie) | **Le banc a tranché deux fois, dont une contre moi**. Campagne du 05/09 : le correctif de formulation (interdiction explicite de poser la question en prose, avec sa raison) fait passer **DeepSeek de 3/10 à 9/10** sur la forme — et laisse **Mistral à 0/10**, dix fois sur dix en paragraphe. Hypothèse pour la seconde tentative : ce n'est pas la formulation qui manque mais la PLACE, le lexique contractuel en tête du prompt étant ce que les modèles suivent le mieux. Entrée `RETENUE` ajoutée au lexique, dans le ton du contrat. **Résultat : l'inverse de l'attendu.** DeepSeek tombe de 9/10 à 5/10, Mistral passe de 0 à 1 (du bruit), et Mistral perd même un point de comportement. La cause se lisait dans les écarts — « a cherché (`list_files`) », « a cherché (`search_carnet`) » : le lexique remontait **deux** consignes, et la seconde (« ne demande pas ce que tu peux vérifier toi-même ») a pris le dessus sur la première. **Annulé le jour même**, `core/hub.py` revenu au caractère près à l'état committé, et un test permanent verrouille désormais le NON-retour de cette duplication, avec les chiffres dans son commentaire. **Deux leçons :** répéter une consigne à deux endroits ne la renforce pas, ça met ses clauses en concurrence ; et une intuition de prompt sans mesure ne vaut rien — celle-ci semblait excellente. État final acté : comportement 10/10 chez les deux (le défaut d'origine de la note de Laurent a disparu), forme 9/10 chez DeepSeek et 0/10 chez Mistral, qui n'appellera pas l'outil. Reste une décision : intercepter la demande en prose côté serveur, ou vivre avec. 102 scénarios. |
+| 06/09/2026 (chantier F) | **Le moteur de recherche par sens s'installe tout seul — dernier chantier de l'audit mémoire du 09/06**. Jusqu'ici, si `sentence-transformers` n'était pas installé, la recherche par sens ne fonctionnait pas : le chargement échouait, le repli par mots-clés prenait le relais **sans rien dire**, et personne n'apprenait qu'il manquait un paquet. Sur une machine neuve — celle d'Éric, celle de Nando — le défaut était invisible : NIMM répondait, un peu moins bien, voilà tout. [memory.py] `paquet_embeddings_present()` (via `find_spec`, qui regarde sans importer), `installer_embeddings_en_fond()` et `etat_installation_embeddings()` ; l'installation part dans un thread daemon et `_get_model()` rend `None` immédiatement quand le paquet manque — NIMM reste utilisable, en mode mots-clés. **TROIS PIÈGES ÉVITÉS, chacun capable de rendre le correctif pire que le mal.** (a) `sys.executable -m pip` et NON `pip` : cette machine a **deux versions de Python** installées et le pip du PATH n'est pas forcément celui qui fait tourner NIMM — installer dans le mauvais interpréteur donnerait un paquet bien présent, et que NIMM ne verrait jamais. (b) **Pas de pip en boucle** : un témoin `data/embeddings_install.json` horodaté met les essais en pause 24 h après un échec ; sans lui, une machine sans réseau relancerait l'installation à chaque démarrage, plusieurs minutes perdues à chaque fois pour le même résultat. (c) **Le témoin n'est PAS en base** : `get_setting`/`set_setting` sont propres à chaque profil alors qu'un paquet Python s'installe une fois pour la machine entière — et ce fil ne porte aucun contexte utilisateur, ce qui est exactement ce qui avait cassé le préchauffage le 06/08. [main.py] le préchauffage lance l'installation et rend la main sans attendre ; `/api/embeddings/status` distingue désormais `installing`, `install_failed` et `absent` — dire « erreur » à quelqu'un dont le paquet s'installe tout seul, c'est l'envoyer chercher une panne qui n'existe pas. [app.js] le frontend connaissait `ready`, `error`, `disabled` et rien d'autre : il serait resté sur « Téléchargement en cours… » en sondant **toutes les 2 s pendant dix minutes**. Sondage converti en `setTimeout` relancé, qui **ralentit à 10 s** pendant une installation, messages passés en `textContent` (plus propre à la synthèse vocale, et pas d'injection d'un texte de pip dans la page). [index.html] la zone d'état reçoit `role="status" aria-live="polite"` : sans elle, le message n'était lu qu'à la prise de focus sur la case à cocher. 1 test permanent ajouté — 102 scénarios. |
 | 06/09/2026 (historique réécrit) | **L'historique du dépôt public a été réécrit — et le contrôle d'empreinte a rattrapé une erreur qui aurait tout abîmé**. Accord de Laurent. `git filter-repo --replace-text` sur un clone neuf, six règles, `push --force` : le dépôt passe de `d9d9d74` à `9f89661`, les quatre chaînes visées disparaissent de tout l'historique, 339 commits conservés, **empreinte du contenu actuel identique à l'octet près**. **LE PIÈGE** : le premier fichier de règles portait des commentaires. `--replace-text` ne les reconnaît pas — chaque ligne non vide est une règle, et une ligne sans `==>` remplace par `***REMOVED***`. Les lignes réduites à un `#` ont donc remplacé **tous les `#` du dépôt** : 138 fichiers touchés (commentaires Python, titres Markdown, scripts shell ; seuls les `.bat` intacts, leurs commentaires n'utilisant pas ce caractère). Détecté AVANT publication par la comparaison `git rev-parse HEAD:` avant/après — le contenu actuel ne contenant aucune chaîne visée, son empreinte devait être strictement identique ; elle ne l'était pas. **Un fichier de règles ne contient que des règles.** Opération menée depuis la machine (le montage d'assistance refuse `rm`, ce dont filter-repo a besoin) via trois scripts jetables : préparation+vérifications, publication sous confirmation explicite, finalisation. Une leçon de forme au passage : rediriger la sortie d'un `git push` vers un fichier **cache les invites d'authentification** — le gestionnaire d'identifiants ouvre le navigateur sans contexte et son serveur local expire. Reste à faire : fermer la pull request (ses refs gardent les anciens commits), demander au support GitHub le ramassage des objets déréférencés, et Laurent doit re-cloner. |
 | 06/09/2026 (fuite réelle) | **Un fichier de LOG était versionné dans le dépôt public — et le nettoyage de la veille ne l'avait pas vu**. Laurent proposait de réécrire l'historique (`git filter-repo` + push force) pour effacer le chemin personnel entré le 02/09 avec le script de debug. Inventaire fait AVANT de toucher à quoi que ce soit — et il change la décision. (1) LE VRAI PROBLÈME EST AU PRÉSENT, PAS DANS L'HISTOIRE — `nimm.err.log.1`, fichier de log de 15 lignes, est **suivi par git depuis `cea6eb5` et toujours à HEAD**, avec `C:\Users\<nom>\AppData\Roaming\Python\...` dedans. Réécrire l'historique pendant que le même chemin s'affiche dans la version courante n'aurait servi à rien. Cause : une maille du filet — `.gitignore` excluait `*.log`, `nimm.log`, `nimm.log.1` et `nimm.err.log`, mais **pas `nimm.err.log.1`** : le motif `*.log` ne l'attrape pas (le nom finit par `.1`), et la liste nominative avait oublié cette variante. Une liste de noms ne protège que des cas déjà rencontrés. Corrigé par `*.log.*` et `*.err.log*`, et le fichier retiré du dépôt. C'est le seul log jamais versionné. (2) L'AMPLEUR ÉTAIT SURESTIMÉE — une première recherche donnait dix commits contenant le nom d'utilisateur, dont le commit initial : **faux positif**, c'était `GITHUB_REPO = "Supaloll/NIMM"` dans `main.py`, le nom du dépôt. Le vrai chemin `C:\Users\<nom>\` n'est que dans **deux** commits (`cea6eb5` qui l'introduit, `70968d8` qui le nettoie) sur 339. Le `H:\Mon Drive\` de `backup_config.json` vit entre `b2949e2` et `5a56d54`. (3) CE QUE LA RÉÉCRITURE NE RÉGLERA PAS, à savoir avant de la lancer : GitHub **conserve les objets déréférencés**, accessibles par leur hash, et il faut une demande explicite au support pour les faire ramasser ; le dépôt porte une **pull request ouverte** (`refs/pull/1/head`) dont les refs survivent au push force avec les anciens commits ; et tout clone ou fork existant garde l'historique complet. L'opération réduit l'exposition, elle ne l'annule pas. (4) TEST PERMANENT ÉLARGI — `test_pas_de_chemin_personnel_dans_le_code` ne balayait que le code et la configuration : un log n'est pas du code, il ne pouvait pas le voir. Deux volets désormais : le balayage s'étend aux fichiers de données texte (`.txt`, `.csv`, `.ini`, `.cfg`, `.yml`, `.yaml`) — mais **pas aux `.log`**, qui ne doivent pas entrer du tout ; et un second contrôle exige les motifs de rotation dans `.gitignore` puis vérifie, quand git est là, qu'**aucun fichier de log n'est réellement suivi** — parce qu'un `.gitignore` ne délivre pas un fichier déjà suivi, il faut `git rm --cached`. Nuance qui évite un test bloquant : un log encore dans l'index mais déjà retiré du disque est un retrait en cours, pas une entrée. La documentation reste hors de ces contrôles (le journal doit pouvoir nommer les chemins fautifs pour raconter l'incident). (5) Décision sur la réécriture d'historique laissée à Laurent, dont c'est le nom : voir l'entrée de BACKLOG. **Accord donné le 06/09** — les règles de réécriture sont prêtes dans `remplacements_historique.txt` (dossier de travail, jamais versionné), relevées **dans l'historique lui-même** (`git show`) et non de mémoire. Six règles, découpées de façon que le résultat soit le même **quel que soit l'ordre d'application** : une règle unique sur le chemin complet aurait été neutralisée par la règle plus générale sur le dossier utilisateur, et le nom du client aurait survécu. Vérifié en simulant les 720 ordres possibles : aucun résidu. Le profil `laurent` et `Supaloll/NIMM` sont volontairement laissés — prénom de contributeur déjà partout dans les commits, et nom public du dépôt. Le fichier de règles est exclu des deux `.gitignore` et du test anti-fuite : il contient par nature les chaînes à effacer, c'est le seul fichier dans ce cas. 101 scénarios. |
 | 05/09/2026 (première mesure) | **Le banc a parlé : la règle de retenue marche, l'outil ne sert à rien — et la variance entre modèles s'est déplacée**. Première campagne passée par Fernando : 30 cas × deepseek et mistral. (1) CE QUI MARCHE — **conversations ordinaires 20/20**, **demandes claires 19/20** : aucune demande de précision déplacée, aucun outil de production déclenché sans raison. La contre-règle tient, le risque symétrique ne s'est pas réalisé. Surtout : **sur les 10 cas ambigus, aucun des deux fournisseurs n'a lancé un outil qui produit ou modifie**. Le défaut d'origine de la note de Laurent — Mistral qui fonce sans vérifier — a disparu ; sur « Nettoie le dossier téléchargements », Mistral s'arrête maintenant au lieu de supprimer. (2) CE QUI NE MARCHE PAS — **`demander_precision` n'est presque jamais appelé : Mistral 0/10, DeepSeek 3/10**. Les deux modèles demandent bel et bien une précision — mais **en prose**. La variance entre modèles n'a donc pas disparu, elle s'est DÉPLACÉE : d'« agir contre discuter » vers « demander par l'outil contre demander en paragraphe ». Or c'est exactement ce que l'outil devait garantir : non pas la décision, mais la forme. Preuve par le cas même de la note de Laurent — sur « Mets la police devant », Mistral répond « Je ne peux pas agir sur des éléments physiques… si tu parles d'une situation urgente ou d'une intervention… » : il a compris **les policiers**, et tombe dans le piège que la note décrivait. Deux options numérotées auraient tranché en une ligne. Les autres réponses font plusieurs paragraphes, en gras markdown et listes à puces, avec plusieurs questions empilées — laborieux à la synthèse vocale. (3) CORRECTIF — la règle disait « appelle demander_precision() » sans jamais dire **« et pas en texte libre »**, ni pourquoi. Pour un modèle, poser une question en prose est le geste naturel ; appeler un outil pour parler à l'utilisateur ne l'est pas. Deux clauses ajoutées : l'interdiction explicite de la question en prose **avec sa raison** (question courte, options numérotées, un chiffre suffit à répondre, contre un paragraphe à réécouter en entier) ; et « ne demande pas ce que tu peux VÉRIFIER toi-même » — DeepSeek a réclamé une précision sur un chemin pourtant complet, donc `list_files` avant toute question, on ne demande à l'utilisateur que ce qui est **indécidable sans lui**. (4) LE BANC AVAIT UN ANGLE MORT — il comptait « a répondu en texte » comme un échec sec, sans distinguer *a demandé en prose* de *a répondu sans rien demander*. D'où le 0/10 de Mistral, qui laissait croire à un échec de comportement alors que seule la forme manquait. Le banc rend désormais **deux verdicts séparés** : `comportement` (a-t-il agi, s'est-il abstenu, a-t-il demandé au bon moment ?) et `forme` (est-il passé par l'outil ?). Quatrième décision `demande_prose` détectée sur la présence d'une question dans la réponse ; sur une conversation ordinaire elle n'est pas jugée — « ça va, et toi ? » est banal. Option `--verbeux` pour voir le début de réponse de TOUS les cas et non des seuls écarts : sur les cas OK, on ne voyait pas ce que le modèle avait répondu. Entrée 5 dans `BANC_RETENUE.bat` : les 10 ambigus sur deux fournisseurs avec le détail — le passage à refaire après chaque retouche de la règle. (5) CE QUE LA MESURE DIT DU ROUTEUR D'INTENTION — **elle ne le justifie pas**. Le problème qu'il devait résoudre (agir ou discuter) est réglé par le prompt seul, sur les deux fournisseurs ; le problème restant est la FORME de la question, et un aiguillage placé en amont de la conversation n'y changerait rien. Le diagnostic de Laurent était juste, le remède s'est avéré moins cher que ce qu'il proposait. Tests permanents renforcés : la règle doit porter ses deux nouvelles clauses, et la logique de jugement du banc est éprouvée sur ses neuf cas limites — la distinction prose/outil ne doit pas se refermer par inadvertance. 101 scénarios. **Reste à faire : repasser l'entrée 5 pour savoir si la formulation suffit.** |
@@ -1097,26 +1099,7 @@ Route : `POST /api/export` — retourne le fichier en téléchargement direct.
 > avec la preuve dans le code. À refaire à chaque toilettage : une entrée sans
 > référence vérifiable (`fichier:ligne`) n'a pas été vérifiée.
 
-### [PRIORITÉ] Installation silencieuse des embeddings (chantier F)
-
-Seul chantier de l'audit mémoire du 09/06/2026 qui reste entier.
-
-**Ce qui existe déjà :** `GET /api/embeddings/status` (`disabled` / `loading` /
-`ready` / `error`, lecture seule), `POST /api/embeddings/warmup`, et le
-préchargement au démarrage réparé le 06/08/2026 (il vérifiait le réglage dans un
-thread sans contexte utilisateur, donc concluait toujours « désactivé »).
-
-**Ce qui manque :** si `sentence-transformers` n'est pas installé, l'utilisateur
-doit s'en occuper lui-même. Objectif : au premier démarrage, lancer
-`pip install sentence-transformers` en sous-processus non bloquant, poser un
-drapeau en base (`embeddings_status : installing / ready`), et laisser
-`_get_model()` consulter ce drapeau — mode mots-clés pendant l'installation,
-modèle chargé une fois prête. Si l'installation est interrompue, elle aboutit au
-démarrage suivant. L'utilisateur n'a rien à faire et rien à comprendre.
-
-**Vigilance :** ne jamais bloquer le démarrage ni la première réponse ; et dire
-l'état réel dans l'interface plutôt que de laisser croire que la recherche
-sémantique fonctionne alors qu'elle est encore en mode mots-clés.
+---
 
 ### [OUVERT] Normaliseur de prédicats libres — passe rétroactive (chantier G)
 
@@ -1172,42 +1155,49 @@ toute différence signale un remplacement qui a débordé.
 
 Sauvegarde complète conservée dans `NIMM-sauvegarde.git`, à jour sur l'ancien
 `d9d9d74` — à garder le temps que Laurent ait re-cloné.
+
 ---
 
-### [PRIORITÉ] Repasser le banc après le correctif de formulation
+### [DÉCISION] « Agir ou demander » : ce qui est acquis, ce qui ne le sera pas
 
-**Première campagne passée le 05/09/2026** (30 cas × deepseek et mistral) :
-comportement excellent — 20/20 en conversation, 19/20 sur les demandes claires,
-et surtout aucun des deux fournisseurs n'agit plus sur une demande floue. Mais
-`demander_precision` n'est presque jamais appelé (Mistral 0/10, DeepSeek 3/10) :
-les modèles demandent **en prose**. La variance entre modèles ne porte donc plus
-sur la décision mais sur la forme de la question.
+**Deux campagnes passées, le 05 et le 06/09/2026. État final mesuré :**
 
-**Correctif appliqué le même jour** : la règle interdit désormais explicitement
-la question en texte libre — avec sa raison, la lecture en braille — et ajoute
-« ne demande pas ce que tu peux vérifier toi-même ».
+| | comportement | forme |
+|---|---|---|
+| DeepSeek | 10/10 | 9/10 |
+| Mistral | 10/10 | 0/10 |
 
-**À faire : `BANC_RETENUE.bat`, entrée 5** — les 10 cas ambigus sur les deux
-fournisseurs, avec le détail des réponses. Vingt appels, deux minutes.
+**Acquis, et c'était l'essentiel :** aucun des deux fournisseurs ne se jette
+plus sur une action à partir d'une demande floue. Le défaut d'origine de la
+note de Laurent a disparu, et sans effet de bord — 20/20 en conversation
+ordinaire, 19/20 sur les demandes claires lors de la campagne complète.
 
-**Comment lire le résultat :** le banc rend maintenant deux verdicts séparés.
-Si `comportement` reste haut et que `forme` remonte, la formulation a suffi et
-le chantier est clos. Si `forme` reste au plancher, c'est que la consigne ne
-peut pas gagner contre le réflexe naturel du modèle, et il faudra intercepter la
-demande textuelle autrement — repérer une réponse qui n'est qu'une question et
-la reformater, plutôt que d'espérer un appel d'outil. Surveiller au passage que
-`comportement` sur `clair` ne baisse pas : une règle plus insistante peut se
-mettre à mordre trop.
+**Ce qui ne le sera pas :** Mistral n'appellera pas `demander_precision`. Il
+demande — dix fois sur dix — mais en prose. Deux tentatives, deux échecs :
+1. *Renforcer la formulation* (05/09) : interdiction explicite de la question
+   en texte libre, avec sa raison. DeepSeek 3/10 → 9/10. Mistral 0/10 → 0/10.
+2. *Changer sa place* (06/09) : la même consigne dupliquée dans le lexique
+   contractuel, en tête. **Résultat inverse de l'attendu** — DeepSeek
+   9/10 → 5/10, Mistral 0 → 1 (du bruit). La cause était lisible dans les
+   écarts (« a cherché `list_files` », « a cherché `search_carnet` ») : le
+   lexique remontait DEUX consignes, et la seconde — « ne demande pas ce que
+   tu peux vérifier toi-même » — a pris le dessus sur la première. Annulé le
+   jour même, `core/hub.py` revenu au caractère près.
+
+**Leçon générale, au-delà de ce chantier :** répéter une consigne à deux
+endroits ne la renforce pas, ça met ses clauses en concurrence. Et une
+intuition de prompt sans mesure vaut zéro : celle-ci semblait excellente.
+
+**Décision qui reste à prendre** — intercepter la demande en prose côté
+serveur (repérer une réponse qui n'est qu'une question et la reformater en
+question courte + options), ou vivre avec la différence. La première option ne
+dépend plus du modèle mais ajoute de la machinerie et un risque de faux
+positifs ; la seconde coûte, à chaque demande de Mistral, un paragraphe en
+gras markdown là où trois lignes suffiraient.
 
 **Ce que la mesure a déjà tranché :** le routeur d'intention proposé le 02/09
-n'est pas justifié. Le problème qu'il devait résoudre est réglé par le prompt
-seul ; celui qui reste est une affaire de forme, sur laquelle un aiguillage
-placé en amont de la conversation n'aurait aucune prise.
-
-**Les cas de Laurent restent bienvenus** : dix cas ambigus écrits par une seule
-personne, c'est peu, et c'est la personne qui connaît l'outil. Une ligne par cas
-dans `tests/cas_retenue.txt`.
-
+n'est pas justifié. Le problème qu'il devait résoudre — agir ou discuter — est
+réglé par le prompt seul, sur les deux fournisseurs.
 ---
 
 ## Sorti du backlog — ce qui était déjà fait, et où le vérifier
@@ -1237,7 +1227,8 @@ dans `tests/cas_retenue.txt`.
 - **E — Résolution de conflit par récence : LIVRÉ.** `modules/memory.py` ~1084 :
   à sujet et prédicat identiques, le triplet le plus récent l'emporte sur le plus
   lourd — un ancien employeur ne peut plus écraser le nouveau.
-- **F et G** : seuls restants, remontés en tête de ce fichier.
+- **F — Installation silencieuse des embeddings : LIVRÉ le 06/09/2026.** `modules/memory.py` : `paquet_embeddings_present()`, `installer_embeddings_en_fond()`, `etat_installation_embeddings()`. Le paquet s'installe en sous-processus non bloquant au démarrage, NIMM tourne en mode mots-clés en attendant, l'interface annonce l'état.
+- **G** : seul restant, en tête de ce fichier.
 
 ### Agrandissement fenêtre active + Carnet progressif : LIVRÉ
 
