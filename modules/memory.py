@@ -26,6 +26,163 @@ _embed_error  = None  # message d'erreur si le chargement a échoué
 # similarités erronées (deux modèles ne sont pas comparables).
 _EMBED_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
 
+
+# ══════════════════════════════════════════
+# INSTALLATION SILENCIEUSE DU PAQUET EMBEDDINGS
+# ══════════════════════════════════════════
+#
+# Chantier F de l'audit mémoire du 09/06/2026, dernier de la liste à être
+# livré. Jusqu'ici, si `sentence-transformers` n'était pas installé, la
+# recherche par sens ne fonctionnait simplement pas : le chargement échouait,
+# le repli par mots-clés prenait le relais sans rien dire, et personne
+# n'apprenait qu'il manquait un paquet. Sur une machine neuve — celle d'Éric,
+# celle de Nando — le défaut était invisible : NIMM répondait, un peu moins
+# bien, voilà tout.
+#
+# Le paquet s'installe désormais tout seul, en arrière-plan, et NIMM reste
+# utilisable pendant ce temps.
+
+_install_etat   = None            # None | 'installing' | 'ready' | 'failed'
+_install_detail = ''
+_install_lock   = threading.Lock()
+_INSTALL_DELAI_NOUVEL_ESSAI_H = 24
+_INSTALL_TIMEOUT_S = 1800         # torch pèse lourd, et les lignes lentes existent
+
+
+def _chemin_temoin_install() -> str:
+    """`data/embeddings_install.json` — hors du dépôt, propre à la machine.
+
+    Le témoin ne va PAS en base : `get_setting`/`set_setting` sont propres à
+    chaque profil, alors qu'un paquet Python est installé une fois pour la
+    machine entière. Le ranger par profil aurait été faux — et ce fil ne
+    porte de toute façon aucun contexte utilisateur (voir le correctif du
+    warmup, 06/08/2026).
+    """
+    import os
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(racine, 'data', 'embeddings_install.json')
+
+
+def paquet_embeddings_present() -> bool:
+    """Le paquet est-il importable ? `find_spec` regarde sans importer."""
+    import importlib.util
+    try:
+        return importlib.util.find_spec('sentence_transformers') is not None
+    except Exception:
+        return False
+
+
+def _lire_temoin_install() -> dict:
+    try:
+        with open(_chemin_temoin_install(), encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _ecrire_temoin_install(etat: str, detail: str = ''):
+    import os
+    try:
+        chemin = _chemin_temoin_install()
+        os.makedirs(os.path.dirname(chemin), exist_ok=True)
+        with open(chemin, 'w', encoding='utf-8') as f:
+            json.dump({'etat': etat, 'detail': detail[:2000],
+                       'horodatage': datetime.now().isoformat()},
+                      f, ensure_ascii=False)
+    except Exception as e:
+        print(f"[EMBEDDINGS] Témoin d'installation non écrit : {e}")
+
+
+def _echec_trop_recent() -> bool:
+    """Un échec de moins de 24 h met les nouveaux essais en pause.
+
+    Sans ce garde-fou, une machine sans réseau relancerait pip à CHAQUE
+    démarrage : plusieurs minutes de tentative inutile, à chaque fois, pour
+    le même résultat.
+    """
+    temoin = _lire_temoin_install()
+    if temoin.get('etat') != 'failed':
+        return False
+    try:
+        quand = datetime.fromisoformat(temoin.get('horodatage', ''))
+    except Exception:
+        return False
+    return (datetime.now() - quand).total_seconds() < _INSTALL_DELAI_NOUVEL_ESSAI_H * 3600
+
+
+def etat_installation_embeddings() -> dict:
+    """État lisible par l'interface : ready / installing / failed / absent."""
+    if paquet_embeddings_present():
+        return {'etat': 'ready', 'detail': ''}
+    if _install_etat == 'installing':
+        return {'etat': 'installing', 'detail': 'Installation en cours'}
+    temoin = _lire_temoin_install()
+    if _install_etat == 'failed' or temoin.get('etat') == 'failed':
+        return {'etat': 'failed',
+                'detail': _install_detail or temoin.get('detail', '')}
+    return {'etat': 'absent', 'detail': ''}
+
+
+def _installer_maintenant():
+    """Corps du thread : lance pip, note le résultat, ne lève jamais."""
+    global _install_etat, _install_detail
+    import subprocess, sys
+    # `sys.executable -m pip` et NON « pip » : cette machine a deux versions de
+    # Python installées, et le pip du PATH n'est pas forcément celui qui fait
+    # tourner NIMM. Installer dans le mauvais interpréteur donnerait un paquet
+    # bien présent — et que NIMM ne verrait jamais.
+    commande = [sys.executable, '-m', 'pip', 'install', '--quiet',
+                'sentence-transformers']
+    print('[EMBEDDINGS] Installation de sentence-transformers en arriere-plan...')
+    try:
+        r = subprocess.run(commande, capture_output=True, text=True,
+                           timeout=_INSTALL_TIMEOUT_S)
+        if r.returncode == 0 and paquet_embeddings_present():
+            _install_etat, _install_detail = 'ready', ''
+            _ecrire_temoin_install('ready')
+            print('[EMBEDDINGS] Installe. La recherche par sens sera active au '
+                  'prochain demarrage.')
+        else:
+            sortie = ((r.stderr or '') + (r.stdout or '')).strip()
+            _install_etat = 'failed'
+            _install_detail = sortie[-500:] or ('code de retour %d' % r.returncode)
+            _ecrire_temoin_install('failed', _install_detail)
+            print('[EMBEDDINGS] Installation echouee : %s' % _install_detail[:200])
+    except subprocess.TimeoutExpired:
+        _install_etat = 'failed'
+        _install_detail = 'delai depasse (%d s)' % _INSTALL_TIMEOUT_S
+        _ecrire_temoin_install('failed', _install_detail)
+        print('[EMBEDDINGS] Installation abandonnee : delai depasse.')
+    except Exception as e:
+        _install_etat = 'failed'
+        _install_detail = str(e)
+        _ecrire_temoin_install('failed', _install_detail)
+        print('[EMBEDDINGS] Installation impossible : %s' % e)
+
+
+def installer_embeddings_en_fond(force: bool = False) -> str:
+    """Lance l'installation sans bloquer. Rend l'état atteint immédiatement.
+
+    'ready'      le paquet est déjà là, rien à faire
+    'installing' un thread vient de partir, ou tournait déjà
+    'en_pause'   un échec récent met les essais en pause (force=True passe outre)
+    """
+    global _install_etat
+    if paquet_embeddings_present():
+        return 'ready'
+    with _install_lock:
+        if _install_etat == 'installing':
+            return 'installing'
+        if not force and _echec_trop_recent():
+            print('[EMBEDDINGS] Installation en pause apres un echec recent — '
+                  'nouvel essai dans moins de %d h, ou a la demande.'
+                  % _INSTALL_DELAI_NOUVEL_ESSAI_H)
+            return 'en_pause'
+        _install_etat = 'installing'
+        _ecrire_temoin_install('installing')
+    threading.Thread(target=_installer_maintenant, daemon=True).start()
+    return 'installing'
+
 def _is_embeddings_enabled() -> bool:
     """Vérifie si la recherche par sens est activée dans les settings."""
     try:
@@ -61,6 +218,15 @@ def _get_model():
         # terminer le chargement.
         if _embed_model is not None:
             return _embed_model
+        if not paquet_embeddings_present():
+            # Le paquet manque : on lance l'installation en arrière-plan et on
+            # rend None tout de suite. NIMM continue en mode mots-clés —
+            # l'utilisateur ne voit pas d'erreur, seulement une recherche moins
+            # fine en attendant. Appeler cette fonction en boucle ne relance
+            # rien : elle rend 'installing' tant que le thread tourne.
+            etat = installer_embeddings_en_fond()
+            _embed_error = 'paquet sentence-transformers absent (%s)' % etat
+            return None
         try:
             from sentence_transformers import SentenceTransformer
             print("[MEMORY] 🔄 Chargement du modèle embeddings...")

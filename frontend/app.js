@@ -4984,8 +4984,13 @@ async function _saveRouting(field, value) {
 // ── Surveille l'état du modèle embeddings (loading → ready) ──
 let _embeddingsWatchTimer = null;
 
+function _stopEmbeddingsWatch() {
+    clearTimeout(_embeddingsWatchTimer);
+    _embeddingsWatchTimer = null;
+}
+
 function _watchEmbeddingsStatus() {
-    clearInterval(_embeddingsWatchTimer);
+    _stopEmbeddingsWatch();
     const toggle = document.getElementById('embeddings-toggle');
     const msg    = document.getElementById('embeddings-status-msg');
     if (!toggle || !toggle.checked) {
@@ -4993,33 +4998,62 @@ function _watchEmbeddingsStatus() {
         return;
     }
 
-    if (msg) msg.innerHTML = '⏳ Téléchargement en cours…';
+    if (msg) msg.textContent = 'Préparation…';
 
-    _embeddingsWatchTimer = setInterval(async () => {
+    // Un setTimeout qui se relance, et non un setInterval : le rythme doit
+    // pouvoir changer en cours de route. Charger le modèle prend quelques
+    // secondes — deux secondes entre deux questions est le bon rythme.
+    // INSTALLER le paquet prend des minutes : garder ce rythme ferait des
+    // centaines de requêtes pour apprendre la même chose.
+    let delai = 2000;
+
+    const sonder = async () => {
         try {
             const r = await fetch('/api/embeddings/status');
             const d = await r.json();
+
             if (d.status === 'ready') {
-                clearInterval(_embeddingsWatchTimer);
-                _embeddingsWatchTimer = null;
-                if (msg) msg.innerHTML = '<span style="color:var(--accent)">✅ Modèle prêt</span>';
-            } else if (d.status === 'error') {
-                clearInterval(_embeddingsWatchTimer);
-                _embeddingsWatchTimer = null;
-                const detail = d.detail || 'erreur inconnue';
-                if (msg) msg.innerHTML = `<span style="color:#e05c5c">❌ Échec du chargement : ${detail}</span>`;
-            } else if (d.status === 'disabled') {
-                clearInterval(_embeddingsWatchTimer);
-                _embeddingsWatchTimer = null;
-                if (msg) msg.textContent = '';
+                _stopEmbeddingsWatch();
+                if (msg) msg.textContent = 'Modèle prêt.';
+                return;
             }
-            // 'loading' → on continue de poller
-        } catch(e) {
-            clearInterval(_embeddingsWatchTimer);
-            _embeddingsWatchTimer = null;
-            if (msg) msg.innerHTML = '<span style="color:#e05c5c">❌ Impossible de joindre le serveur</span>';
+            if (d.status === 'installing') {
+                delai = 10000;
+                if (msg) msg.textContent = 'Installation du moteur de recherche par '
+                    + 'sens en cours. NIMM fonctionne en mode mots-clés en attendant, '
+                    + 'et la recherche par sens s’activera au prochain démarrage.';
+            } else if (d.status === 'install_failed') {
+                _stopEmbeddingsWatch();
+                if (msg) msg.textContent = 'Installation impossible : '
+                    + (d.detail || 'raison inconnue')
+                    + '. La recherche par mots-clés reste active. '
+                    + 'Nouvel essai au prochain démarrage.';
+                return;
+            } else if (d.status === 'absent') {
+                _stopEmbeddingsWatch();
+                if (msg) msg.textContent = 'Moteur de recherche par sens non installé. '
+                    + 'La recherche par mots-clés reste active.';
+                return;
+            } else if (d.status === 'error') {
+                _stopEmbeddingsWatch();
+                if (msg) msg.textContent = 'Échec du chargement : '
+                    + (d.detail || 'erreur inconnue');
+                return;
+            } else if (d.status === 'disabled') {
+                _stopEmbeddingsWatch();
+                if (msg) msg.textContent = '';
+                return;
+            }
+            // 'loading' → le modèle se charge, on garde le rythme rapide.
+        } catch (e) {
+            _stopEmbeddingsWatch();
+            if (msg) msg.textContent = 'Impossible de joindre le serveur.';
+            return;
         }
-    }, 2000);
+        _embeddingsWatchTimer = setTimeout(sonder, delai);
+    };
+
+    _embeddingsWatchTimer = setTimeout(sonder, delai);
 }
 
 async function loadSettingsIntoUI() {

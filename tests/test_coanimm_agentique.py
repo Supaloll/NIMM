@@ -4701,7 +4701,21 @@ def test_regle_de_retenue_dans_le_prompt():
     #     cette liste en texte.
     assert '• demander_precision(' in hub, \
         'demander_precision absent de la liste « Outils disponibles »'
-    ok('retenue : la règle dit quand s’abstenir ET quand ne pas demander')
+    # (5) LA RÈGLE RESTE DANS LE BLOC OUTILS, ET NULLE PART AILLEURS.
+    #     Le 06/09/2026, la même consigne a été DUPLIQUÉE en tête, dans le
+    #     lexique contractuel, avec l'idée que les modèles y obéissent mieux.
+    #     Mesuré : DeepSeek est tombé de 9/10 à 5/10 sur la forme, et Mistral
+    #     n'a pas bougé (0 → 1, du bruit). La cause était lisible dans les
+    #     écarts — « a cherché (list_files) », « a cherché (search_carnet) » :
+    #     le lexique remontait DEUX consignes, et la seconde, « ne demande pas
+    #     ce que tu peux vérifier toi-même », a pris le dessus sur la première.
+    #     Annulé le jour même. Répéter une consigne à deux endroits ne la
+    #     renforce pas : ça met ses clauses en concurrence.
+    assert 'RETENUE Demande floue' not in hub, (
+        'la règle a été redupliquée dans le lexique — essayé le 06/09, mesuré, '
+        'annulé : DeepSeek 9/10 → 5/10 sur la forme')
+
+    ok('retenue : règle complète, contre-règle, et entrée RETENUE en tête du lexique')
 
 
 def test_demande_de_precision_accessible():
@@ -5034,6 +5048,140 @@ def test_banc_retenue_coherent():
        % (len(messages), len(declares)))
 
 
+def test_embeddings_installation_silencieuse():
+    """Le paquet manquait, et personne ne le disait.
+
+    Si `sentence-transformers` n'était pas installé, la recherche par sens ne
+    fonctionnait pas : le chargement échouait, le repli par mots-clés prenait
+    le relais, et rien ne signalait qu'il manquait un paquet. Sur une machine
+    neuve, le défaut était invisible — NIMM répondait, un peu moins bien.
+
+    Trois pièges sont verrouillés ici, chacun capable de rendre le correctif
+    pire que le mal.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    mem = open(os.path.join(racine, 'modules', 'memory.py'), encoding='utf-8').read()
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+
+    for nom in ('paquet_embeddings_present', 'installer_embeddings_en_fond',
+                'etat_installation_embeddings', '_echec_trop_recent'):
+        assert 'def %s(' % nom in mem, 'fonction manquante : %s' % nom
+
+    # (1) LE BON INTERPRÉTEUR. Cette machine a deux versions de Python
+    #     installées : le `pip` du PATH n'est pas forcément celui qui fait
+    #     tourner NIMM. Installer dans le mauvais donne un paquet bien présent
+    #     — et que NIMM ne verra jamais. Le faux positif parfait.
+    corps = mem[mem.index('def _installer_maintenant'):]
+    corps = corps[:corps.index(chr(10) + 'def ', 10)]
+    assert "sys.executable" in corps, \
+        "l'installation n'utilise pas l'interpréteur de NIMM"
+    assert "'pip', 'install'" in corps
+    assert 'timeout=' in corps, 'aucun délai maximum : un pip bloqué le resterait'
+
+    # (2) PAS DE PIP EN BOUCLE. Sans garde-fou, une machine sans réseau
+    #     relancerait l'installation à CHAQUE démarrage : plusieurs minutes
+    #     perdues à chaque fois, pour le même échec.
+    garde = mem[mem.index('def _echec_trop_recent'):]
+    garde = garde[:garde.index(chr(10) + 'def ', 10)]
+    assert 'failed' in garde and '_INSTALL_DELAI_NOUVEL_ESSAI_H' in garde, \
+        'le garde-fou anti-relance ne consulte pas le dernier échec'
+
+    lance = mem[mem.index('def installer_embeddings_en_fond'):]
+    lance = lance[:lance.index(chr(10) + 'def ', 10)]
+    assert '_echec_trop_recent()' in lance, \
+        "le lancement ne consulte pas le garde-fou : pip repartirait à chaque démarrage"
+    assert 'daemon=True' in lance, \
+        "le thread n'est pas daemon : il empêcherait NIMM de s'arrêter"
+
+    # (3) LE TÉMOIN NE VA PAS EN BASE. get_setting/set_setting sont propres à
+    #     chaque profil, alors qu'un paquet Python s'installe une fois pour la
+    #     machine entière. Et ce fil ne porte aucun contexte utilisateur — c'est
+    #     exactement ce qui avait cassé le préchauffage le 06/08/2026.
+    bloc = mem[mem.index('INSTALLATION SILENCIEUSE DU PAQUET EMBEDDINGS'):]
+    bloc = bloc[:bloc.index('def _get_model')]
+    # « set_setting( » avec la parenthèse : on cherche un APPEL, pas une
+    # mention. Le commentaire qui explique pourquoi on n'utilise pas la base
+    # cite forcément son nom — chercher le nom seul se déclenche dessus.
+    assert 'set_setting(' not in bloc, \
+        'le témoin d’installation passe par la base, donc par profil — il doit ' \
+        'être global à la machine'
+    assert 'data' in bloc and 'embeddings_install' in bloc
+
+    # (4) NIMM RESTE UTILISABLE PENDANT CE TEMPS : le chargement du modèle doit
+    #     rendre None sans lever, et surtout sans attendre la fin de pip.
+    getm = mem[mem.index('def _get_model'):]
+    getm = getm[:getm.index(chr(10) + 'def ', 10)]
+    assert 'paquet_embeddings_present()' in getm and 'return None' in getm, \
+        '_get_model ne gère pas le cas du paquet absent'
+
+    # (5) L'INTERFACE DIT L'ÉTAT RÉEL. Annoncer « erreur » à quelqu'un dont le
+    #     paquet s'installe tout seul, c'est l'envoyer chercher une panne qui
+    #     n'existe pas.
+    for etat in ('installing', 'install_failed', 'absent'):
+        assert '"%s"' % etat in mn, 'la route /api/embeddings/status ignore %s' % etat
+    assert 'etat_installation_embeddings' in mn, \
+        "main.py ne consulte pas l'état d'installation"
+
+    # (6) Le démarrage ne doit pas attendre pip.
+    warm = mn[mn.index('def _warmup_embeddings'):]
+    warm = warm[:warm.index(chr(10) + 'def ', 10)]
+    assert 'installer_embeddings_en_fond' in warm and 'return' in warm, \
+        'le préchauffage ne lance pas l’installation, ou ne rend pas la main'
+
+    # (7) Le garde-fou éprouvé pour de vrai, sans lancer le moindre pip.
+    #     Dans un interpréteur NEUF : cette suite de tests remplace
+    #     core.database par des doublures, et modules.memory ne s'importerait
+    #     pas ici. Un sous-processus éprouve le vrai module, sans mock.
+    import subprocess, textwrap
+    verif = textwrap.dedent("""
+        import sys, os, json, tempfile
+        from datetime import datetime, timedelta
+        sys.dont_write_bytecode = True
+        sys.path.insert(0, sys.argv[1])
+        import modules.memory as M
+        temoin = os.path.join(tempfile.mkdtemp(prefix='nimm_emb_'), 'temoin.json')
+        M._chemin_temoin_install = lambda: temoin
+        def poser(quand):
+            json.dump({'etat': 'failed', 'detail': 'x',
+                       'horodatage': quand.isoformat()},
+                      open(temoin, 'w', encoding='utf-8'))
+        poser(datetime.now())
+        assert M._echec_trop_recent() is True, 'un echec de ce matin doit mettre en pause'
+        assert M.installer_embeddings_en_fond() == 'en_pause', 'pip serait relance'
+        poser(datetime.now() - timedelta(days=2))
+        assert M._echec_trop_recent() is False, 'apres 2 jours, nouvel essai permis'
+        assert M.etat_installation_embeddings()['etat'] in ('ready', 'failed')
+        print('GARDE_FOU_OK')
+    """)
+    r = subprocess.run([sys.executable, '-c', verif, racine],
+                       capture_output=True, text=True, timeout=120)
+    assert 'GARDE_FOU_OK' in r.stdout, (
+        'le garde-fou anti-relance ne se comporte pas comme annoncé :'
+        + chr(10) + (r.stderr or r.stdout)[-600:])
+
+    # (8) L'INTERFACE SUIT, ET LE DIT À VOIX HAUTE. Un serveur qui répond
+    #     « installation en cours » à un frontend qui ne connaît pas cet état
+    #     laisse l'utilisateur devant « Téléchargement en cours… » pendant dix
+    #     minutes, en interrogeant le serveur toutes les deux secondes.
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    for etat in ('installing', 'install_failed', 'absent'):
+        assert "'%s'" % etat in app, \
+            'le frontend ignore l’état %s : il sonderait dans le vide' % etat
+    assert 'delai = 10000' in app, \
+        'le rythme de sondage ne ralentit pas pendant l’installation — des ' \
+        'centaines de requêtes pour apprendre la même chose'
+
+    # Le message d'état doit être ANNONCÉ quand il change : sans zone live, un
+    # lecteur d'écran ne le lit qu'à la prise de focus sur la case à cocher.
+    ligne = [l for l in html.split(chr(10)) if 'embeddings-status-msg' in l
+             and '<div' in l]
+    assert ligne and 'aria-live' in ligne[0], \
+        'la zone d’état des embeddings n’est pas annoncée au lecteur d’écran'
+
+    ok('embeddings : installation silencieuse, bon interpréteur, aucun pip en boucle, état annoncé')
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -5097,6 +5245,7 @@ if __name__ == '__main__':
                test_demande_de_precision_accessible,
                test_demander_precision_est_terminal,
                test_pas_de_chemin_personnel_dans_le_code,
-               test_banc_retenue_coherent]:
+               test_banc_retenue_coherent,
+               test_embeddings_installation_silencieuse]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
