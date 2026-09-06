@@ -244,6 +244,9 @@ logs/
 *.err.log*
 # Sas de suppression : ce qui attend d'être effacé à la main.
 _a_supprimer/
+# Regles de reecriture de l historique : contient par nature les chaines a
+# effacer. Ne doit jamais etre versionne.
+remplacements_historique.txt
 
 # Fichier de config local (clés API en fallback)
 .env

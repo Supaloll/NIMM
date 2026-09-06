@@ -4820,7 +4820,13 @@ def test_pas_de_chemin_personnel_dans_le_code():
     exts = ('.py', '.js', '.bat', '.sh', '.json', '.vbs',
             '.txt', '.csv', '.ini', '.cfg', '.yml', '.yaml')
     ignores = {'__pycache__', '.git', '.claude', 'node_modules', 'cache',
-               'logs', 'data', 'NIMM'}
+               'logs', 'data', 'NIMM', '_a_supprimer'}
+    # Un seul fichier échappe au contrôle, et c'est son objet même : les règles
+    # de réécriture de l'historique DOIVENT contenir les chaînes à effacer,
+    # sinon elles n'effacent rien. Il vit hors dépôt (dans le dossier de
+    # travail, qui n'est pas un clone git), il est exclu des deux .gitignore,
+    # et il n'a plus de raison d'être une fois l'opération faite.
+    fichiers_exclus = {'remplacements_historique.txt'}
     # Noms d'emprunt : un exemple de documentation n'est pas une fuite.
     faux_noms = {'moi', 'user', 'users', 'utilisateur', 'nom', 'votrenom',
                  'xxx', 'exemple', 'username', 'public', 'default', 'all users'}
@@ -4835,7 +4841,7 @@ def test_pas_de_chemin_personnel_dans_le_code():
     for dossier, sous, fichiers in os.walk(racine):
         sous[:] = [d for d in sous if d not in ignores]
         for f in fichiers:
-            if not f.endswith(exts):
+            if not f.endswith(exts) or f in fichiers_exclus:
                 continue
             chemin = os.path.join(dossier, f)
             try:
