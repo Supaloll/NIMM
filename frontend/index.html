@@ -474,6 +474,7 @@
                 <select id="voice-select" style="flex:1;" aria-label="Voix de synthèse vocale"></select>
                 <button id="preview-voice-btn" aria-label="Écouter un aperçu de la voix sélectionnée"><span aria-hidden="true">▶</span> Écouter</button>
             </div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">La voix choisie ici s'applique aux fils sans masque (🎛️ Custom / standard) et aux masques sans voix propre. Un fil ouvert avec un masque qui déclare une voix (modules/masks/*.json, champ voice) utilise celle-ci en priorité.</div>
         </div>
 
         <!-- ── OPTIONS GEMINI TTS (masquées si pas de clé Gemini) ── -->
@@ -1861,7 +1862,7 @@ Analyse les sentiments de : ..."
             </select>
 
             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;">
-                Par défaut, NIMM applique les réglages définis dans les Paramètres (⚙️). « ↩ Même que le fil » et « Voix par défaut » conservent ces réglages : ne modifie ces options que si ce fil doit se comporter autrement.
+                Par défaut, NIMM applique les réglages des Paramètres (⚙️). « ↩ Même que le fil » et « Voix par défaut » conservent ces réglages. Règle TTS : un fil avec un masque qui déclare une voix (champ voice dans modules/masks/*.json) utilise toujours celle-ci ; le choix « Voix TTS » ci-dessus ne s'applique qu'aux fils sans masque ou aux masques sans voix déclarée.
             </div>
         </div>
         </details>
@@ -2466,7 +2467,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260904-studio-modale"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260906-voix-masque"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

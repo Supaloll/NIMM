@@ -258,10 +258,10 @@ function _splitSentences(text) {
 }
 
 function _resolveVoice() {
-    // Choix explicite de l'utilisateur -> comportement actuel (voix globale)
-    const custom = localStorage.getItem('nimm-voice');
-    if (custom) return custom;
-    // Sinon : voix par defaut du masque du fil courant si le masque en declare une
+    // La voix du masque PRIME : un fil ouvert avec un masque qui declare une voix
+    // (champ `voice` de modules/masks/<id>.json) utilise TOUJOURS cette voix —
+    // c'est le masque qui incarne le fil. La voix globale ci-dessous ne sert
+    // que pour les fils sans masque (potards/standard) et les masques sans voix.
     const tid = currentTabId || currentThreadId;
     if (tid) {
         const thread = threads.find(t => t.thread_id === tid);
@@ -269,6 +269,9 @@ function _resolveVoice() {
             return _maskVoice[thread.mask_id];
         }
     }
+    // Choix explicite de l'utilisateur dans les Parametres -> voix globale
+    const custom = localStorage.getItem('nimm-voice');
+    if (custom) return custom;
     return 'ff_siwis';
 }
 
@@ -1978,6 +1981,21 @@ async function promptNewThreadModal() {
     const imageSel     = document.getElementById('new-thread-routing-image');
     const coanimSel    = document.getElementById('new-thread-routing-coanimm');
     const ttsSel       = document.getElementById('new-thread-tts-voice');
+    // Voix du masque : si le masque choisi declare une `voice`, c'est elle qui
+    // s'appliquera au fil — le selecteur TTS est inactif pour ne pas laisser
+    // croire qu'on peut la forcer (ni polluer la voix globale des fils sans masque).
+    function _syncModalVoice() {
+        if (!ttsSel) return;
+        const mode = document.querySelector('.new-thread-mode-btn.active')?.dataset.mode || 'mask';
+        const mask = masks.find(m => m.id === sel.value) || {};
+        const impose = mode === 'mask' && !!mask.voice;
+        ttsSel.disabled = impose;
+        if (impose) ttsSel.value = '';
+        ttsSel.title = impose
+            ? 'Voix imposee par ce masque (champ voice du fichier modules/masks/' + (mask.id || '?') + '.json)'
+            : '';
+    }
+    sel.addEventListener('change', _syncModalVoice);
     const providerVal   = routing.chat || prov.provider || 'mistral';
     const memVal0       = routing.memoire?.provider  || 'same';
     const titreVal0     = routing.titre?.provider    || 'same';
@@ -1992,6 +2010,7 @@ async function promptNewThreadModal() {
         const list = voices.voices || voices;
         ttsSel.innerHTML = '<option value="">↩ Voix par défaut</option>' +
             list.map(v => `<option value="${v.id}"${v.id===currentVoice?' selected':''}>${v.label}</option>`).join('');
+        _syncModalVoice();
     }).catch(() => { if (ttsSel) ttsSel.innerHTML = '<option value="">↩ Voix par défaut</option>'; });
     if (visionSel) visionSel.value = visionVal0;
     if (imageSel)  imageSel.value  = imageVal0;
@@ -2023,6 +2042,7 @@ async function promptNewThreadModal() {
                 selectedMode = btn.dataset.mode;
                 document.getElementById('new-thread-mask-row').style.display =
                     selectedMode === 'mask' ? '' : 'none';
+                _syncModalVoice();
             };
         });
 
@@ -2030,6 +2050,7 @@ async function promptNewThreadModal() {
         // explicite, jamais un reste de la fois précédente — sauf si le
         // masque déjà présélectionné impose lui-même le fantôme.
         _syncGhostFromMask();
+        _syncModalVoice();
         modal.classList.remove('hidden');
 
         // Focus accessible : sur l'élément pertinent selon le mode pré-sélectionné
@@ -2048,6 +2069,10 @@ async function promptNewThreadModal() {
             const maskId = selectedMode === 'mask'
                 ? document.getElementById('new-thread-mask-select').value
                 : null;
+            // Masque avec voix declaree -> la voix du fil est imposee : on ne
+            // persiste pas le selecteur TTS (il serait de toute facon ignore).
+            const maskImpose = selectedMode === 'mask'
+                && !!((masks.find(m => m.id === maskId)) || {}).voice;
 
             // Persister le routage / modèle s'ils ont été modifiés pour ce fil
             if (providerSel.value !== providerVal) {
@@ -2079,7 +2104,7 @@ async function promptNewThreadModal() {
             if (coanimSel && coanimSel.value !== coanimVal0) {
                 await _saveRouting('coanimm', coanimSel.value === 'same' ? {} : { provider: coanimSel.value });
             }
-            if (ttsSel && ttsSel.value && ttsSel.value !== currentVoice) {
+            if (ttsSel && !maskImpose && ttsSel.value && ttsSel.value !== currentVoice) {
                 localStorage.setItem('nimm-voice', ttsSel.value);
                 _selectedVoice = ttsSel.value;
             }
@@ -2128,12 +2153,27 @@ async function promptThreadParamsModal() {
         await _populateModelSelect(providerSel.value, null, 'new-thread-model-select');
     };
     const currentVoice = localStorage.getItem('nimm-voice') || '';
+    // Fil existant ouvert avec un masque qui declare une voix : la voix du
+    // masque s'applique — le selecteur TTS devient inutile (et son choix ne
+    // doit pas etre persisté en voix globale).
+    const _thCur = threads.find(t => t.thread_id === currentThreadId);
+    const _maskImposeP = !!(_thCur && _thCur.mask_id && _thCur.personality_mode === 'mask'
+        && _maskVoice[_thCur.mask_id]);
+    const _applyParamsVoice = () => {
+        if (!ttsSel) return;
+        ttsSel.disabled = _maskImposeP;
+        if (_maskImposeP) {
+            ttsSel.value = '';
+            ttsSel.title = 'Voix imposee par le masque de ce fil (champ voice).';
+        }
+    };
     fetch('/api/tts/voices').then(r=>r.json()).then(voices => {
         if (!ttsSel) return;
         const list = voices.voices || voices;
         ttsSel.innerHTML = '<option value="">→ Voix par défaut</option>' +
             list.map(v => `<option value="${v.id}"${v.id===currentVoice?' selected':''}>${v.label}</option>`).join('');
-    }).catch(() => {});
+        _applyParamsVoice();
+    }).catch(() => _applyParamsVoice());
 
     // Adapter le titre et masquer les lignes mode/masque
     const modal     = document.getElementById('new-thread-modal');
@@ -2197,7 +2237,7 @@ async function promptThreadParamsModal() {
             if (visionSel   && visionSel.value !== visionVal0)    await _saveRouting('vision',   visionSel.value === 'same' ? {} : { provider: visionSel.value });
             if (imageSel    && imageSel.value !== imageVal0)      await _saveRouting('image',    imageSel.value === 'same' ? {} : { provider: imageSel.value });
             if (coanimSel   && coanimSel.value !== coanimVal0)    await _saveRouting('coanimm',  coanimSel.value === 'same' ? {} : { provider: coanimSel.value });
-            if (ttsSel      && ttsSel.value && ttsSel.value !== currentVoice) {
+            if (ttsSel      && !_maskImposeP && ttsSel.value && ttsSel.value !== currentVoice) {
                 localStorage.setItem('nimm-voice', ttsSel.value);
                 _selectedVoice = ttsSel.value;
             }
