@@ -236,6 +236,14 @@ nimm.log
 nimm.log.1
 nimm.err.log
 logs/
+# Les rotations de logs : *.log ne les attrape PAS (nimm.err.log.1 finit
+# par .1), et la liste nominative ci-dessus avait justement oublié cette
+# variante — elle est partie dans le dépôt public le 02/09/2026 avec un
+# chemin personnel dedans.
+*.log.*
+*.err.log*
+# Sas de suppression : ce qui attend d'être effacé à la main.
+_a_supprimer/
 
 # Fichier de config local (clés API en fallback)
 .env

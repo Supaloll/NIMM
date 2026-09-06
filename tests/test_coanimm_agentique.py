@@ -4814,7 +4814,11 @@ def test_pas_de_chemin_personnel_dans_le_code():
     nommant les chemins fautifs, sinon le journal ne sert plus à rien.
     """
     racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    exts = ('.py', '.js', '.bat', '.sh', '.json', '.vbs')
+    # Pas les .log : ils ne doivent pas ENTRER dans le dépôt (contrôle (2)
+    # plus bas), et ceux qui traînent dans le dossier qui tourne contiennent
+    # légitimement des chemins de la machine.
+    exts = ('.py', '.js', '.bat', '.sh', '.json', '.vbs',
+            '.txt', '.csv', '.ini', '.cfg', '.yml', '.yaml')
     ignores = {'__pycache__', '.git', '.claude', 'node_modules', 'cache',
                'logs', 'data', 'NIMM'}
     # Noms d'emprunt : un exemple de documentation n'est pas une fuite.
@@ -4856,7 +4860,47 @@ def test_pas_de_chemin_personnel_dans_le_code():
 
     assert not fautes, ('donnée personnelle dans un fichier versionné :' + chr(10)
                         + chr(10).join(fautes[:10]))
-    ok('dépôt public : aucun chemin personnel en dur dans le code et les scripts')
+
+    # (2) AUCUN FICHIER DE LOG NE DOIT ENTRER DANS LE DÉPÔT.
+    #
+    # C'est le contrôle qui aurait attrapé le vrai cas. Le 02/09/2026,
+    # `nimm.err.log.1` est parti dans le dépôt public avec
+    # « C:\\Users\\<nom>\\AppData\\... » dedans, et il y est resté quatre jours —
+    # y compris après le nettoyage du 05/09, qui n'a vu que le script de debug.
+    # Le premier volet ne pouvait pas le voir : un log n'est pas du code.
+    #
+    # La cause était une maille du filet : `.gitignore` excluait `*.log`,
+    # `nimm.log`, `nimm.log.1` et `nimm.err.log` — mais PAS `nimm.err.log.1`.
+    # Le motif `*.log` ne l'attrape pas puisque le nom finit par `.1`, et la
+    # liste nominative avait oublié cette variante-là. Une liste de noms ne
+    # protège que des cas qu'on a déjà rencontrés.
+    ignore = open(os.path.join(racine, '.gitignore'), encoding='utf-8',
+                  errors='ignore').read()
+    for motif in ('*.log.*', '*.err.log*'):
+        assert motif in ignore, (
+            'le .gitignore ne couvre pas les rotations de logs (%s manquant) : '
+            'nimm.err.log.1, nimm.log.2… repasseraient' % motif)
+
+    # Quand on est dans le clone git, on vérifie la RÉALITÉ du suivi et pas
+    # seulement la règle : un fichier déjà suivi reste suivi malgré .gitignore.
+    import subprocess
+    try:
+        suivis = subprocess.run(['git', 'ls-files'], cwd=racine, timeout=60,
+                                capture_output=True, text=True)
+        if suivis.returncode == 0:
+            # Un log encore dans l'index mais DÉJÀ retiré du disque est un
+            # retrait en cours, pas une entrée : ce contrôle garde la porte,
+            # il ne bloque pas celui qui est en train de faire le ménage.
+            logs = [f for f in suivis.stdout.split(chr(10))
+                    if re.search(r'\.log(\.\d+)?$', f)
+                    and os.path.exists(os.path.join(racine, f))]
+            assert not logs, (
+                'fichier(s) de log versionné(s) — un .gitignore ne délivre pas un '
+                'fichier déjà suivi, il faut git rm --cached : ' + ', '.join(logs))
+    except (OSError, subprocess.SubprocessError):
+        pass          # pas de git ici (dossier de travail) : la règle suffit
+
+    ok('dépôt public : aucun chemin personnel en dur, aucun fichier de log versionné')
 
 
 def test_banc_retenue_coherent():
