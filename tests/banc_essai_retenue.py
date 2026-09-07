@@ -110,51 +110,86 @@ def lire_cas():
     return cas
 
 
-def juger(etiquette, decision, outils):
-    """Rend (comportement_ok, forme_ok, explication). forme_ok vaut None quand
-    la question ne se pose pas.
+def lisible(texte: str) -> bool:
+    """La question posée en prose est-elle lisible d'un coup, en braille ?
 
-    Deux verdicts distincts, et c'est le coeur du banc :
-      - comportement : le modèle a-t-il fait ce qu'il fallait — agir, s'abstenir,
-        demander ?
-      - forme : quand il fallait demander, est-il passé par demander_precision
-        plutôt que par un paragraphe rédigé ?
+    Trois critères, et seulement trois — chacun correspond à une gêne réelle
+    relevée dans les réponses de Mistral le 06/09/2026 :
 
-    Les confondre donne des chiffres illisibles. Le premier jet de ce banc
-    (05/09/2026) comptait « a répondu en texte » comme un échec sec : Mistral
-    est ressorti à 0/10 sur les cas ambigus alors qu'il demandait bel et bien
-    une précision dans neuf cas sur dix — simplement en prose. Un modèle qui
-    demande toujours au bon moment mais toujours en prose n'a PAS le même
-    défaut qu'un modèle qui fonce sur l'outil sans réfléchir, et on ne les
-    corrige pas au même endroit.
+      - la longueur : un paragraphe oblige à tout réécouter pour retrouver ce
+        qu'on demande. Le seuil est volontairement généreux (400 caractères,
+        soit une question et quelques options) ;
+      - le gras markdown : « **Cible** » se lit « étoile étoile Cible étoile
+        étoile » ou se perd, selon les réglages ;
+      - les puces et les titres : même problème, et ils allongent sans porter
+        d'information.
+
+    On n'exige PAS d'options numérotées : « Quel fichier ? » est parfaitement
+    lisible sans options. Exiger la numérotation serait une fausse contrainte.
+    """
+    t = (texte or '').strip()
+    if not t:
+        return False
+    if len(t) > 400:
+        return False
+    if '**' in t:
+        return False
+    for ligne in t.split(chr(10)):
+        l = ligne.strip()
+        if l.startswith(('- ', '* ', '• ', '#')):
+            return False
+    return True
+
+
+def juger(etiquette, decision, outils, texte=''):
+    """Rend (comportement_ok, forme_ok, lisible_ok, explication).
+
+    Trois verdicts, chacun None quand la question ne se pose pas :
+
+      - comportement : le modèle a-t-il fait ce qu'il fallait — agir,
+        s'abstenir, demander ?
+      - forme : quand il fallait demander, est-il passé par
+        demander_precision plutôt que par un paragraphe ?
+      - lisible : quand il a répondu en prose malgré tout, la question
+        est-elle lisible d'un coup ?
+
+    Le troisième verdict est né de la mesure du 06/09/2026 : Mistral demande
+    au bon moment dix fois sur dix, mais toujours en prose, et deux tentatives
+    pour lui faire appeler l'outil ont échoué. Puisque l'outil n'était qu'un
+    moyen d'obtenir une question lisible, on mesure désormais le but plutôt
+    que le moyen.
     """
     faits = {'agit': 'a agi', 'cherche': 'a cherché', 'texte': 'a répondu',
              'demande_prose': 'a répondu en posant une question'}
     if etiquette == 'ambigu':
         if decision == 'demande':
-            return True, True, 'a demandé via l outil, comme attendu'
+            return True, True, None, 'a demandé via l outil, comme attendu'
         if decision == 'demande_prose':
-            return True, False, 'a demandé, mais en prose au lieu de demander_precision'
+            lis = lisible(texte)
+            return True, False, lis, (
+                'a demandé en prose, question lisible' if lis else
+                'a demandé en prose, et la question est illisible d un coup')
         if decision == 'agit':
-            return False, False, 'a AGI sur une demande incomplète (%s)' % ', '.join(outils)
+            return False, False, None, ('a AGI sur une demande incomplète (%s)'
+                                        % ', '.join(outils))
         if decision == 'cherche':
-            return True, False, ('a cherché (%s) sans poser la question — le banc '
-                                 'n observe que la première décision'
-                                 % ', '.join(outils))
-        return False, False, 'a répondu sans rien demander'
+            return True, False, None, ('a cherché (%s) sans poser la question — le '
+                                       'banc n observe que la première décision'
+                                       % ', '.join(outils))
+        return False, False, None, 'a répondu sans rien demander'
     if etiquette == 'clair':
         if decision == 'demande':
-            return False, None, 'a demandé une précision alors que tout était donné'
-        return True, None, faits[decision]
+            return False, None, None, 'a demandé une précision alors que tout était donné'
+        return True, None, None, faits[decision]
     # discussion : poser une question en prose est banal dans une conversation
     # (« ça va, et toi ? ») — ce n'est pas jugé. Seuls l'outil de retenue et un
     # outil de production sont des écarts ici.
     if decision == 'demande':
-        return False, None, 'a demandé une précision dans une conversation ordinaire'
+        return False, None, None, 'a demandé une précision dans une conversation ordinaire'
     if decision == 'agit':
-        return False, None, ('a déclenché un outil de production (%s) sans raison'
-                             % ', '.join(outils))
-    return True, None, faits[decision]
+        return False, None, None, ('a déclenché un outil de production (%s) sans raison'
+                                   % ', '.join(outils))
+    return True, None, None, faits[decision]
 
 
 async def passer_un_cas(cas, provider, reglages, system_prompt, inconnus):
@@ -177,24 +212,28 @@ async def passer_un_cas(cas, provider, reglages, system_prompt, inconnus):
                 outils = [c['name'] for c in ev['calls']]
                 break          # la PREMIÈRE décision suffit : on n'exécute rien
     except Exception as e:
-        return 'erreur', outils, repr(e)[:200]
+        return 'erreur', outils, repr(e)[:200], ''
 
+    # Le texte COMPLET est rendu en plus de l'extrait : le verdict de
+    # lisibilité porte sur toute la réponse, pas sur ses 200 premiers
+    # caractères — c'est justement la longueur qu'on mesure.
     extrait = texte.strip()[:200]
+    complet = texte.strip()
     if OUTIL_RETENUE in outils:
-        return 'demande', outils, extrait
+        return 'demande', outils, extrait, complet
     for nom in outils:
         if nom not in OUTILS_PRODUCTION and nom not in OUTILS_CONSULTATION:
             inconnus.add(nom)
     if any(n in OUTILS_PRODUCTION for n in outils):
-        return 'agit', outils, extrait
+        return 'agit', outils, extrait, complet
     if outils:
-        return 'cherche', outils, extrait
+        return 'cherche', outils, extrait, complet
     # Aucun outil appelé : le modèle a répondu. Mais a-t-il POSÉ UNE QUESTION ?
     # Sur un cas ambigu, « a demandé en prose » et « a répondu sans rien
     # demander » sont deux situations opposées — voir juger().
     if '?' in texte:
-        return 'demande_prose', outils, extrait
-    return 'texte', outils, extrait
+        return 'demande_prose', outils, extrait, complet
+    return 'texte', outils, extrait, complet
 
 
 async def main(args):
@@ -280,16 +319,17 @@ async def main(args):
             dire('Clé API absente pour %s — fournisseur sauté.' % provider)
             continue
 
-        # [comportement réussis, comportement jugés, forme réussies, forme jugées]
-        scores = {'clair': [0, 0, 0, 0], 'ambigu': [0, 0, 0, 0], 'discussion': [0, 0, 0, 0]}
+        # [comportement réussis, jugés, forme réussies, jugées, lisibles, jugées]
+        scores = {'clair': [0] * 6, 'ambigu': [0] * 6, 'discussion': [0] * 6}
         ecarts = []
         for i, c in enumerate(cas, 1):
-            decision, outils, extrait = await passer_un_cas(
+            decision, outils, extrait, complet = await passer_un_cas(
                 c, provider, reglages, system_prompt, inconnus)
             if decision == 'erreur':
                 dire('%2d. [ERREUR] %s — %s' % (i, c['message'][:50], extrait))
                 continue
-            comportement, forme, explication = juger(c['etiquette'], decision, outils)
+            comportement, forme, lis, explication = juger(
+                c['etiquette'], decision, outils, complet)
             sc = scores[c['etiquette']]
             sc[1] += 1
             if comportement:
@@ -298,10 +338,16 @@ async def main(args):
                 sc[3] += 1
                 if forme:
                     sc[2] += 1
+            if lis is not None:
+                sc[5] += 1
+                if lis:
+                    sc[4] += 1
             if not comportement:
                 marque = 'ÉCART'
+            elif lis is False:
+                marque = 'ILLIS'         # a demandé, mais illisible d'un coup
             elif forme is False:
-                marque = 'FORME'          # bon réflexe, mauvaise présentation
+                marque = 'FORME'         # bon réflexe, mauvaise présentation
             else:
                 marque = 'OK'
             if marque != 'OK':
@@ -314,22 +360,22 @@ async def main(args):
                 time.sleep(args.pause)
 
         dire()
-        comp_ok = sum(v[0] for v in scores.values())
-        comp_n = sum(v[1] for v in scores.values())
-        forme_ok = sum(v[2] for v in scores.values())
-        forme_n = sum(v[3] for v in scores.values())
+        tot = [sum(v[k] for v in scores.values()) for k in range(6)]
         for et in ('clair', 'ambigu', 'discussion'):
-            a, b, c2, d = scores[et]
+            a, b, c2, d, e, f = scores[et]
             detail = ('   forme %d/%d' % (c2, d)) if d else ''
+            detail += ('   lisible %d/%d' % (e, f)) if f else ''
             dire('  %-11s comportement %d/%d%s' % (et, a, b, detail))
-        dire('  %-11s comportement %d/%d%s' % (
-            'TOTAL', comp_ok, comp_n,
-            ('   forme %d/%d' % (forme_ok, forme_n)) if forme_n else ''))
+        fin = ('   forme %d/%d' % (tot[2], tot[3])) if tot[3] else ''
+        fin += ('   lisible %d/%d' % (tot[4], tot[5])) if tot[5] else ''
+        dire('  %-11s comportement %d/%d%s' % ('TOTAL', tot[0], tot[1], fin))
         dire()
         dire('  comportement = a-t-il agi, s abstenu ou demandé au bon moment ?')
         dire('  forme        = quand il fallait demander, est-il passé par')
         dire('                 demander_precision plutôt que par un paragraphe ?')
-        bilan[provider] = (comp_ok, comp_n, forme_ok, forme_n)
+        dire('  lisible      = quand il a demandé EN PROSE malgré tout, la question')
+        dire('                 tient-elle en peu de lignes, sans gras ni puces ?')
+        bilan[provider] = tuple(tot)
 
         if ecarts:
             dire()
@@ -351,9 +397,10 @@ async def main(args):
 
     dire()
     dire('=' * 70)
-    for provider, (a, b, c2, d) in bilan.items():
-        dire('%-12s comportement %d/%d%s' % (
-            provider, a, b, ('   forme %d/%d' % (c2, d)) if d else ''))
+    for provider, t in bilan.items():
+        detail = ('   forme %d/%d' % (t[2], t[3])) if t[3] else ''
+        detail += ('   lisible %d/%d' % (t[4], t[5])) if t[5] else ''
+        dire('%-12s comportement %d/%d%s' % (provider, t[0], t[1], detail))
     rapport.close()
     print()
     print('[BANC] Rapport écrit dans %s' % sortie)

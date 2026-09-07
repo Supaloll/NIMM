@@ -1006,6 +1006,7 @@ Route : `POST /api/export` — retourne le fichier en téléchargement direct.
 
 | Session | Changements clés |
 |---|---|
+| 07/09/2026 (clôture d'un chantier) | **Troisième tentative sur Mistral, troisième échec — et cette fois on arrête**. Puisque `demander_precision` n'était qu'un MOYEN d'obtenir une question lisible, essai de viser le but : une consigne de repli décrivant la forme attendue quand la question part en prose (trois lignes, options numérotées, pas de gras ni de puces ni de préambule — en citant les préambules réellement produits par Mistral). Formulée en rattrapage et non en permission (« cette consigne ne t'autorise PAS à choisir la prose »). **Mesuré : DeepSeek 9/10 → 7/10 sur l'appel d'outil** — décrire comment bien poser la question en texte lui offre une porte de sortie — et **rien de mesurable chez Mistral** : le gras markdown, seul indicateur comparable d'un jour sur l'autre, reste à 3 réponses sur 10. Un coût mesuré, aucun gain démontré : **annulé le jour même**, `core/hub.py` revenu au caractère près. **CE QUI EST GARDÉ** : le banc rend désormais un TROISIÈME verdict, la **lisibilité** de la question posée en prose — longueur sous 400 caractères, pas de gras (« **Cible** » se lit « étoile étoile Cible étoile étoile »), pas de puces ni de titres ; les options numérotées ne sont PAS exigées, « Quel fichier ? » étant lisible sans elles. Éprouvé sur les réponses réelles de Mistral et sur la forme visée, il les sépare. Il donne le régime actuel — **Mistral : 6 questions lisibles sur 10** — qui devient la référence de toute tentative future. **LEÇON, après trois campagnes :** deux fois sur trois, ajouter une consigne a dégradé le fournisseur qui marchait bien sans rien apporter à l'autre. Une consigne n'est pas neutre : elle concurrence les précédentes. Le prompt a atteint sa limite ici. Deux tests permanents verrouillent le non-retour des deux idées annulées, chiffres à l'appui. 102 scénarios. |
 | 06/09/2026 (mesure, et une intuition démentie) | **Le banc a tranché deux fois, dont une contre moi**. Campagne du 05/09 : le correctif de formulation (interdiction explicite de poser la question en prose, avec sa raison) fait passer **DeepSeek de 3/10 à 9/10** sur la forme — et laisse **Mistral à 0/10**, dix fois sur dix en paragraphe. Hypothèse pour la seconde tentative : ce n'est pas la formulation qui manque mais la PLACE, le lexique contractuel en tête du prompt étant ce que les modèles suivent le mieux. Entrée `RETENUE` ajoutée au lexique, dans le ton du contrat. **Résultat : l'inverse de l'attendu.** DeepSeek tombe de 9/10 à 5/10, Mistral passe de 0 à 1 (du bruit), et Mistral perd même un point de comportement. La cause se lisait dans les écarts — « a cherché (`list_files`) », « a cherché (`search_carnet`) » : le lexique remontait **deux** consignes, et la seconde (« ne demande pas ce que tu peux vérifier toi-même ») a pris le dessus sur la première. **Annulé le jour même**, `core/hub.py` revenu au caractère près à l'état committé, et un test permanent verrouille désormais le NON-retour de cette duplication, avec les chiffres dans son commentaire. **Deux leçons :** répéter une consigne à deux endroits ne la renforce pas, ça met ses clauses en concurrence ; et une intuition de prompt sans mesure ne vaut rien — celle-ci semblait excellente. État final acté : comportement 10/10 chez les deux (le défaut d'origine de la note de Laurent a disparu), forme 9/10 chez DeepSeek et 0/10 chez Mistral, qui n'appellera pas l'outil. Reste une décision : intercepter la demande en prose côté serveur, ou vivre avec. 102 scénarios. |
 | 06/09/2026 (chantier F) | **Le moteur de recherche par sens s'installe tout seul — dernier chantier de l'audit mémoire du 09/06**. Jusqu'ici, si `sentence-transformers` n'était pas installé, la recherche par sens ne fonctionnait pas : le chargement échouait, le repli par mots-clés prenait le relais **sans rien dire**, et personne n'apprenait qu'il manquait un paquet. Sur une machine neuve — celle d'Éric, celle de Nando — le défaut était invisible : NIMM répondait, un peu moins bien, voilà tout. [memory.py] `paquet_embeddings_present()` (via `find_spec`, qui regarde sans importer), `installer_embeddings_en_fond()` et `etat_installation_embeddings()` ; l'installation part dans un thread daemon et `_get_model()` rend `None` immédiatement quand le paquet manque — NIMM reste utilisable, en mode mots-clés. **TROIS PIÈGES ÉVITÉS, chacun capable de rendre le correctif pire que le mal.** (a) `sys.executable -m pip` et NON `pip` : cette machine a **deux versions de Python** installées et le pip du PATH n'est pas forcément celui qui fait tourner NIMM — installer dans le mauvais interpréteur donnerait un paquet bien présent, et que NIMM ne verrait jamais. (b) **Pas de pip en boucle** : un témoin `data/embeddings_install.json` horodaté met les essais en pause 24 h après un échec ; sans lui, une machine sans réseau relancerait l'installation à chaque démarrage, plusieurs minutes perdues à chaque fois pour le même résultat. (c) **Le témoin n'est PAS en base** : `get_setting`/`set_setting` sont propres à chaque profil alors qu'un paquet Python s'installe une fois pour la machine entière — et ce fil ne porte aucun contexte utilisateur, ce qui est exactement ce qui avait cassé le préchauffage le 06/08. [main.py] le préchauffage lance l'installation et rend la main sans attendre ; `/api/embeddings/status` distingue désormais `installing`, `install_failed` et `absent` — dire « erreur » à quelqu'un dont le paquet s'installe tout seul, c'est l'envoyer chercher une panne qui n'existe pas. [app.js] le frontend connaissait `ready`, `error`, `disabled` et rien d'autre : il serait resté sur « Téléchargement en cours… » en sondant **toutes les 2 s pendant dix minutes**. Sondage converti en `setTimeout` relancé, qui **ralentit à 10 s** pendant une installation, messages passés en `textContent` (plus propre à la synthèse vocale, et pas d'injection d'un texte de pip dans la page). [index.html] la zone d'état reçoit `role="status" aria-live="polite"` : sans elle, le message n'était lu qu'à la prise de focus sur la case à cocher. 1 test permanent ajouté — 102 scénarios. |
 | 06/09/2026 (historique réécrit) | **L'historique du dépôt public a été réécrit — et le contrôle d'empreinte a rattrapé une erreur qui aurait tout abîmé**. Accord de Laurent. `git filter-repo --replace-text` sur un clone neuf, six règles, `push --force` : le dépôt passe de `d9d9d74` à `9f89661`, les quatre chaînes visées disparaissent de tout l'historique, 339 commits conservés, **empreinte du contenu actuel identique à l'octet près**. **LE PIÈGE** : le premier fichier de règles portait des commentaires. `--replace-text` ne les reconnaît pas — chaque ligne non vide est une règle, et une ligne sans `==>` remplace par `***REMOVED***`. Les lignes réduites à un `#` ont donc remplacé **tous les `#` du dépôt** : 138 fichiers touchés (commentaires Python, titres Markdown, scripts shell ; seuls les `.bat` intacts, leurs commentaires n'utilisant pas ce caractère). Détecté AVANT publication par la comparaison `git rev-parse HEAD:` avant/après — le contenu actuel ne contenant aucune chaîne visée, son empreinte devait être strictement identique ; elle ne l'était pas. **Un fichier de règles ne contient que des règles.** Opération menée depuis la machine (le montage d'assistance refuse `rm`, ce dont filter-repo a besoin) via trois scripts jetables : préparation+vérifications, publication sous confirmation explicite, finalisation. Une leçon de forme au passage : rediriger la sortie d'un `git push` vers un fichier **cache les invites d'authentification** — le gestionnaire d'identifiants ouvre le navigateur sans contexte et son serveur local expire. Reste à faire : fermer la pull request (ses refs gardent les anciens commits), demander au support GitHub le ramassage des objets déréférencés, et Laurent doit re-cloner. |
@@ -1158,46 +1159,55 @@ Sauvegarde complète conservée dans `NIMM-sauvegarde.git`, à jour sur l'ancien
 
 ---
 
-### [DÉCISION] « Agir ou demander » : ce qui est acquis, ce qui ne le sera pas
+### [CLOS le 07/09/2026] « Agir ou demander » — état final
 
-**Deux campagnes passées, le 05 et le 06/09/2026. État final mesuré :**
+**Trois campagnes, les 05, 06 et 07/09/2026. État final :**
 
-| | comportement | forme |
-|---|---|---|
-| DeepSeek | 10/10 | 9/10 |
-| Mistral | 10/10 | 0/10 |
+| | comportement | forme (appel d'outil) | lisibilité en prose |
+|---|---|---|---|
+| DeepSeek | 10/10 | 9/10 | — |
+| Mistral | 10/10 | 0/10 | 6/10 |
 
 **Acquis, et c'était l'essentiel :** aucun des deux fournisseurs ne se jette
 plus sur une action à partir d'une demande floue. Le défaut d'origine de la
-note de Laurent a disparu, et sans effet de bord — 20/20 en conversation
-ordinaire, 19/20 sur les demandes claires lors de la campagne complète.
+note de Laurent a disparu, sans effet de bord — 20/20 en conversation
+ordinaire, 19/20 sur les demandes claires.
 
-**Ce qui ne le sera pas :** Mistral n'appellera pas `demander_precision`. Il
-demande — dix fois sur dix — mais en prose. Deux tentatives, deux échecs :
-1. *Renforcer la formulation* (05/09) : interdiction explicite de la question
-   en texte libre, avec sa raison. DeepSeek 3/10 → 9/10. Mistral 0/10 → 0/10.
-2. *Changer sa place* (06/09) : la même consigne dupliquée dans le lexique
-   contractuel, en tête. **Résultat inverse de l'attendu** — DeepSeek
-   9/10 → 5/10, Mistral 0 → 1 (du bruit). La cause était lisible dans les
-   écarts (« a cherché `list_files` », « a cherché `search_carnet` ») : le
-   lexique remontait DEUX consignes, et la seconde — « ne demande pas ce que
-   tu peux vérifier toi-même » — a pris le dessus sur la première. Annulé le
-   jour même, `core/hub.py` revenu au caractère près.
+**Acté :** Mistral n'appellera pas `demander_precision`. Il demande au bon
+moment, dix fois sur dix, mais en prose — et environ six fois sur dix cette
+prose est lisible d'un coup (courte, sans gras ni puces).
 
-**Leçon générale, au-delà de ce chantier :** répéter une consigne à deux
-endroits ne la renforce pas, ça met ses clauses en concurrence. Et une
-intuition de prompt sans mesure vaut zéro : celle-ci semblait excellente.
+**TROIS tentatives, TROIS échecs, et c'est la conclusion qui compte :**
+1. *Renforcer la formulation* (05/09) — interdiction explicite de la question
+   en texte libre, avec sa raison. DeepSeek 3/10 → 9/10. Mistral inchangé.
+   **Gardé** : c'est le seul des trois qui a apporté quelque chose.
+2. *Changer sa place* (06/09) — la consigne dupliquée dans le lexique, en
+   tête. DeepSeek 9/10 → 5/10, Mistral 0 → 1. Cause lisible dans les écarts :
+   le lexique remontait deux consignes, et « ne demande pas ce que tu peux
+   vérifier » a pris le dessus. **Annulé le jour même.**
+3. *Viser le but plutôt que le moyen* (07/09) — puisque l'outil ne servait
+   qu'à obtenir une question lisible, une consigne de repli décrivant la forme
+   attendue en prose. DeepSeek 9/10 → 7/10 : décrire comment bien poser la
+   question en texte lui offre une porte de sortie. Et rien de mesurable chez
+   Mistral — le gras markdown, seul indicateur comparable d'un jour sur
+   l'autre, est resté à 3 réponses sur 10. **Annulé le jour même.**
 
-**Décision qui reste à prendre** — intercepter la demande en prose côté
-serveur (repérer une réponse qui n'est qu'une question et la reformater en
-question courte + options), ou vivre avec la différence. La première option ne
-dépend plus du modèle mais ajoute de la machinerie et un risque de faux
-positifs ; la seconde coûte, à chaque demande de Mistral, un paragraphe en
-gras markdown là où trois lignes suffiraient.
+**La leçon générale :** le prompt a atteint sa limite sur ce point. Deux fois
+sur trois, ajouter une consigne a **dégradé** le fournisseur qui marchait bien
+sans rien apporter à l'autre. Une consigne supplémentaire n'est pas neutre :
+elle entre en concurrence avec les précédentes. Ne pas rouvrir ce chantier
+sans une idée d'une autre nature que « mieux écrire la règle ».
 
-**Ce que la mesure a déjà tranché :** le routeur d'intention proposé le 02/09
-n'est pas justifié. Le problème qu'il devait résoudre — agir ou discuter — est
-réglé par le prompt seul, sur les deux fournisseurs.
+**Ce que la mesure a tranché :** le routeur d'intention proposé le 02/09 n'est
+pas justifié — le problème qu'il devait résoudre est réglé par le prompt seul.
+Et l'interception de la prose côté serveur est **impossible sans casser le
+streaming** : le texte est déjà lu par la synthèse vocale au moment où l'on
+saurait qu'il fallait le reformater.
+
+**Ce qui reste utilisable :** `tests/banc_essai_retenue.py` rend trois verdicts
+(comportement, forme, lisibilité) et `tests/cas_retenue.txt` attend toujours
+les cas de Laurent. Le régime actuel est mesuré : c'est la référence de toute
+tentative future.
 ---
 
 ## Sorti du backlog — ce qui était déjà fait, et où le vérifier

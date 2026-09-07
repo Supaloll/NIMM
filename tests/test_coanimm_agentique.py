@@ -4691,6 +4691,19 @@ def test_regle_de_retenue_dans_le_prompt():
     assert 'indécidable sans lui' in bloc, \
         'la limite de ce qu’on a le droit de demander n’est pas posée'
 
+    # (2 quater) PAS DE CONSIGNE DE REPLI SUR LA FORME — essayée, mesurée,
+    #            annulée le 07/09/2026. L'idée : puisque Mistral demande
+    #            toujours en prose, lui dire au moins comment la présenter.
+    #            Résultat : DeepSeek est tombé de 9/10 à 7/10 sur l'appel
+    #            d'outil — décrire comment bien poser la question en texte lui
+    #            a offert une porte de sortie — et rien de mesurable n'a bougé
+    #            chez Mistral (le gras markdown, seul indicateur comparable
+    #            d'un jour sur l'autre, est resté à 3 réponses sur 10).
+    #            Un coût mesuré, aucun gain démontré.
+    assert 'REPLI DE FORME' not in bloc, (
+        'la consigne de repli est revenue — essayée le 07/09, annulée : '
+        'DeepSeek 9/10 → 7/10 sur la forme, sans gain chez Mistral')
+
     # (3) La contre-règle. Sans elle, on remplace un défaut par l'autre.
     assert "n'abuse pas" in bloc, 'aucun garde-fou contre l’excès de questions'
     assert 'search_*' in bloc, \
@@ -5011,32 +5024,46 @@ def test_banc_retenue_coherent():
     #     ambigus alors qu'il demandait dans neuf cas sur dix. Deux situations
     #     opposées, deux correctifs différents — la distinction ne doit pas se
     #     refermer par inadvertance.
-    for n in arbre_banc.body:
-        if isinstance(n, ast.FunctionDef) and n.name == 'juger':
-            espace = {}
-            exec(compile(ast.Module(body=[n], type_ignores=[]), 'banc', 'exec'), espace)
-            juger = espace['juger']
-            break
-    else:
-        raise AssertionError('juger() introuvable dans le banc d\'essai')
+    # Les DEUX fonctions dans le MÊME espace : juger() appelle lisible(),
+    # l'extraire seule donne un NameError à la première question en prose.
+    espace = {}
+    voulues = [n for n in arbre_banc.body
+               if isinstance(n, ast.FunctionDef) and n.name in ('lisible', 'juger')]
+    assert len(voulues) == 2, 'lisible() ou juger() introuvable dans le banc d\'essai'
+    exec(compile(ast.Module(body=voulues, type_ignores=[]), 'banc', 'exec'), espace)
+    juger, lisible = espace['juger'], espace['lisible']
 
+    COURT = 'Quel fichier ?' + chr(10) + '1. a' + chr(10) + '2. b'
+    LONG = 'Ta demande est large. **Cible** : ' + 'x' * 450
     attendus = [
-        # (étiquette, décision, outils) -> (comportement, forme)
-        (('ambigu', 'demande', ['demander_precision']), (True, True)),
-        (('ambigu', 'demande_prose', []), (True, False)),
-        (('ambigu', 'texte', []), (False, False)),
-        (('ambigu', 'agit', ['write_file']), (False, False)),
-        (('clair', 'demande', ['demander_precision']), (False, None)),
-        (('clair', 'agit', ['run_code']), (True, None)),
-        (('discussion', 'demande', ['demander_precision']), (False, None)),
-        (('discussion', 'demande_prose', []), (True, None)),
-        (('discussion', 'agit', ['write_file']), (False, None)),
+        # (étiquette, décision, outils, texte) -> (comportement, forme, lisible)
+        (('ambigu', 'demande', ['demander_precision'], ''), (True, True, None)),
+        (('ambigu', 'demande_prose', [], COURT), (True, False, True)),
+        (('ambigu', 'demande_prose', [], LONG), (True, False, False)),
+        (('ambigu', 'texte', [], ''), (False, False, None)),
+        (('ambigu', 'agit', ['write_file'], ''), (False, False, None)),
+        (('clair', 'demande', ['demander_precision'], ''), (False, None, None)),
+        (('clair', 'agit', ['run_code'], ''), (True, None, None)),
+        (('discussion', 'demande', ['demander_precision'], ''), (False, None, None)),
+        (('discussion', 'demande_prose', [], LONG), (True, None, None)),
+        (('discussion', 'agit', ['write_file'], ''), (False, None, None)),
     ]
-    for (et, dec, outils), (c_attendu, f_attendu) in attendus:
-        comportement, forme, _ = juger(et, dec, outils)
-        assert (comportement, forme) == (c_attendu, f_attendu), (
+    for (et, dec, outils, txt), attendu in attendus:
+        comportement, forme, lis, _ = juger(et, dec, outils, txt)
+        assert (comportement, forme, lis) == attendu, (
             'juger(%r, %r) rend %r au lieu de %r'
-            % (et, dec, (comportement, forme), (c_attendu, f_attendu)))
+            % (et, dec, (comportement, forme, lis), attendu))
+
+    # Le critère de lisibilité éprouvé sur une réponse RÉELLE de Mistral
+    # (06/09/2026) et sur la forme visée : il doit les séparer, sinon il ne
+    # mesure rien.
+    reelle = ('Ta demande est large. Voici ce que je peux proposer pour la préciser :'
+              + chr(10) + '1. **Cible** : Où sont tes photos ?' + chr(10)
+              + '   - Sur ton téléphone ?' + chr(10) + '   - Sur ton ordinateur ?')
+    visee = ("Le PNG doit-il servir à l'impression ou à la découpe ?" + chr(10)
+             + '1. Impression' + chr(10) + '2. Découpe')
+    assert lisible(reelle) is False, 'le critère laisse passer un paragraphe en gras'
+    assert lisible(visee) is True, 'le critère refuse la forme qu’on vise'
 
     # (4) Le banc ne doit jamais écrire dans la base : c'est ce qui le rend
     #     relançable sans salir le profil de personne.
