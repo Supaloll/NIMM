@@ -75,12 +75,69 @@ def _write_html(content: str, filepath: str, title: str = 'Document', lang: str 
 </html>"""
     Path(filepath).write_text(html, encoding='utf-8')
 
+def _ligne_tableau(ligne: str) -> bool:
+    return ligne.strip().startswith('|') and ligne.strip().endswith('|')
+
+
+def _separateur_tableau(ligne: str) -> bool:
+    """La deuxième ligne d'un tableau markdown : | --- | :--- | etc."""
+    l = ligne.strip()
+    return bool(l.startswith('|') and re.fullmatch(r'[|\s:\-]+', l))
+
+
+def _cellules(ligne: str) -> list:
+    return [c.strip() for c in ligne.strip().strip('|').split('|')]
+
+
+def _lire_tableau(lignes: list, i: int):
+    """Rend (en-têtes, corps, index_suivant) si un tableau commence en i.
+
+    Un tableau markdown correctement balisé donne, en HTML comme en DOCX, une
+    structure que les lecteurs d'écran savent annoncer : ligne d'en-tête,
+    numéro de colonne, intitulé de colonne à chaque cellule. C'est la bonne
+    forme pour des données qui ONT des colonnes — encore faut-il produire les
+    balises, ce que ni le HTML ni le DOCX ne faisaient ici.
+    """
+    if i + 1 >= len(lignes):
+        return None
+    if not (_ligne_tableau(lignes[i]) and _separateur_tableau(lignes[i + 1])):
+        return None
+    entetes = _cellules(lignes[i])
+    corps, j = [], i + 2
+    while j < len(lignes) and _ligne_tableau(lignes[j]):
+        corps.append(_cellules(lignes[j]))
+        j += 1
+    return entetes, corps, j
+
+
 def _md_to_html_body(text: str) -> str:
     """Conversion Markdown → HTML (headings, gras, listes, paragraphes)."""
     lines = text.splitlines()
     out = []
     in_ul = False
-    for line in lines:
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        tab = _lire_tableau(lines, i)
+        if tab:
+            entetes, corps, i = tab
+            if in_ul:
+                out.append('</ul>'); in_ul = False
+            out.append('<table>')
+            out.append('<thead><tr>' + ''.join(
+                '<th scope="col">%s</th>' % _inline_md(_esc(c)) for c in entetes)
+                + '</tr></thead>')
+            out.append('<tbody>')
+            for ligne_cells in corps:
+                # Première cellule en en-tête de ligne : le lecteur d'écran
+                # annonce alors « intitulé de la ligne » en se déplaçant.
+                cells = ['<th scope="row">%s</th>' % _inline_md(_esc(ligne_cells[0]))] \
+                    if ligne_cells else []
+                cells += ['<td>%s</td>' % _inline_md(_esc(c)) for c in ligne_cells[1:]]
+                out.append('<tr>' + ''.join(cells) + '</tr>')
+            out.append('</tbody></table>')
+            continue
+        i += 1
         if re.match(r'^### (.+)', line):
             if in_ul: out.append('</ul>'); in_ul = False
             out.append(f'<h3>{_esc(re.match(r"^### (.+)", line).group(1))}</h3>')
@@ -121,7 +178,37 @@ def _write_docx(content: str, filepath: str, title: str = 'Document', lang: str 
     doc.core_properties.language = lang
     # Titre principal
     doc.add_heading(title, level=0)
-    for line in content.splitlines():
+    lignes_src = content.splitlines()
+    i = 0
+    while i < len(lignes_src):
+        line = lignes_src[i]
+        tab = _lire_tableau(lignes_src, i)
+        if tab:
+            entetes, corps, i = tab
+            t = doc.add_table(rows=1, cols=len(entetes))
+            t.style = 'Table Grid'
+            for k, txt in enumerate(entetes):
+                t.rows[0].cells[k].text = txt
+            # Marquer la première ligne comme ligne d'EN-TÊTE : c'est ce qui la
+            # fait répéter d'une page à l'autre, et surtout ce qui permet au
+            # lecteur d'écran d'annoncer l'intitulé de colonne à chaque cellule.
+            # Sans ce marquage, un tableau Word n'est qu'une grille muette.
+            try:
+                from docx.oxml.ns import qn as _qn
+                from docx.oxml import OxmlElement as _Ox
+                trPr = t.rows[0]._tr.get_or_add_trPr()
+                th = _Ox('w:tblHeader')
+                th.set(_qn('w:val'), 'true')
+                trPr.append(th)
+            except Exception as _et:
+                print('[FILE_WRITER] En-tete de tableau non marque : %s' % _et)
+            for ligne_cells in corps:
+                cells = t.add_row().cells
+                for k, txt in enumerate(ligne_cells[:len(entetes)]):
+                    cells[k].text = txt
+            doc.add_paragraph('')
+            continue
+        i += 1
         if re.match(r'^### (.+)', line):
             doc.add_heading(re.match(r'^### (.+)', line).group(1), level=3)
         elif re.match(r'^## (.+)', line):

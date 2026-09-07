@@ -4789,7 +4789,9 @@ def test_demander_precision_est_terminal():
 
     # (1) L'outil est déclaré, et réellement ajouté à ce qu'on envoie au modèle.
     assert 'DEMANDER_PRECISION_TOOL' in hub
-    assert '[DEMANDER_PRECISION_TOOL]' in hub, \
+    assemblage = hub[hub.index('NIMM_TOOLS = (NIMM_TOOLS +'):]
+    assemblage = assemblage[:assemblage.index(')')]
+    assert 'DEMANDER_PRECISION_TOOL' in assemblage, \
         'l’outil est défini mais jamais ajouté à NIMM_TOOLS'
     declare = hub[hub.index('DEMANDER_PRECISION_TOOL = {'):]
     declare = declare[:declare.index(chr(10) + '}')]
@@ -4991,16 +4993,19 @@ def test_banc_retenue_coherent():
     for n in ast.walk(ast.parse(hub)):
         if not isinstance(n, ast.Assign):
             continue
-        cible = getattr(n.targets[0], 'id', '')
-        if cible not in ('NIMM_TOOLS', 'DEMANDER_PRECISION_TOOL'):
-            continue
         try:
             val = ast.literal_eval(n.value)
         except Exception:
             continue
+        # On ne se fie plus au NOM de la variable : tout dict littéral qui a la
+        # forme d'un outil en est un. Le relevé nommément désigné rendait ce
+        # contrôle aveugle au premier outil déclaré dans sa propre variable —
+        # ce qui est arrivé le 07/09 avec RELEVE_DECISIONS_TOOL.
         for t in (val if isinstance(val, list) else [val]):
-            f = (t or {}).get('function') or {}
-            if f.get('name'):
+            if not isinstance(t, dict):
+                continue
+            f = t.get('function') or {}
+            if isinstance(f, dict) and f.get('name') and f.get('parameters'):
                 declares.add(f['name'])
     declares |= set(O.OPS_NAMES) | set(O.ASYNC_OPS_NAMES)
     assert len(declares) >= 25, 'relevé trop maigre (%d outils)' % len(declares)
@@ -5209,6 +5214,106 @@ def test_embeddings_installation_silencieuse():
     ok('embeddings : installation silencieuse, bon interpréteur, aucun pip en boucle, état annoncé')
 
 
+def test_releve_decisions_ne_devine_rien():
+    """Une décision attribuée au mauvais responsable est pire que pas de décision.
+
+    Elle sera relayée, versée au dossier, et personne n'ira vérifier. C'est le
+    risque propre à cette fonction : relever des décisions, c'est interpréter —
+    et sur des notes prises à la volée, c'est reconstituer.
+
+    Trois garde-fous sont verrouillés ici, plus un choix de présentation qui
+    passerait pour une maladresse si on ne l'écrivait pas.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(racine, 'modules', 'decisions.py'), encoding='utf-8').read()
+
+    # (3) LA TRONCATURE EST ANNONCÉE. Dépouiller le début d'un long compte
+    #     rendu sans le dire donnerait un relevé incomplet qu'on croirait
+    #     complet — le pire des deux mondes.
+    assert 'Le relevé est donc incomplet' in src
+
+    # (4) LE TABLEAU DOIT ÊTRE BALISÉ. J'avais d'abord écarté le tableau en
+    #     invoquant la lecture en braille — Fernando a corrigé : un tableau
+    #     correctement balisé (ligne d'en-tête marquée, en-têtes de colonne et
+    #     de ligne) se navigue très bien, et c'est la bonne structure pour des
+    #     données qui ONT des colonnes. Ce qui se lit mal, c'est un tableau
+    #     SANS balises — une grille muette. Ce test vérifie donc le balisage,
+    #     et non l'absence de tableau.
+    fw = open(os.path.join(racine, 'modules', 'file_writer.py'), encoding='utf-8').read()
+    assert 'scope="col"' in fw and 'scope="row"' in fw, \
+        'le HTML produit des cellules sans en-tête : grille muette au lecteur d’écran'
+    assert 'w:tblHeader' in fw, \
+        'la ligne d’en-tête du tableau DOCX n’est pas marquée — sans elle, Word ' \
+        'n’annonce pas les intitulés de colonne et ne répète pas l’en-tête'
+
+    # (5) Le comportement, éprouvé pour de vrai sur ce qu'un modèle rend
+    #     réellement : du JSON encadré de bavardage et de balises.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        '_dec_test', os.path.join(racine, 'modules', 'decisions.py'))
+    D = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(D)
+
+    # (1) LE PROMPT INTERDIT LA DÉDUCTION, et le dit avec un exemple. Une
+    #     consigne abstraite (« ne devine pas ») ne suffit pas : c'est le genre
+    #     de règle qu'un modèle contourne de bonne foi. On lit le prompt TEL
+    #     QUE LE MODÈLE LE REÇOIT — chercher la phrase dans le fichier échoue,
+    #     les littéraux concaténés la coupent en deux.
+    prompt = D.PROMPT_RELEVE
+    assert "N'ATTRIBUE JAMAIS par déduction" in prompt
+    assert 'même si le contexte te semble évident' in prompt, \
+        'la consigne n’anticipe pas le cas où la déduction paraît légitime'
+    assert 'non précisé' in prompt and 'non précisée' in prompt
+
+    # (2) CHAQUE RELEVÉ PORTE SA CITATION : c'est ce qui rend le document
+    #     vérifiable sans rouvrir la source.
+    assert 'copié mot pour mot et jamais reformulé' in prompt
+
+    brut = ('Voici le relevé :' + chr(10) + '```json' + chr(10) + '['
+            '{"type":"action","intitule":"Relancer la commission","responsable":"",'
+            '"echeance":"","citation":"Il faudra relancer la commission."},'
+            '{"type":"","intitule":"Le budget viendra en novembre"},'
+            '{"type":"action","intitule":""}'
+            ']' + chr(10) + '```' + chr(10) + 'Voilà.')
+    r = D.parser_releve(brut)
+    assert len(r) == 2, 'une entrée sans intitulé doit être rejetée (%d retenues)' % len(r)
+    assert r[0]['responsable'] == 'non précisé', (
+        'un responsable absent a été rempli au lieu de rester « non précisé » : %r'
+        % r[0]['responsable'])
+    assert r[0]['echeance'] == 'non précisée'
+    assert r[1]['type'] == 'information', 'un type inconnu doit retomber sur information'
+
+    # Un relevé raté ne doit jamais casser la conversation.
+    for mauvais in ('', 'pas de json', '{"pas": "un tableau"}', '[oups', None):
+        assert D.parser_releve(mauvais) == [], 'entrée %r mal absorbée' % mauvais
+
+    # (6) Le document dit lui-même ce que « non précisé » signifie, sinon le
+    #     lecteur croira à un oubli de rédaction.
+    md = D.rendre_markdown('Commission du 5', r, source='compte rendu reçu')
+    assert "rien n'a été deviné" in md
+    assert '| Intitulé | Nature | Responsable | Échéance |' in md, \
+        'le récapitulatif n’est pas un tableau'
+    assert md.count(chr(10) + '|') >= 4, 'le tableau n’a pas de lignes de données'
+    assert '## Extraits justificatifs' in md and '« ' in md, \
+        'le document ne montre pas les extraits justificatifs'
+
+    # Le tableau produit doit traverser file_writer en gardant ses en-têtes.
+    import importlib.util as _iu
+    spec_fw = _iu.spec_from_file_location(
+        '_fw_test', os.path.join(racine, 'modules', 'file_writer.py'))
+    FW = _iu.module_from_spec(spec_fw)
+    spec_fw.loader.exec_module(FW)
+    html = FW._md_to_html_body(md)
+    assert '<thead>' in html and html.count('<th scope="col">') == 4, \
+        'les en-têtes de colonne se perdent à la conversion HTML'
+    assert '<th scope="row">' in html, 'aucun en-tête de ligne'
+
+    # (7) La note de carnet reste courte : une note longue ne sera pas relue.
+    note = D.rendre_note_carnet('Commission du 5', r)
+    assert len(note) < 400 and 'Relevé de décisions' in note
+    ok('relevé de décisions : rien n’est deviné, chaque ligne porte sa citation')
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -5273,6 +5378,7 @@ if __name__ == '__main__':
                test_demander_precision_est_terminal,
                test_pas_de_chemin_personnel_dans_le_code,
                test_banc_retenue_coherent,
-               test_embeddings_installation_silencieuse]:
+               test_embeddings_installation_silencieuse,
+               test_releve_decisions_ne_devine_rien]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

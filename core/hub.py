@@ -1195,6 +1195,12 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               Retourne un texte alternatif accessible (WCAG).\n'
         '                               Appeler quand l\'utilisateur donne une URL d\'image\n'
         '                               ou demande de décrire/vérifier l\'accessibilité d\'une image.\n'
+        '• relever_decisions(titre, texte) → dépouiller un compte rendu de réunion :\n'
+        '                               décisions, actions (qui fait quoi, pour quand), points\n'
+        '                               d\'information. Produit un document et une note de carnet.\n'
+        '                               Appeler dès que l\'utilisateur demande un relevé de décisions,\n'
+        '                               « qui fait quoi » après une réunion, ou le dépouillement d\'un CR.\n'
+        '                               Laisser texte vide si le compte rendu est attaché au fil.\n'
         '• demander_precision(question, options) → poser UNE question de clarification\n'
         '                               et s\'arrêter là, au lieu d\'agir sur une demande floue.\n'
         '                               Voir la règle de retenue ci-dessous.\n'
@@ -2282,7 +2288,44 @@ DEMANDER_PRECISION_TOOL = {
     }
 }
 
-NIMM_TOOLS = (NIMM_TOOLS + [DEMANDER_PRECISION_TOOL]
+# ── Relevé de décisions — voir modules/decisions.py ──
+RELEVE_DECISIONS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "relever_decisions",
+        "description": (
+            "Dépouille un compte rendu de réunion, ou des notes prises en séance, "
+            "et en tire la liste des décisions, des actions (qui fait quoi, pour "
+            "quand) et des points d'information. Produit un document à diffuser et "
+            "laisse une note dans le carnet de la conversation. Chaque relevé est "
+            "accompagné de l'extrait dont il provient ; ce qui n'est pas dit dans le "
+            "texte est marqué « non précisé » plutôt que deviné. À appeler quand "
+            "l'utilisateur demande un relevé de décisions, un compte rendu d'actions, "
+            "« qui fait quoi » après une réunion, ou le dépouillement d'un CR."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "titre": {
+                    "type": "string",
+                    "description": ("Nom de la réunion ou de la séance, tel qu'il "
+                                    "apparaîtra en tête du document. Ex : « Commission "
+                                    "accessibilité du 5 septembre ».")
+                },
+                "texte": {
+                    "type": "string",
+                    "description": ("Le compte rendu, UNIQUEMENT s'il n'est pas déjà "
+                                    "attaché à la conversation. Laisse ce paramètre "
+                                    "vide quand un document est attaché au fil : il "
+                                    "sera pris automatiquement, sans le recopier.")
+                }
+            },
+            "required": ["titre"]
+        }
+    }
+}
+
+NIMM_TOOLS = (NIMM_TOOLS + [DEMANDER_PRECISION_TOOL, RELEVE_DECISIONS_TOOL]
               + _COANIMM_OPS_TOOLS + _COANIMM_ASYNC_TOOLS)
 
 
@@ -2901,6 +2944,72 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         return ("[Question à poser telle quelle à l'utilisateur, puis arrête-toi et "
                 "attends sa réponse sans utiliser d'autre outil]" + chr(10)
                 + _formater_demande_precision(args))
+
+    if name == 'relever_decisions':
+        titre = (args.get('titre') or 'réunion').strip()
+        texte = (args.get('texte') or '').strip()
+        source = 'texte fourni dans la conversation'
+        try:
+            if not texte:
+                # Le document attaché au fil est la source normale : le modèle
+                # n'a pas à recopier un compte rendu entier dans un paramètre.
+                from core.database import get_thread_document
+                _doc = get_thread_document(thread_id) or {}
+                texte = (_doc.get('texte') or '').strip()
+                source = 'document de la conversation : %s' % (_doc.get('titre')
+                                                               or 'sans titre')
+            if not texte:
+                return ("[Aucun texte à dépouiller. Attache le compte rendu à la "
+                        "conversation, ou passe-le dans le paramètre texte.]")
+
+            from modules.decisions import (relever, rendre_markdown,
+                                           rendre_note_carnet)
+            _reglages = load_settings(thread_id)
+            releves, avert = await relever(texte, _reglages)
+            md = rendre_markdown(titre, releves, source, avert)
+
+            # Document à diffuser : même mécanique que write_file, donc un docx
+            # à vrais titres (file_writer lit le markdown) et un lien de
+            # téléchargement servi par la route existante.
+            from modules.coanimm import _workspace_dir
+            from modules.file_writer import write_file as _wf, SUPPORTED_FORMATS
+            import os as _os_rd, re as _re_rd
+            workdir = _workspace_dir(thread_id)
+            _os_rd.makedirs(workdir, exist_ok=True)
+            safe = _re_rd.sub(r'[^\w\-]', '_', 'releve_' + titre)[:60]
+            chemin = _os_rd.path.join(workdir, safe + SUPPORTED_FORMATS.get('docx', '.docx'))
+            vrai = _wf(md, 'docx', chemin, 'Relevé de décisions — ' + titre, 'fr', '')
+            base = _os_rd.path.basename(vrai)
+            url = '/api/coanimm/files/%s?thread_id=%s' % (base, thread_id)
+
+            # Note de carnet : elle ressortira quand l'utilisateur reviendra sur
+            # le sujet, sans qu'il ait à retrouver le fichier.
+            note = rendre_note_carnet(titre, releves)
+            try:
+                add_carnet_note(thread_id, count_carnet_notes(thread_id) + 1, note, 0)
+            except Exception as _ec:
+                print('[HUB] Note de carnet non écrite : %s' % _ec)
+
+            n_d = sum(1 for r in releves if r['type'] == 'decision')
+            n_a = sum(1 for r in releves if r['type'] == 'action')
+            n_i = sum(1 for r in releves if r['type'] == 'information')
+            lignes = ['Relevé établi : %d décision(s), %d action(s), %d point(s) '
+                      'd\'information.' % (n_d, n_a, n_i)]
+            if avert:
+                lignes.append('Avertissement : ' + avert)
+            for r in releves:
+                if r['type'] != 'action':
+                    continue
+                lignes.append('- %s — %s%s' % (
+                    r['intitule'], r['responsable'],
+                    '' if r['echeance'].startswith('non précis') else ', %s' % r['echeance']))
+            lignes.append('Document : [%s](%s)' % (base, url))
+            lignes.append('Une note a été ajoutée au carnet de cette conversation.')
+            print('[HUB] 📋 relever_decisions(%r) → %d relevé(s)' % (titre, len(releves)))
+            return chr(10).join(lignes)
+        except Exception as e:
+            print('[HUB] ⚠️ Erreur relever_decisions : %s' % e)
+            return '[Erreur pendant le relevé de décisions : %s]' % e
 
     if name == 'search_memory':
         try:

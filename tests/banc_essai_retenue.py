@@ -73,7 +73,7 @@ DOSSIER_RES = os.path.join(RACINE, 'tests', 'results')
 # un outil inconnu est signalé plutôt que rangé en silence dans un camp — un
 # banc d'essai qui se trompe de camp sans le dire est pire que pas de banc.
 OUTILS_PRODUCTION = {
-    'run_code', 'write_file',
+    'run_code', 'write_file', 'relever_decisions',
     'rename_file', 'move_file', 'delete_file', 'make_folder',
     'expurgate_document', 'run_ricochet',
 }
