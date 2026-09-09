@@ -3789,17 +3789,13 @@ async function _getLocation() {
             async (pos) => {
                 try {
                     const { latitude: lat, longitude: lon } = pos.coords;
-                    const r = await fetch(
-                        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=fr`,
-                        { headers: { 'User-Agent': 'NIMM-Assistant/1.0' } }
-                    );
+                    // La conversion GPS -> ville passe par le SERVEUR NIMM :
+                    // Nominatim n'autorise plus les appels directs depuis un
+                    // navigateur (plus d'en-tete CORS), mais accepte les
+                    // serveurs identifies. La route fait le reverse geocoding.
+                    const r = await fetch(`/api/geoloc/reverse?lat=${lat}&lon=${lon}`);
                     const d = await r.json();
-                    const a = d.address || {};
-                    const commune = a.village || a.town || a.city || a.municipality || '';
-                    const dept    = a.county || a.state_district || '';
-                    const region  = a.state || '';
-                    const loc = [commune, dept, region].filter(Boolean).join(', ');
-                    resolve(loc || null);
+                    resolve(d && d.location ? d.location : null);
                 } catch { resolve(null); }
             },
             () => resolve(null),

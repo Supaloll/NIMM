@@ -7368,6 +7368,49 @@ async def coanimm_datagouv(req: CoanimmDatagouvReq):
         return {"result": f"[Erreur data.gouv : {e}]"}
 
 
+# ── Géolocalisation mobile : reverse geocoding côté serveur ─────────────────
+# Le téléphone (PWA) envoie ses coordonnées GPS brutes ; NIMM les convertit en
+# ville via Nominatim (OSM). Avant, le navigateur appelait Nominatim en direct,
+# mais le service n'envoie plus d'en-tête CORS : le navigateur jetait la
+# réponse et NIMM ne recevait jamais de localisation. Côté serveur, l'appel
+# part avec un User-Agent identifiable (NIMM/1.0), ce que la politique d'usage
+# de Nominatim exige.
+_GEO_REVERSE_CACHE = {}
+
+
+@app.get("/api/geoloc/reverse")
+async def geoloc_reverse(lat: float = 0.0, lon: float = 0.0):
+    """Reverse geocoding : coordonnées GPS → ville. Renvoie {"location": str|null}.
+
+    Cache court (120 s) en mémoire : le téléphone peut envoyer plusieurs
+    messages rapprochés, inutile de marteler Nominatim.
+    """
+    import time as _tgeo
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return {"location": None}
+    key = (round(lat, 4), round(lon, 4))
+    now = _tgeo.time()
+    hit = _GEO_REVERSE_CACHE.get(key)
+    if hit and now - hit[0] < 120:
+        return {"location": hit[1]}
+    try:
+        async with _httpx.AsyncClient(timeout=10.0,
+                                      headers={"User-Agent": "NIMM/1.0"}) as _client:
+            _r = await _client.get("https://nominatim.openstreetmap.org/reverse",
+                                   params={"lat": lat, "lon": lon, "format": "json",
+                                           "accept-language": "fr"})
+            _data = _r.json()
+        _a = _data.get("address") or {}
+        commune = _a.get("village") or _a.get("town") or _a.get("city") or _a.get("municipality") or ''
+        dept    = _a.get("county") or _a.get("state_district") or ''
+        region  = _a.get("state") or ''
+        loc = ", ".join(x for x in (commune, dept, region) if x) or None
+        _GEO_REVERSE_CACHE[key] = (now, loc)
+        return {"location": loc}
+    except Exception:
+        return {"location": None}
+
+
 class CoanimmMeteoReq(BaseModel):
     location: str = ""
     days: int = 3
