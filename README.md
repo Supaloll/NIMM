@@ -130,6 +130,7 @@ Pour 40 dollars. Et je suis plus satisfait que de tous les abonnements que j'ai 
 | OpenAI | [platform.openai.com](https://platform.openai.com) | Alternative solide |
 | Google Gemini | [aistudio.google.com](https://aistudio.google.com) | Vision intégrée |
 | OpenRouter | [openrouter.ai](https://openrouter.ai) | Accès à des dizaines de modèles |
+| Venice AI | [venice.ai](https://venice.ai) | Modèles hébergés sans filtre — jeu de rôle, humour noir, contenus adultes consentis (crédits prépayés) |
 | Ollama | [ollama.com](https://ollama.com) | Gratuit, 100% local, nécessite un PC puissant |
 
 ---

@@ -15,7 +15,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500;600&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260904-studio-modale">
+<link rel="stylesheet" href="/static/styles.css?v=20260907-ariston">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -284,6 +284,7 @@
                             <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
                             <option value="groq" data-needs-key="groq">⚡ Groq</option>
                             <option value="cerebras" data-needs-key="cerebras">⚡ Cerebras</option>
+                            <option value="venice" data-needs-key="venice">🕶️ Venice — sans filtre</option>
                             <option value="mistral"   data-needs-key="mistral">🔵 Mistral</option>
                             <option value="ollama">🟢 Ollama (local)</option>
                         </select>
@@ -1770,6 +1771,7 @@ Analyse les sentiments de : ..."
             <option value="openrouter" data-needs-key="openrouter">🟠 OpenRouter</option>
             <option value="groq" data-needs-key="groq">⚡ Groq</option>
             <option value="cerebras" data-needs-key="cerebras">⚡ Cerebras</option>
+            <option value="venice" data-needs-key="venice">🕶️ Venice — sans filtre</option>
             <option value="mistral"   data-needs-key="mistral">🔵 Mistral</option>
             <option value="ollama">🟢 Ollama (local)</option>
         </select>
@@ -1889,6 +1891,60 @@ Analyse les sentiments de : ..."
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
             <button id="new-thread-cancel" class="btn-secondary">Annuler</button>
             <button id="new-thread-ok"     class="btn-primary">Créer</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── ARISTON : tirage verrouillé au premier fil (masque perso, Laurent uniquement) ──
+     Ouvert automatiquement à la création d'un fil avec ce masque. Le tirage
+     (aléatoire ou manuel) est définitif pour la durée de vie du fil — voir
+     POST /api/threads/{id}/ariston/tirage côté serveur. -->
+<div id="ariston-tirage-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="ariston-tirage-title" style="max-width:380px;">
+        <h3 id="ariston-tirage-title" style="margin:0 0 6px;">🏛️ Tirage Ariston</h3>
+        <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 16px;">
+            Choisis les 5 axes à la main, ou laisse le hasard décider. Une fois
+            verrouillé, le tirage ne change plus pour ce fil.
+        </p>
+
+        <label for="ariston-courant-1" style="font-size:0.85rem;color:var(--text-muted);">Courant 1</label>
+        <select id="ariston-courant-1" class="ariston-select" style="width:100%;margin:4px 0 10px;"></select>
+
+        <label for="ariston-courant-2" style="font-size:0.85rem;color:var(--text-muted);">Courant 2</label>
+        <select id="ariston-courant-2" class="ariston-select" style="width:100%;margin:4px 0 10px;"></select>
+
+        <label for="ariston-humeur" style="font-size:0.85rem;color:var(--text-muted);">Humeur du fil</label>
+        <select id="ariston-humeur" class="ariston-select" style="width:100%;margin:4px 0 10px;"></select>
+
+        <label for="ariston-vocabulaire" style="font-size:0.85rem;color:var(--text-muted);">Registre de langue</label>
+        <select id="ariston-vocabulaire" class="ariston-select" style="width:100%;margin:4px 0 10px;"></select>
+
+        <label for="ariston-posture" style="font-size:0.85rem;color:var(--text-muted);">Forme rhétorique</label>
+        <select id="ariston-posture" class="ariston-select" style="width:100%;margin:4px 0 10px;"></select>
+
+        <label for="ariston-temperature" style="font-size:0.85rem;color:var(--text-muted);">Température</label>
+        <select id="ariston-temperature" class="ariston-select" style="width:100%;margin:4px 0 14px;"></select>
+
+        <p id="ariston-tirage-erreur" class="hidden" role="alert" style="font-size:0.82rem;color:var(--danger,#e05555);margin:0 0 10px;"></p>
+        <p id="ariston-tirage-statut" class="hidden" role="status" style="font-size:0.82rem;color:var(--accent);margin:0 0 10px;">🔒 Tirage verrouillé pour ce fil.</p>
+
+        <div style="display:flex;gap:8px;justify-content:space-between;margin-top:4px;">
+            <button id="ariston-tirage-random" class="btn-secondary">🎲 Tout tirer au hasard</button>
+            <div style="display:flex;gap:8px;">
+                <button id="ariston-tirage-valider" class="btn-primary">Valider ce choix</button>
+                <button id="ariston-tirage-fermer" class="btn-primary hidden">Fermer</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── ARISTON : relecture du tirage verrouillé (badge 🏛️ de la topbar) ── -->
+<div id="ariston-relecture-modal" class="modal-overlay hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="ariston-relecture-title" style="max-width:340px;">
+        <h3 id="ariston-relecture-title" style="margin:0 0 14px;">🏛️ Tirage de ce fil</h3>
+        <dl id="ariston-relecture-contenu" style="margin:0 0 16px;font-size:0.9rem;line-height:1.7;"></dl>
+        <div style="display:flex;justify-content:flex-end;">
+            <button id="ariston-relecture-fermer" class="btn-primary">Fermer</button>
         </div>
     </div>
 </div>
@@ -2467,7 +2523,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260906-voix-masque"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260907-ariston"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

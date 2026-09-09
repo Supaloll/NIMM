@@ -7,6 +7,7 @@
 import json
 import asyncio
 import os
+import random
 import re
 import time
 import uuid
@@ -22,6 +23,7 @@ from core.database import (
     get_thread, set_thread_mask,
     add_carnet_note, get_carnet_notes, count_carnet_notes, get_carnet_notes_actives,
     update_last_message_usage,
+    get_ariston_config, set_ariston_config,
 )
 from core.engine import call_llm
 from modules.memory import extract_all_tags
@@ -278,14 +280,48 @@ def load_settings(thread_id: str = None) -> dict:
                     print(f"[HUB] 🎭 Masque '{global_mask_id}' verrouillé — fil {thread_id[:8]}…")
 
     local_mode = get_setting('local_mode', 'false').lower() == 'true'
+
+    _provider           = 'ollama' if local_mode else routing['chat']
+    _model              = (get_setting('ollama_model', 'llama3.1:8b') or 'llama3.1:8b') \
+                          if local_mode else (get_setting('chat_model', None) or None)
+    _temperature        = float(get_setting('temperature', '0.7'))
+    _frequency_penalty  = None
+    _ariston_config     = {}
+
+    # Verrous imposés par un masque (ex. Ariston : provider Gemini forcé, plus
+    # température/frequency_penalty pilotés par le tirage verrouillé sur le fil,
+    # pas par le réglage global du profil).
+    if not local_mode and personality_mode == 'mask' and effective_mask_id:
+        _mask = load_mask(effective_mask_id)
+        if _mask.get('provider_lock'):
+            _provider = _mask['provider_lock']
+            _model    = None  # le modèle du réglage global n'est pas garanti compatible
+        if _mask.get('frequency_penalty') is not None:
+            _frequency_penalty = _mask['frequency_penalty']
+        if _mask.get('temperature') is not None:
+            _temperature = _mask['temperature']
+        if effective_mask_id == 'ariston' and thread_id:
+            _ariston_config = get_ariston_config(thread_id)
+            if not _ariston_config:
+                # Filet de sécurité : un message qui atteint le LLM sans être passé
+                # par le panneau de tirage (front pas encore chargé, appel API
+                # direct...) ne doit jamais partir avec un system_prompt à
+                # placeholders non remplis. Tirage aléatoire de secours, verrouillé
+                # comme n'importe quel autre tirage.
+                _ariston_config = draw_ariston_config()
+                set_ariston_config(thread_id, _ariston_config)
+            if _ariston_config.get('temperature') is not None:
+                _temperature = _ariston_config['temperature']
+
     return {
-        'provider':          'ollama' if local_mode else routing['chat'],
-        'model':             (get_setting('ollama_model', 'llama3.1:8b') or 'llama3.1:8b')
-                             if local_mode else (get_setting('chat_model', None) or None),
+        'provider':          _provider,
+        'model':             _model,
         'local_mode':        local_mode,
         'mask_id':           effective_mask_id,
         'max_tokens':        int(get_setting('max_tokens', str(MAX_TOKENS_CHAT))),
-        'temperature':       float(get_setting('temperature', '0.7')),
+        'temperature':       _temperature,
+        'frequency_penalty': _frequency_penalty,
+        'ariston_config':    _ariston_config,
         'vision_provider':   routing['vision'],
         'image_provider':    routing['image'],
         'provider_routing':  routing,
@@ -319,6 +355,7 @@ def _load_api_keys() -> dict:
         'deepseek':     'DEEPSEEK_API_KEY',
         'groq':         'GROQ_API_KEY',
         'cerebras':     'CEREBRAS_API_KEY',
+        'venice':       'VENICE_API_KEY',
         'gemini':       'GEMINI_API_KEY',
         'openai':       'OPENAI_API_KEY',
         'openrouter':   'OPENROUTER_API_KEY',
@@ -571,6 +608,90 @@ def load_mask(mask_id: str) -> dict:
         mask = _masque_de_repli(mask_dir, sauf=f'{mask_id}.json')
         _mask_cache[cache_key] = mask
         return mask
+
+
+# ═══════════════════════════════════════════════════════════
+# ARISTON — masque perso à tirage aléatoire (Laurent uniquement)
+# ═══════════════════════════════════════════════════════════
+
+ARISTON_COURANTS = [
+    'nihilisme', 'hédonisme', 'stoïcisme', 'cynisme', 'épicurisme',
+    'absurdisme', 'existentialisme', 'utilitarisme', 'scepticisme pyrrhonien',
+    'taoïsme', 'bouddhisme du détachement', 'dandysme', 'romantisme',
+    'matérialisme', 'déterminisme', 'solipsisme', 'misanthropie', 'sophisme',
+    'positivisme', 'transhumanisme', 'nietzschéisme', 'machiavélisme',
+]
+
+ARISTON_HUMEURS = [
+    'cafard', 'mélancolie', 'chagrin', 'apaisé', 'sérénité', 'euphorique',
+    'exalté', 'hargneux', 'rage', 'blasé', 'aversion', 'glacial', 'terreur',
+    'appréhension', 'stupéfaction', 'vigilance', 'résignation', 'amertume',
+    'nostalgie',
+]
+
+ARISTON_VOCABULAIRES = [
+    'soutenu', 'XVIIIe siècle', 'argot', 'vulgaire',
+    'jargon philosophique pompeux', 'poétique et lyrique',
+    'télégraphique et sec', 'précieux et maniéré', 'académique',
+    'populaire et familier',
+]
+
+ARISTON_POSTURES = [
+    'affirmatif et pontifiant',
+    'questionnement socratique',
+    'parabolique et hyperbolique',
+    'aphoristique et sentencieux',
+]
+
+# (valeur envoyée à l'API, libellé affiché dans le badge de config)
+ARISTON_TEMPERATURES = [
+    (1.4, 'Haute'),
+    (1.7, 'Très haute'),
+    (2.0, 'Extrême'),
+]
+
+
+def draw_ariston_config() -> dict:
+    """Tire au hasard les 5 axes verrouillés d'un fil Ariston.
+    Les 2 courants sont garantis distincts."""
+    courant_1, courant_2 = random.sample(ARISTON_COURANTS, 2)
+    temperature, temperature_label = random.choice(ARISTON_TEMPERATURES)
+    return {
+        'courant_1':          courant_1,
+        'courant_2':          courant_2,
+        'humeur':             random.choice(ARISTON_HUMEURS),
+        'vocabulaire':        random.choice(ARISTON_VOCABULAIRES),
+        'posture':            random.choice(ARISTON_POSTURES),
+        'temperature':        temperature,
+        'temperature_label':  temperature_label,
+    }
+
+
+def build_ariston_system_prompt(config: dict) -> str:
+    """Injecte un tirage Ariston (manuel ou aléatoire) dans le template du masque."""
+    mask = load_mask('ariston')
+    template = mask.get('system_prompt', '')
+    try:
+        return template.format(
+            courant_1=config.get('courant_1', ''),
+            courant_2=config.get('courant_2', ''),
+            humeur=config.get('humeur', ''),
+            vocabulaire=config.get('vocabulaire', ''),
+            posture=config.get('posture', ''),
+        )
+    except (KeyError, IndexError):
+        return template
+
+
+def resolve_mask_for_settings(settings: dict) -> dict:
+    """Charge le masque effectif d'un fil. Cas Ariston : remplace le
+    system_prompt template par la version injectée avec le tirage verrouillé
+    du fil (settings['ariston_config']) — sans toucher au cache de load_mask."""
+    mask = load_mask(settings.get('mask_id', ''))
+    if settings.get('mask_id') == 'ariston' and settings.get('ariston_config'):
+        mask = dict(mask)
+        mask['system_prompt'] = build_ariston_system_prompt(settings['ariston_config'])
+    return mask
 
 
 # ══════════════════════════════════════════
@@ -4178,7 +4299,7 @@ async def generate_bibliotheque_entry(thread_id: str) -> dict:
     settings = load_settings(thread_id)
     bilans   = _get_session_bilans(thread_id)
     try:
-        mask      = load_mask(settings['mask_id'])
+        mask      = resolve_mask_for_settings(settings)
         mask_name = mask.get('name', 'Assistant') or 'Assistant'
     except Exception:
         mask_name = 'Assistant'
@@ -4297,6 +4418,7 @@ async def process_message(
         'openrouter': 'openrouter',
         'groq':       'groq',
         'cerebras':   'cerebras',
+        'venice':     'venice',
     }
     if not provider:
         _msg = "T'as cru que tu pouvais chatter gratuitement ? Tout se paye mon ami. 😄\n\nVa te prendre une clé API — DeepSeek, Anthropic, OpenAI, tu as le choix — et reviens quand elle sera configurée. C'est dans les réglages ⚙️, section **Clés API**."
@@ -4333,7 +4455,7 @@ async def process_message(
         if settings.get('personality_mode') == 'potards':
             mask = {'system_prompt': build_potards_prompt(settings['potards'])}
         else:
-            mask = load_mask(settings['mask_id'])
+            mask = resolve_mask_for_settings(settings)
     except Exception:
         mask = {'system_prompt': 'Tu es un assistant utile et direct.'}
 
@@ -4454,6 +4576,7 @@ async def process_message(
                 max_tokens=settings['max_tokens'],
                 temperature=settings['temperature'],
                 api_keys=settings['api_keys'],
+                frequency_penalty=settings.get('frequency_penalty'),
             ):
                 if event['type'] == 'token':
                     raw_reply += event['text']
@@ -4659,6 +4782,7 @@ async def process_message_stream(
         'openrouter': 'openrouter',
         'groq':       'groq',
         'cerebras':   'cerebras',
+        'venice':     'venice',
     }
     if not provider:
         _msg = "⚙️ Aucun provider configuré. Ouvre les réglages (⚙️), choisis un provider et entre ta clé API."
@@ -4722,7 +4846,7 @@ async def process_message_stream(
         if settings.get('personality_mode') == 'potards':
             mask = {'system_prompt': build_potards_prompt(settings['potards'])}
         else:
-            mask = load_mask(settings['mask_id'])
+            mask = resolve_mask_for_settings(settings)
     except Exception:
         mask = {'system_prompt': 'Tu es un assistant utile et direct.'}
 
@@ -4894,6 +5018,7 @@ async def process_message_stream(
                 max_tokens=settings['max_tokens'],
                 temperature=settings['temperature'],
                 api_keys=settings['api_keys'],
+                frequency_penalty=settings.get('frequency_penalty'),
             ):
                 if _premier_evt_llm:
                     _perf(f"premier_evenement_llm({event['type']})")
@@ -4973,6 +5098,7 @@ async def process_message_stream(
                             max_tokens=settings['max_tokens'],
                             temperature=settings['temperature'],
                             api_keys=settings['api_keys'],
+                            frequency_penalty=settings.get('frequency_penalty'),
                         ):
                             if event2['type'] == 'token':
                                 full_reply += event2['text']

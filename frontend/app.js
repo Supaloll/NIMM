@@ -1924,6 +1924,9 @@ async function selectThread(threadId) {
 
 function _updateMaskIndicator(thread) {
     // mask-lock-indicator retiré de la topbar — le nom du masque est affiché dans la bulle via .mask-name-tag
+    const badge = _ensureAristonBadge();
+    const estAriston = !!(thread && thread.mask_id === 'ariston' && thread.personality_mode !== 'potards');
+    badge.classList.toggle('hidden', !estAriston);
 }
 
 async function promptNewThreadModal() {
@@ -2291,12 +2294,175 @@ async function createThread(name, maskId = null, personalityMode = null, ghost =
     const t = await r.json();
     await loadThreads();
     await selectThread(t.thread_id);
+    if (maskId === 'ariston') {
+        await openAristonTirageModal(t.thread_id);
+    }
     if (ghost) {
         _ghostMode = true;
         const _m = 'Fil fant\u00f4me cr\u00e9\u00e9 : rien de cet \u00e9change ne sera conserv\u00e9.';
         if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(_m);
         if (typeof showToast === 'function') showToast(_m, 'warning');
     }
+}
+
+// ══════════════════════════════════════════
+// ARISTON — tirage verrouillé + badge de relecture
+// ══════════════════════════════════════════
+
+function _aristonFillSelect(selectEl, values, currentValue) {
+    selectEl.innerHTML = values.map(v =>
+        `<option value="${v}"${v === currentValue ? ' selected' : ''}>${v}</option>`
+    ).join('');
+}
+
+async function openAristonTirageModal(threadId) {
+    const modal = document.getElementById('ariston-tirage-modal');
+    if (!modal) return;
+
+    const selC1      = document.getElementById('ariston-courant-1');
+    const selC2      = document.getElementById('ariston-courant-2');
+    const selHumeur  = document.getElementById('ariston-humeur');
+    const selVocab   = document.getElementById('ariston-vocabulaire');
+    const selPosture = document.getElementById('ariston-posture');
+    const selTemp    = document.getElementById('ariston-temperature');
+    const btnRandom  = document.getElementById('ariston-tirage-random');
+    const btnValider = document.getElementById('ariston-tirage-valider');
+    const btnFermer  = document.getElementById('ariston-tirage-fermer');
+    const zoneErreur = document.getElementById('ariston-tirage-erreur');
+    const zoneStatut = document.getElementById('ariston-tirage-statut');
+
+    // Reset visuel à chaque ouverture (la modal peut avoir déjà servi sur un autre fil)
+    [selC1, selC2, selHumeur, selVocab, selPosture, selTemp].forEach(s => s.disabled = false);
+    btnRandom.disabled = false;
+    btnValider.classList.remove('hidden');
+    btnFermer.classList.add('hidden');
+    zoneErreur.classList.add('hidden');
+    zoneStatut.classList.add('hidden');
+
+    // Un tirage peut déjà exister (filet de sécurité déclenché par un envoi
+    // précoce, ou modal rouverte) — dans ce cas on affiche direct en lecture seule.
+    let dejaVerrouille = null;
+    try {
+        const cfg = await fetch(`/api/threads/${threadId}/ariston/config`).then(r => r.json());
+        if (cfg && cfg.courant_1) dejaVerrouille = cfg;
+    } catch (e) {}
+
+    const options = await fetch('/api/masks/ariston/options').then(r => r.json()).catch(() => null);
+    if (!options) return;
+
+    _aristonFillSelect(selC1,      options.courants,     dejaVerrouille?.courant_1);
+    _aristonFillSelect(selC2,      options.courants,     dejaVerrouille?.courant_2);
+    _aristonFillSelect(selHumeur,  options.humeurs,      dejaVerrouille?.humeur);
+    _aristonFillSelect(selVocab,   options.vocabulaires, dejaVerrouille?.vocabulaire);
+    _aristonFillSelect(selPosture, options.postures,     dejaVerrouille?.posture);
+    selTemp.innerHTML = options.temperatures.map(t =>
+        `<option value="${t.valeur}"${dejaVerrouille?.temperature === t.valeur ? ' selected' : ''}>${t.label}</option>`
+    ).join('');
+
+    const _lockUI = () => {
+        [selC1, selC2, selHumeur, selVocab, selPosture, selTemp].forEach(s => s.disabled = true);
+        btnRandom.disabled = true;
+        btnValider.classList.add('hidden');
+        btnFermer.classList.remove('hidden');
+        zoneStatut.classList.remove('hidden');
+    };
+
+    if (dejaVerrouille) _lockUI();
+
+    const _envoyerTirage = async (corps) => {
+        zoneErreur.classList.add('hidden');
+        try {
+            const r = await fetch(`/api/threads/${threadId}/ariston/tirage`, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(corps)
+            });
+            const data = await r.json();
+            if (!r.ok) {
+                zoneErreur.textContent = data.detail || "Erreur lors du tirage.";
+                zoneErreur.classList.remove('hidden');
+                return;
+            }
+            selC1.value      = data.courant_1;
+            selC2.value      = data.courant_2;
+            selHumeur.value  = data.humeur;
+            selVocab.value   = data.vocabulaire;
+            selPosture.value = data.posture;
+            selTemp.value    = data.temperature;
+            _lockUI();
+        } catch (e) {
+            zoneErreur.textContent = "Erreur réseau — réessaie.";
+            zoneErreur.classList.remove('hidden');
+        }
+    };
+
+    btnRandom.onclick = () => _envoyerTirage({});
+
+    btnValider.onclick = () => {
+        if (selC1.value === selC2.value) {
+            zoneErreur.textContent = "Les deux courants doivent être distincts.";
+            zoneErreur.classList.remove('hidden');
+            return;
+        }
+        _envoyerTirage({
+            courant_1:   selC1.value,
+            courant_2:   selC2.value,
+            humeur:      selHumeur.value,
+            vocabulaire: selVocab.value,
+            posture:     selPosture.value,
+            temperature: parseFloat(selTemp.value),
+        });
+    };
+
+    btnFermer.onclick = () => _closeModal(modal);
+
+    _openModal(modal);
+    setTimeout(() => selC1.focus(), 50);
+}
+
+// ── Badge de relecture (topbar) ──
+let _aristonBadgeBtn = null;
+
+function _ensureAristonBadge() {
+    if (_aristonBadgeBtn) return _aristonBadgeBtn;
+    const btn = document.createElement('button');
+    btn.id        = 'ariston-badge-btn';
+    btn.className = 'topbar-icon-btn hidden';
+    btn.title     = 'Voir le tirage Ariston de ce fil';
+    btn.setAttribute('aria-label', 'Voir le tirage Ariston de ce fil');
+    btn.innerHTML = '🏛️';
+    btn.addEventListener('click', () => openAristonRelectureModal(currentThreadId));
+    const topRight = document.getElementById('top-right');
+    if (topRight) topRight.insertBefore(btn, topRight.firstChild);
+    _aristonBadgeBtn = btn;
+    return btn;
+}
+
+async function openAristonRelectureModal(threadId) {
+    const modal      = document.getElementById('ariston-relecture-modal');
+    const contenu    = document.getElementById('ariston-relecture-contenu');
+    const btnFermer  = document.getElementById('ariston-relecture-fermer');
+    if (!modal || !contenu || !threadId) return;
+
+    let cfg = {};
+    try {
+        cfg = await fetch(`/api/threads/${threadId}/ariston/config`).then(r => r.json());
+    } catch (e) {}
+
+    if (!cfg || !cfg.courant_1) {
+        contenu.innerHTML = '<p style="color:var(--text-muted);margin:0;">Aucun tirage verrouillé pour l\'instant.</p>';
+    } else {
+        contenu.innerHTML = `
+            <dt style="color:var(--text-muted);">Courants</dt><dd style="margin:0 0 10px;">${cfg.courant_1} &times; ${cfg.courant_2}</dd>
+            <dt style="color:var(--text-muted);">Humeur</dt><dd style="margin:0 0 10px;">${cfg.humeur}</dd>
+            <dt style="color:var(--text-muted);">Registre</dt><dd style="margin:0 0 10px;">${cfg.vocabulaire}</dd>
+            <dt style="color:var(--text-muted);">Posture</dt><dd style="margin:0 0 10px;">${cfg.posture}</dd>
+            <dt style="color:var(--text-muted);">Température</dt><dd style="margin:0;">${cfg.temperature_label || cfg.temperature}</dd>
+        `;
+    }
+
+    btnFermer.onclick = () => _closeModal(modal);
+    _openModal(modal);
 }
 
 // ══════════════════════════════════════════
@@ -5174,7 +5340,7 @@ async function loadSettingsIntoUI() {
 
         // Auto-sélection : si le chat n'est pas encore routé, choisir le premier provider disponible
         if (!routing.chat) {
-            const chatProviders = ['anthropic','deepseek','gemini','openai','openrouter','mistral','groq','cerebras'];
+            const chatProviders = ['anthropic','deepseek','gemini','openai','openrouter','mistral','groq','cerebras','venice'];
             const firstAvailable = chatProviders.find(p => keys[p]);
             if (firstAvailable) {
                 const provSel = document.getElementById('provider-select');
@@ -5332,7 +5498,7 @@ async function _checkProviderBanner() {
         ]);
         const provider = routing.chat || '';
         const LOCAL    = ['ollama'];
-        const KEY_MAP  = { anthropic:'anthropic', deepseek:'deepseek', openai:'openai', gemini:'gemini', openrouter:'openrouter', mistral:'mistral', groq:'groq', cerebras:'cerebras', tavily:'tavily' };
+        const KEY_MAP  = { anthropic:'anthropic', deepseek:'deepseek', openai:'openai', gemini:'gemini', openrouter:'openrouter', mistral:'mistral', groq:'groq', cerebras:'cerebras', venice:'venice', tavily:'tavily' };
         const keyName  = KEY_MAP[provider];
         const missing  = !provider || (!LOCAL.includes(provider) && keyName && !keys[keyName]);
         document.getElementById('no-provider-banner').classList.toggle('hidden', !missing);
@@ -5437,6 +5603,12 @@ const MODELS_BY_PROVIDER = {
     cerebras: [
         { value: 'llama-3.3-70b',           label: '⚡ Llama 3.3 70B — rapide, polyvalent' },
         { value: 'llama3.1-8b',             label: '⚡ Llama 3.1 8B — le plus rapide' },
+    ],
+    venice: [
+        { value: 'venice-uncensored-1-2',        label: '🔥 Venice Uncensored 1.2 — le plus libre (Dolphin 24B)' },
+        { value: 'venice-uncensored-role-play',  label: '🎭 Venice RP Uncensored — fiction immersive, scènes poussées' },
+        { value: 'gemma-4-uncensored',           label: '💰 Gemma 4 Uncensored — bon français, économique' },
+        { value: 'aion-labs-aion-3-0',           label: '💰💰💰 Aion 3.0 — storytelling sombre premium' },
     ],
     mistral: [
         { value: 'mistral-small-latest',        label: '💰 Mistral Small — léger, économique' },
@@ -6024,7 +6196,7 @@ function _svcIds() {
     // le formulaire doit rester utilisable même si la route échoue.
     return _SERVICES.length ? _SERVICES.map(s => s.id)
         : ['anthropic', 'deepseek', 'gemini', 'openai', 'openrouter',
-           'mistral', 'groq', 'cerebras', 'stability_ai', 'brave', 'tavily'];
+           'mistral', 'groq', 'cerebras', 'venice', 'stability_ai', 'brave', 'tavily'];
 }
 
 function _svcEchappe(t) {
@@ -6093,7 +6265,7 @@ async function _saveApiKeys() {
 
     // Si le provider actuel est Ollama ou vide, basculer automatiquement sur le premier provider configuré
     const currentProvider = await fetch('/api/settings/provider').then(r => r.json()).then(d => d.provider).catch(() => '');
-    const llmProviders = ['deepseek','anthropic','openai','gemini','mistral','openrouter','groq','cerebras'];
+    const llmProviders = ['deepseek','anthropic','openai','gemini','mistral','openrouter','groq','cerebras','venice'];
     if (!currentProvider || currentProvider === 'ollama') {
         const firstAvailable = llmProviders.find(p => keys[p]);
         if (firstAvailable) {
@@ -6200,7 +6372,7 @@ document.getElementById('image-edit-ok')?.addEventListener('click', async () => 
 document.getElementById('save-api-keys-btn').addEventListener('click', _saveApiKeys);
 
 // Entree ou perte de focus sur un champ cle -> sauvegarde automatique
-['anthropic','deepseek','gemini','openai','openrouter','mistral','groq','cerebras','stability-ai','brave','tavily'].forEach(p => {
+['anthropic','deepseek','gemini','openai','openrouter','mistral','groq','cerebras','venice','stability-ai','brave','tavily'].forEach(p => {
     const el = document.getElementById(`api-key-${p}`);
     if (!el) return;
     el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); _saveApiKeys(); } });
@@ -8870,7 +9042,7 @@ async function loadCosts() {
 const _COST_ICONS = {
     anthropic: '🔴', deepseek: '🟢', gemini: '🟡', openai: '🔴',
     openrouter: '🟠', mistral: '🔵', ollama: '🟢', brave: '🔵', tavily: '🟣',
-    groq: '⚡', cerebras: '⚡'
+    groq: '⚡', cerebras: '⚡', venice: '🟤'
 };
 
 // Injecte une seule fois le style du tableau des coûts (évite de toucher styles.css).

@@ -60,6 +60,11 @@ SERVICES = [
      'exemple': 'csk-…', 'console': 'https://cloud.cerebras.ai/',
      'role': "Le plus rapide du marché, sur modèles ouverts également. Même "
              "usage que Groq ; un million de jetons par jour offerts."},
+    {'id': 'venice', 'nom': 'Venice AI', 'famille': 'conversation',
+     'exemple': '…', 'console': 'https://venice.ai/',
+     'role': "Modèles hébergés SANS filtre côté serveur (venice-uncensored, "
+             "GLM Heretic, Gemma uncensored…) — jeu de rôle, humour noir et "
+             "contenu adulte sans recadrage. Confidentiel : zéro rétention."},
 
     # ── recherche et veille ──
     {'id': 'brave', 'nom': 'Brave Search', 'famille': 'recherche',

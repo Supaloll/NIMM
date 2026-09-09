@@ -235,6 +235,12 @@ FOURNISSEURS_OPENAI_COMPAT = {
                    'outils': False},
     'cerebras':   {'base': 'https://api.cerebras.ai/v1',      'modele': 'llama-3.3-70b',
                    'outils': False},
+    # Venice AI : modèles hébergés SANS filtre côté serveur (venice-uncensored,
+    # GLM Heretic, Gemma uncensored...). OpenAI-compatible. `outils` reste False
+    # au départ : ces modèles RP écrivent de la fiction, pas des appels d'outils
+    # disciplinés. On le passera à True après test si besoin.
+    'venice':     {'base': 'https://api.venice.ai/api/v1',    'modele': 'venice-uncensored-1-2',
+                   'outils': False},
 }
 
 def _base_openai_compat(provider: str) -> str:
@@ -247,7 +253,7 @@ def _modele_openai_compat(provider: str) -> str:
 def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
     """Premier fournisseur configuré autre que celui qui vient d'échouer, ou ''."""
     ordre = ['mistral', 'anthropic', 'openai', 'gemini', 'deepseek', 'openrouter',
-             'groq', 'cerebras']
+             'groq', 'cerebras', 'venice']
     for p in ordre:
         if p == (provider_courant or '').lower():
             continue
@@ -406,6 +412,7 @@ def get_api_key(provider: str, db_keys: dict = None) -> Optional[str]:
         'tavily':     'TAVILY_API_KEY',
         'groq':       'GROQ_API_KEY',
         'cerebras':   'CEREBRAS_API_KEY',
+        'venice':     'VENICE_API_KEY',
     }
     return os.getenv(env_map.get(provider, ''))
 
@@ -424,6 +431,7 @@ _PROVIDER_DEFAULT_MODEL = {
     'ollama':     'llama3.1:8b',
     'groq':       'llama-3.3-70b-versatile',
     'cerebras':   'llama-3.3-70b',
+    'venice':     'venice-uncensored-1-2',
 }
 
 # Préfixe de nom de modèle → fournisseur propriétaire (détection d'incohérence)
@@ -1128,6 +1136,12 @@ def _models_endpoint(provider: str, api_key: str):
         return (_base_openai_compat(provider) + '/models',
                 {'Authorization': f'Bearer {api_key}'},
                 lambda d: [(i, i) for i in _ids(d)])
+    if provider == 'venice':
+        # Même logique que ci-dessus : le catalogue Venice (ouvert, sans filtre)
+        # bouge régulièrement — on ne fige que les recommandations du frontend.
+        return (_base_openai_compat(provider) + '/models',
+                {'Authorization': f'Bearer {api_key}'},
+                lambda d: [(i, i) for i in _ids(d)])
     if provider == 'mistral':
         return ('https://api.mistral.ai/v1/models',
                 {'Authorization': f'Bearer {api_key}'},
@@ -1222,6 +1236,11 @@ async def call_llm(
     elif provider == 'mistral':
         return await _call_openai_compat(messages, model or 'mistral-small-latest', system_prompt, max_tokens, temperature, api_keys, 'mistral', _base_openai_compat('mistral'), images=images, tools=tools, output_schema=output_schema)
     elif provider in ('groq', 'cerebras'):
+        return await _call_openai_compat(messages, model or _modele_openai_compat(provider),
+                                         system_prompt, max_tokens, temperature, api_keys,
+                                         provider, _base_openai_compat(provider),
+                                         images=images, output_schema=output_schema)
+    elif provider == 'venice':
         return await _call_openai_compat(messages, model or _modele_openai_compat(provider),
                                          system_prompt, max_tokens, temperature, api_keys,
                                          provider, _base_openai_compat(provider),
@@ -1684,14 +1703,16 @@ async def _call_gemini(messages, model, system_prompt, max_tokens, temperature, 
         return ''.join(p.get('text', '') for p in parts if 'text' in p)
 
 
-async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
+async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys, frequency_penalty=None):
     """Phase 1 Gemini : un appel avec outils, DIFFUSÉ EN CONTINU.
 
     Utilise `streamGenerateContent?alt=sse` : le texte arrive au fil de l'eau, au
     lieu d'attendre la génération complète. Les appels de fonction et les sources
     du grounding ne sont émis qu'une fois le flux terminé (ils n'arrivent pas
     fragmentés). Contrat d'événements identique aux autres fournisseurs.
-    Si tools contient {'google_search': {}}, active le grounding natif Google Search."""
+    Si tools contient {'google_search': {}}, active le grounding natif Google Search.
+    `frequency_penalty` : optionnel (ex. masque Ariston) — pénalise la répétition
+    de tokens déjà générés, natif à l'API Gemini (`generationConfig.frequencyPenalty`)."""
     api_key = get_api_key('gemini', api_keys)
     if not api_key:
         raise ValueError("Clé API Gemini manquante.")
@@ -1706,6 +1727,8 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
             'temperature':     temperature,
         }
     }
+    if frequency_penalty is not None:
+        payload['generationConfig']['frequencyPenalty'] = frequency_penalty
     if _grounding:
         # Google Search Grounding : incompatible avec functionDeclarations
         payload['tools'] = [{'google_search': {}}]
@@ -1724,6 +1747,14 @@ async def _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, 
             f'https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={api_key}',
             json=payload
         ) as r:
+            if r.status_code >= 400:
+                # Sur une réponse en streaming, le corps n'est pas encore chargé au
+                # moment de raise_for_status() — r.text lève une exception interne
+                # httpx plutôt que de renvoyer le message d'erreur, et
+                # classer_erreur_fournisseur() retombe sur "raison non précisée".
+                # On lit le corps explicitement AVANT de lever, pour que le message
+                # réel de Google remonte jusqu'à l'utilisateur.
+                await r.aread()
             r.raise_for_status()
             async for ligne in r.aiter_lines():
                 if not ligne.startswith('data:'):
@@ -2335,6 +2366,7 @@ async def call_llm_stream_with_tools(
     max_tokens: int = 1024,
     temperature: float = 0.7,
     api_keys: dict = None,
+    frequency_penalty: float = None,
 ):
     """
     Stream avec détection de tool calls (DeepSeek / OpenAI-compat uniquement).
@@ -2361,7 +2393,7 @@ async def call_llm_stream_with_tools(
         return
 
     if provider == 'gemini':
-        async for ev in _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys):
+        async for ev in _gemini_tools_turn(messages, tools, model, system_prompt, max_tokens, temperature, api_keys, frequency_penalty=frequency_penalty):
             yield ev
         return
 

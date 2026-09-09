@@ -641,12 +641,13 @@ def init_db(user_id: str = None):
     # ── Fils de conversation ──
     c.execute('''
         CREATE TABLE IF NOT EXISTS threads (
-            thread_id   TEXT PRIMARY KEY,
-            name        TEXT NOT NULL,
-            mode        TEXT DEFAULT 'chat',
-            created_at  TEXT DEFAULT (datetime('now')),
-            updated_at  TEXT DEFAULT (datetime('now')),
-            tags        TEXT DEFAULT ''
+            thread_id       TEXT PRIMARY KEY,
+            name            TEXT NOT NULL,
+            mode            TEXT DEFAULT 'chat',
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now')),
+            tags            TEXT DEFAULT '',
+            ariston_config  TEXT DEFAULT ''
         )
     ''')
 
@@ -661,6 +662,12 @@ def init_db(user_id: str = None):
         c.execute("ALTER TABLE threads ADD COLUMN agent_mode TEXT DEFAULT ''")
         conn.commit()
         print("[DB] Colonne agent_mode (threads) ajoutée.")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE threads ADD COLUMN ariston_config TEXT DEFAULT ''")
+        conn.commit()
+        print("[DB] Colonne ariston_config (threads) ajoutée.")
     except Exception:
         pass
 
@@ -1047,6 +1054,7 @@ def init_db(user_id: str = None):
         ('mistral',    'Mistral',      'compteur_tokens',   0.10,   0.30, 'monthly'),
         ('groq',       'Groq',         'tirelire',          0.59,   0.79, 'manual'),
         ('cerebras',   'Cerebras',     'tirelire',          0.85,   1.20, 'manual'),
+        ('venice',     'Venice',       'tirelire',          0.20,   0.90, 'manual'),
         ('ollama',     'Ollama',       'compteur_tokens',   0.0,    0.0,  'never'),
         ('brave',      'Brave Search', 'compteur_requetes', 0.0,    0.0,  'monthly'),
         ('tavily',     'Tavily',       'compteur_requetes', 0.0,    0.0,  'monthly'),
@@ -1515,6 +1523,37 @@ def set_thread_mask(thread_id: str, mask_id: str, personality_mode: str):
     conn.commit()
     conn.close()
 
+def get_ariston_config(thread_id: str) -> dict:
+    """Retourne le tirage Ariston verrouillé sur ce fil (courant_1, courant_2,
+    humeur, vocabulaire, posture, temperature), ou {} si aucun tirage encore fait."""
+    conn = get_conn()
+    row = conn.execute(
+        'SELECT ariston_config FROM threads WHERE thread_id = ?', (thread_id,)
+    ).fetchone()
+    conn.close()
+    raw = row['ariston_config'] if row else ''
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+def set_ariston_config(thread_id: str, config: dict):
+    """Verrouille le tirage Ariston sur un fil (appelé une seule fois, au premier
+    message). N'écrase jamais un tirage déjà présent — le verrouillage est définitif
+    pour la durée de vie du fil."""
+    if get_ariston_config(thread_id):
+        return False
+    conn = get_conn()
+    conn.execute(
+        'UPDATE threads SET ariston_config = ? WHERE thread_id = ?',
+        (json.dumps(config, ensure_ascii=False), thread_id)
+    )
+    conn.commit()
+    conn.close()
+    return True
+
 def delete_thread(thread_id: str):
     conn = get_conn()
     conn.execute('DELETE FROM messages WHERE thread_id = ?', (thread_id,))
@@ -1817,6 +1856,9 @@ TARIFS_DEFAUT = {
     # selon la taille du modèle choisi — à ajuster dans l'onglet Coûts.
     'groq':         {'in': 0.59,  'out': 0.79},
     'cerebras':     {'in': 0.85,  'out': 1.20},
+    # Venice AI (pay-as-you-go à crédits) — moyenne des modèles uncensored ;
+    # va de 0,07/0,40 (GLM Heretic) à 0,50/2,00 (RP) selon le modèle choisi.
+    'venice':       {'in': 0.20,  'out': 0.90},
     'mistral':      {'in': 0.10,  'out': 0.30},
     'ollama':       {'in': 0.0,   'out': 0.0},
     'brave':        {'in': 0.0,   'out': 0.0},

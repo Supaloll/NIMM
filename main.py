@@ -433,6 +433,14 @@ class ThreadCreate(BaseModel):
     # coup laissait déjà passer les premiers échanges.
     ghost:            Optional[bool] = False
 
+class AristonTirageRequest(BaseModel):
+    courant_1:   Optional[str]   = None
+    courant_2:   Optional[str]   = None
+    humeur:      Optional[str]   = None
+    vocabulaire: Optional[str]   = None
+    posture:     Optional[str]   = None
+    temperature: Optional[float] = None
+
 class ThreadRename(BaseModel):
     name: Optional[str] = None
     tags: Optional[str] = None
@@ -599,7 +607,7 @@ async def continue_thread_route(thread_id: str):
         if settings.get('personality_mode') == 'potards':
             mask = {'system_prompt': hub.build_potards_prompt(settings.get('potards', {}))}
         else:
-            mask = hub.load_mask(settings.get('mask_id', ''))
+            mask = hub.resolve_mask_for_settings(settings)
     except Exception:
         mask = {'system_prompt': 'Tu es un assistant utile.'}
 
@@ -4397,7 +4405,7 @@ async def get_global_keys():
                 global_keys = json.loads(_f.read()).get('api_keys', {})
         except Exception as _e:
             print(f"[GLOBAL-KEYS] Lecture impossible ({_gpath}) : {_e}")
-    providers = ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily']
+    providers = ['anthropic','deepseek','gemini','openai','openrouter','mistral','stability_ai','brave','tavily','venice']
     return {p: bool(global_keys.get(p)) for p in providers}
 
 @app.post("/api/settings/global-keys")
@@ -4654,6 +4662,87 @@ async def list_masks():
     except Exception:
         return []
     return result
+
+
+@app.get("/api/masks/ariston/options")
+async def get_ariston_options():
+    """Listes fermées pour le panneau de tirage (manuel ou random) du front."""
+    from core.hub import (
+        ARISTON_COURANTS, ARISTON_HUMEURS, ARISTON_VOCABULAIRES,
+        ARISTON_POSTURES, ARISTON_TEMPERATURES,
+    )
+    return {
+        "courants":     ARISTON_COURANTS,
+        "humeurs":      ARISTON_HUMEURS,
+        "vocabulaires": ARISTON_VOCABULAIRES,
+        "postures":     ARISTON_POSTURES,
+        "temperatures": [{"valeur": v, "label": l} for v, l in ARISTON_TEMPERATURES],
+    }
+
+
+@app.get("/api/threads/{thread_id}/ariston/config")
+async def get_ariston_tirage(thread_id: str):
+    """Tirage verrouillé sur ce fil (pour le badge ℹ️), ou {} si pas encore tiré."""
+    from core.database import get_ariston_config
+    return get_ariston_config(thread_id)
+
+
+@app.post("/api/threads/{thread_id}/ariston/tirage")
+async def tirage_ariston(thread_id: str, req: AristonTirageRequest):
+    """Verrouille le tirage Ariston d'un fil.
+
+    Requête vide (tous les champs à None) → tirage aléatoire.
+    Requête complète (les 6 champs) → tirage manuel, validé contre les listes
+    fermées. Refuse si le fil n'existe pas, si le fil a déjà un message, ou si
+    un tirage existe déjà — le verrouillage est définitif pour la durée de vie
+    du fil."""
+    from core.hub import (
+        draw_ariston_config, ARISTON_COURANTS, ARISTON_HUMEURS,
+        ARISTON_VOCABULAIRES, ARISTON_POSTURES, ARISTON_TEMPERATURES,
+    )
+    from core.database import set_ariston_config, get_ariston_config, count_messages, get_thread
+
+    if not get_thread(thread_id):
+        raise HTTPException(404, "Fil introuvable.")
+
+    if count_messages(thread_id) > 0:
+        raise HTTPException(400, "Ce fil a déjà commencé — le tirage Ariston ne peut plus être modifié.")
+
+    if get_ariston_config(thread_id):
+        raise HTTPException(400, "Un tirage est déjà verrouillé sur ce fil.")
+
+    champs = [req.courant_1, req.courant_2, req.humeur, req.vocabulaire, req.posture, req.temperature]
+
+    if all(c is None for c in champs):
+        config = draw_ariston_config()
+    else:
+        if any(c is None for c in champs):
+            raise HTTPException(400, "Tirage manuel : les 6 champs sont requis (ou aucun pour un tirage aléatoire).")
+        if req.courant_1 == req.courant_2:
+            raise HTTPException(400, "Les deux courants doivent être distincts.")
+        for val, liste, nom in [
+            (req.courant_1,   ARISTON_COURANTS,      "courant_1"),
+            (req.courant_2,   ARISTON_COURANTS,      "courant_2"),
+            (req.humeur,      ARISTON_HUMEURS,       "humeur"),
+            (req.vocabulaire, ARISTON_VOCABULAIRES,  "vocabulaire"),
+            (req.posture,     ARISTON_POSTURES,      "posture"),
+        ]:
+            if val not in liste:
+                raise HTTPException(400, f"Valeur invalide pour {nom}.")
+        temperatures_valides = [v for v, _ in ARISTON_TEMPERATURES]
+        if req.temperature not in temperatures_valides:
+            raise HTTPException(400, "Température invalide.")
+        temperature_label = next(l for v, l in ARISTON_TEMPERATURES if v == req.temperature)
+        config = {
+            "courant_1": req.courant_1, "courant_2": req.courant_2,
+            "humeur": req.humeur, "vocabulaire": req.vocabulaire, "posture": req.posture,
+            "temperature": req.temperature, "temperature_label": temperature_label,
+        }
+
+    ok = set_ariston_config(thread_id, config)
+    if not ok:
+        raise HTTPException(400, "Un tirage est déjà verrouillé sur ce fil.")
+    return config
 
 
 @app.post("/api/masks/save")
