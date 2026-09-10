@@ -236,11 +236,14 @@ FOURNISSEURS_OPENAI_COMPAT = {
     'cerebras':   {'base': 'https://api.cerebras.ai/v1',      'modele': 'llama-3.3-70b',
                    'outils': False},
     # Venice AI : modèles hébergés SANS filtre côté serveur (venice-uncensored,
-    # GLM Heretic, Gemma uncensored...). OpenAI-compatible. `outils` reste False
-    # au départ : ces modèles RP écrivent de la fiction, pas des appels d'outils
-    # disciplinés. On le passera à True après test si besoin.
+    # Gemma uncensored — mais aussi les grosses familles : Qwen, DeepSeek, GLM,
+    # Kimi, GPT-OSS...). OpenAI-compatible.
+    # `outils: True` depuis le 10/09/2026 : catalogue sondé en direct, les modèles
+    # généralistes appellent réellement les outils de NIMM. Les modèles qui les
+    # refusent (HTTP 400 « tool_choice is not supported ») sont nommés dans
+    # MODELES_SANS_APPEL_OUTILS plus haut et repassent par le flux simple.
     'venice':     {'base': 'https://api.venice.ai/api/v1',    'modele': 'venice-uncensored-1-2',
-                   'outils': False},
+                   'outils': True},
 }
 
 def _base_openai_compat(provider: str) -> str:
@@ -248,6 +251,18 @@ def _base_openai_compat(provider: str) -> str:
 
 def _modele_openai_compat(provider: str) -> str:
     return FOURNISSEURS_OPENAI_COMPAT.get(provider, {}).get('modele', '')
+
+
+def _params_venice(provider: str) -> dict:
+    # Venice colle son propre prompt système générique DEVANT celui de NIMM
+    # (doc Venice : « your system prompts are appended to Venice's defaults »).
+    # Sur les petits modèles (venice-uncensored-1-2), ce prompt générique prend
+    # le dessus : le masque n'est plus incarné et le modèle répond en assistant
+    # neutre — constaté le 10/09/2026 sur un masque de jeu privé. On le coupe donc, pour que
+    # le prompt de NIMM soit seul maître du ton.
+    if provider == 'venice':
+        return {'venice_parameters': {'include_venice_system_prompt': False}}
+    return {}
 
 
 def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
@@ -267,6 +282,19 @@ def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
 # Function Calling, FIM ; Not Supported Parameters: temperature, top_p… »).
 # Leur envoyer quand même produit au mieux une requête ignorée, au pire un refus.
 _MODELES_SANS_OUTILS = ('deepseek-reasoner',)
+
+# Modèles SANS APPEL D'OUTILS chez un fournisseur pourtant déclaré « outillé ».
+# DISTINCT de _MODELES_SANS_OUTILS ci-dessus, qui gouverne AUSSI la température :
+# ici on ne parle QUE des outils, pour ne rien changer au reste.
+# Venice (sondé le 10/09/2026) : les petits modèles de fiction et Hermes refusent
+# `tools` / `tool_choice` — HTTP 400 « tool_choice is not supported by this model ».
+MODELES_SANS_APPEL_OUTILS = ('venice-uncensored-1-2', 'venice-uncensored-role-play',
+                             'hermes-3-llama-3.1-405b')
+
+
+def _modele_sans_appel_outils(model: str) -> bool:
+    m = (model or '').lower()
+    return any(m.startswith(x) for x in MODELES_SANS_APPEL_OUTILS)
 
 
 # Depuis la génération 4.7, plusieurs modèles Anthropic REFUSENT tout paramètre
@@ -1586,6 +1614,7 @@ async def _call_openai_compat(messages, model, system_prompt, max_tokens, temper
                 # le budget max_tokens en tokens invisibles, laissant parfois 0
                 # token pour la vraie réponse (cause des titres/résumés vides).
                 **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' and reflexion_deepseek_desactivee() else {}),
+                **_params_venice(provider_name),
             }
         )
         r.raise_for_status()
@@ -2089,6 +2118,7 @@ async def _call_openai_compat_stream(messages, model, system_prompt, max_tokens,
                 'stream_options': {'include_usage': True},
                 **({'tools': tools} if tools else {}),
                 **({'thinking': {'type': 'disabled'}} if provider_name == 'deepseek' and reflexion_deepseek_desactivee() else {}),
+                **_params_venice(provider_name),
             }
         ) as r:
             r.raise_for_status()
@@ -2398,7 +2428,10 @@ async def call_llm_stream_with_tools(
         return
 
     _SUPPORTED = {p for p, c in FOURNISSEURS_OPENAI_COMPAT.items() if c.get('outils')}
-    if provider not in _SUPPORTED:
+    # Un modèle qui ne supporte pas les appels d'outils repasse par le flux simple,
+    # MÊME si son fournisseur est déclaré outillé — sinon Venice lèverait un 400 sur
+    # les petits modèles de fiction que NIMM utilise par ailleurs (masque de jeu privé).
+    if provider not in _SUPPORTED or _modele_sans_appel_outils(model):
         # Fallback : stream normal sans tools (providers sans tool-calling)
         async for token in call_llm_stream(
             messages=messages,
@@ -2459,6 +2492,7 @@ async def call_llm_stream_with_tools(
         'messages': oai_messages,
         'stream':   True,
     }
+    payload.update(_params_venice(provider))
     # La série o d'OpenAI n'accepte que max_completion_tokens.
     payload['max_completion_tokens' if _raisonneur_oai else 'max_tokens'] = max_tokens
     if not _sans_outils and not _raisonneur_oai:

@@ -221,6 +221,12 @@ data/backup_config.json
 # Morceaux générés par Lyria : gros fichiers audio, aucune raison d'être versionnés
 data/musiques/
 
+# Mémoire privée des masques de jeu : fragments de conversation propres à un
+# masque, en clair sur le disque. Ne doit JAMAIS être publié, ni mêlé aux
+# souvenirs de la personne. Une seule ligne pour tout le dossier (leçon du
+# 04/09/2026 : les listes nominatives oublient toujours une variante).
+data/souvenirs_masques/
+
 # Vidéos générées par Veo : très gros fichiers, hors dépôt
 data/videos/
 

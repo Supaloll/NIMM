@@ -5601,10 +5601,16 @@ const MODELS_BY_PROVIDER = {
         { value: 'llama3.1-8b',             label: '⚡ Llama 3.1 8B — le plus rapide' },
     ],
     venice: [
+        // Trois etages : non censures ET capables d'appeler les outils de NIMM
+        // (sonde du 10/09/2026 : reponses non bridees + search_memory declenche).
+        { value: 'openai-gpt-oss-120b',           label: '💰 GPT-OSS 120B — non censuré, outils (le moins cher)' },
+        { value: 'qwen3-235b-a22b-instruct-2507', label: '💰💰 Qwen3 235B — non censuré, costaud, outils' },
+        { value: 'deepseek-v4-pro',               label: '💰💰💰 DeepSeek V4 Pro — non censuré, le plus fort, outils (contexte 1M)' },
+        // Non censures "jeu" : petits modeles, sans appels d'outils fiables.
         { value: 'venice-uncensored-1-2',        label: '🔥 Venice Uncensored 1.2 — le plus libre (Dolphin 24B)' },
         { value: 'venice-uncensored-role-play',  label: '🎭 Venice RP Uncensored — fiction immersive, scènes poussées' },
-        { value: 'gemma-4-uncensored',           label: '💰 Gemma 4 Uncensored — bon français, économique' },
-        { value: 'aion-labs-aion-3-0',           label: '💰💰💰 Aion 3.0 — storytelling sombre premium' },
+        { value: 'gemma-4-uncensored',           label: '🔥 Gemma 4 Uncensored — bon français, économique' },
+        { value: 'aion-labs-aion-3-0',           label: '🎭 Aion 3.0 — storytelling sombre premium' },
     ],
     mistral: [
         { value: 'mistral-small-latest',        label: '💰 Mistral Small — léger, économique' },

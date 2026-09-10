@@ -938,8 +938,117 @@ _(Pour chaque reponse, je corrigerai automatiquement ma memoire.)_"""
 # CONSTRUCTION DU PROMPT SYSTÈME
 # ══════════════════════════════════════════
 
+def _bloc_souvenirs_masque(mask: dict, reglage) -> str:
+    """Bloc « ses souvenirs » d'un masque de jeu (champ `memoire_du_masque`).
+
+    `reglage` : True (5 fragments) ou un entier (combien en injecter).
+    POURQUOI UNE MÉMOIRE À PART : elle n'appartient QU'À ce masque, ne touche pas
+    la table `memory`, et vit dans un fichier local ignoré par git. Le masque y
+    retrouve des bouts de ses échanges — de quoi donner une continuité au
+    personnage sans rien mêler aux souvenirs de la personne.
+    """
+    try:
+        _n = reglage if isinstance(reglage, int) else 5
+        _n = max(1, min(int(_n), 8))
+        from core.database import get_souvenirs_masque as _gsm
+        _souv = _gsm(mask.get('id') or '', limit=_n)
+    except Exception:
+        return ''
+    if not _souv:
+        return ''
+    _lignes = []
+    for _s in _souv:
+        _q = (_s.get('laurent') or '').strip()
+        _r = (_s.get('masque') or '').strip()
+        _lignes.append('  - Il t\'a dit : « ' + _q + ' » -> tu as répondu : « ' + _r + ' »')
+    return ('[Tes souvenirs de vos derniers échanges - ta mémoire à toi, que '
+            'personne d\'autre ne voit :' + chr(10) + chr(10).join(_lignes) + chr(10) +
+            "Utilise-les si c'est naturel, sans les réciter.]")
+
+
+def _bloc_memoire_minimale(user_name: str) -> str:
+    """Digest mémoire compact pour les masques de jeu (champ `memoire_minimale`).
+
+    POURQUOI CE DIGEST, ET RIEN DE PLUS (mesure du 10/09/2026) : l'index thématique
+    (519 caractères) liste des prénoms et des PRÉDICATS — il dit « appelle
+    search_memory », or un masque minimal n'a AUCUN outil pour s'en servir. Le
+    profil certain (189 caractères) porte des VALEURS utiles ; la liste de proches
+    tient en quelques dizaines de caractères. Le dump complet des triplets
+    (5 844 caractères) reste écarté : il multiplierait par cinq le poids du
+    personnage.
+    """
+    try:
+        from core.database import get_all_memory, get_memory_index_by_theme
+        _m = get_all_memory()
+    except Exception:
+        return ''
+    if not _m:
+        return ''
+    _CHAMPS = (('metier', 'Métier'), ('conjoint', 'Conjoint(e)'),
+               ('enfant', 'Enfants'), ('domicile', 'Lieu'))
+    _ages = {x['sujet'].lower(): x['objet'] for x in _m
+             if x.get('predicat') == 'age' and x.get('sujet') and x.get('objet')}
+    _sujet = (user_name or '').strip().lower()
+    lignes = []
+    _deja  = set()
+    for _p, _lab in _CHAMPS:
+        _vals = [x['objet'] for x in _m
+                 if x.get('predicat') == _p and (x.get('objet') or '').strip()
+                 and (x.get('sujet') or '').strip().lower() == _sujet]
+        if not _vals:
+            continue
+        if _p == 'enfant':
+            _vals = [(v + ' (' + _ages[v.lower()] + ')' if _ages.get(v.lower()) else v)
+                     for v in _vals]
+        lignes.append('  ' + _lab + ' : ' + ', '.join(_vals))
+        for _v in _vals:
+            _deja.add(_v.split(' (')[0].lower())
+    try:
+        _index = get_memory_index_by_theme()
+    except Exception:
+        _index = {}
+    _proches = []
+    for _theme in ('Famille', 'Amis'):
+        for _n in _index.get(_theme, []):
+            if _n and _n.lower() not in _deja:
+                _deja.add(_n.lower())
+                _proches.append(_n)
+    if _proches:
+        lignes.append('  Proches : ' + ', '.join(_proches))
+    if not lignes:
+        return ''
+    return ('[Ce que tu sais déjà de ' + (user_name or 'lui')
+            + ' (utilise-le naturellement, sans le réciter ni le nommer) :' + chr(10)
+            + chr(10).join(lignes) + chr(10) + ']')
+
+
 def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = None, presence_note: str = '', last_dominant: str = '', user_name: str = '', biblio_context: str = '', force_mem: bool = False, recent_messages: list = None, location: str = '', session_bilans: list = None, doc_context: str = '', doc_fil: str = '', doc_fil_titre: str = '') -> str:
     parts = []
+
+
+    # Masque de JEU — prompt minimal : le personnage SEUL, sans l'échafaudage NIMM
+    # (lexique contractuel, agenda et rappels, mémoire, identité, index, outils, quiz).
+    # POURQUOI (mesuré le 10/09/2026) : un prompt de 19 182 caractères noyait un
+    # personnage de 1 189 — le modèle rendait des réponses d'assistant ; réduit au
+    # personnage seul, il incarne le rôle exactement.
+    # À RÉSERVER AUX MASQUES DE JEU : en mode minimal le modèle ne reçoit plus les
+    # tags %%RAPPEL%% / %%IMAGE%% / %%DOMINANT%% / %%SITUATION%% — aucun rappel,
+    # aucune image, aucune humeur, aucune situation.
+    if mask.get('prompt_minimal'):
+        _blocs = []
+        if mask.get('memoire_du_masque'):
+            _bs = _bloc_souvenirs_masque(mask, mask.get('memoire_du_masque'))
+            if _bs:
+                _blocs.append(_bs)
+        if mask.get('memoire_minimale'):
+            _b = _bloc_memoire_minimale(user_name)
+            if _b:
+                _blocs.append(_b)
+        if mask.get('system_prompt'):
+            _blocs.append(mask['system_prompt'].strip())
+        # Le personnage vient EN DERNIER : c'est la derniere chose que le
+        # modele lit avant de repondre, et ce qui tient le role.
+        return (chr(10) + chr(10)).join(_blocs)
 
     # Prompt du masque
     if mask.get('system_prompt'):
@@ -1400,6 +1509,19 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         'explication : 1-2 phrases claires, directement utiles pour comprendre la bonne réponse.\n'
         'theme : 3-5 mots décrivant le sujet précis (utilisé pour proposer une mini fiche).'
     )
+
+    # Rappel final du personnage — masques déclarant `persona_final: true`.
+    # POURQUOI CETTE OPTION (mesurée le 10/09/2026, masque de jeu) : le personnage
+    # arrive EN TÊTE du prompt, puis tout l'échafaudage technique (lexique, agenda,
+    # tags, mémoire) vient APRÈS. Or un petit modèle — venice-uncensored-1-2 en tête —
+    # suit ce qu'il lit EN DERNIER : le même personnage en tête était purement ignoré,
+    # répété en fin de prompt il incarnait le rôle. Opt-in : sans ce champ, le masque
+    # garde exactement le comportement d'avant.
+    if mask.get('persona_final') and mask.get('system_prompt'):
+        parts.append(
+            '\n\n=== PERSONNAGE (rappel final — prime sur tout ce qui précède) ===\n'
+            + mask['system_prompt']
+        )
 
     return '\n'.join(parts)
 
@@ -3844,8 +3966,41 @@ def _add_msg(thread_id: str, role: str, content: str) -> None:
     fil de la conversation en cours sans rien ecrire sur disque."""
     if _is_ghost_thread(thread_id):
         _ghost_session_push(thread_id, role, content)
+        _masque_souvenir_push(thread_id, role, content)
         return
     add_message(thread_id, role, content)
+
+
+def _masque_souvenir_push(thread_id: str, role: str, content: str) -> None:
+    """Mémoire privée d'un masque de jeu (champ `memoire_du_masque`).
+
+    EXCEPTION ASSUMÉE AU MODE FANTÔME : un fil fantôme n'écrit rien sur disque,
+    sauf ce fragment — et seulement si le masque le déclare. Le fichier vit dans
+    `data/souvenirs_masques/` (ignoré par git) et n'est relu que par ce masque :
+    il ne se mêle ni à la table `memory`, ni aux autres masques.
+    """
+    try:
+        if role != 'assistant':
+            return
+        _t = get_thread(thread_id)
+        _mid = (_t or {}).get('mask_id') or ''
+        if not _mid:
+            return
+        _mask = load_mask(_mid)
+        if not _mask.get('memoire_du_masque'):
+            return
+        _q = ''
+        for _m in reversed(_ghost_session_messages(thread_id, 6)):
+            if _m.get('role') == 'user':
+                _q = _m.get('content') or ''
+                break
+        _rep = re.sub(r'%%[^%]*%%', '', content or '').strip()
+        from core.database import add_souvenir_masque as _asm
+        _asm(_mid, _q, _rep)
+    except Exception as _e:
+        print('[HUB] Souvenir de masque non ecrit : %s' % _e)
+
+
 
 
 

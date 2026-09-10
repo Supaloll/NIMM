@@ -1485,6 +1485,65 @@ def get_memory_index() -> list:
 
 
 # ══════════════════════════════════════════
+# MÉMOIRE PRIVÉE D'UN MASQUE (fichier local, jamais versionné)
+# ══════════════════════════════════════════
+
+# Un masque de jeu peut garder « ses » souvenirs des échanges, ISOLÉS de la
+# mémoire NIMM (table `memory`) et des autres masques : un fichier par masque,
+# dans un dossier ignoré par git. Volontairement hors de la base — cette mémoire
+# est liée à un masque précis et ne doit jamais se mêler aux souvenirs de la
+# personne. Dossier : `data/souvenirs_masques/`.
+
+SOUVENIRS_MASQUES_DIR  = os.path.join(DATA_DIR, 'souvenirs_masques')
+SOUVENIRS_MASQUES_MAX  = 12     # fragments conservés par masque (les plus récents)
+SOUVENIRS_QUESTION_MAX = 90     # caractères gardés du message de l'utilisateur
+SOUVENIRS_REPONSE_MAX  = 110    # caractères gardés de la réponse du masque
+
+
+def _chemin_souvenirs(mask_id: str) -> str:
+    _nom = ''.join(c for c in (mask_id or '') if c.isalnum() or c in '-_')
+    return os.path.join(SOUVENIRS_MASQUES_DIR, _nom + '.json')
+
+
+def get_souvenirs_masque(mask_id: str, limit: int = None) -> list:
+    """Fragments mémorisés par ce masque (le plus récent en dernier)."""
+    if not mask_id:
+        return []
+    try:
+        with open(_chemin_souvenirs(mask_id), 'r', encoding='utf-8') as f:
+            _d = json.load(f)
+        _s = _d.get('souvenirs') or []
+    except (OSError, ValueError):
+        return []
+    return _s[-limit:] if limit else _s
+
+
+def add_souvenir_masque(mask_id: str, question: str, reponse: str) -> None:
+    """Ajoute un fragment (message de l'utilisateur + réponse du masque),
+    tronqué, et ne conserve que les SOUVENIRS_MASQUES_MAX derniers.
+    Écriture atomique : fichier temporaire puis remplacement."""
+    if not mask_id:
+        return
+    _q = ' '.join((question or '').split())[:SOUVENIRS_QUESTION_MAX]
+    _r = ' '.join((reponse or '').split())[:SOUVENIRS_REPONSE_MAX]
+    if not _q and not _r:
+        return
+    import datetime as _dt
+    _s = get_souvenirs_masque(mask_id)
+    _s.append({'ts': _dt.datetime.now().strftime('%d/%m %Hh%M'),
+               'laurent': _q, 'masque': _r})
+    _s = _s[-SOUVENIRS_MASQUES_MAX:]
+    try:
+        os.makedirs(SOUVENIRS_MASQUES_DIR, exist_ok=True)
+        _c = _chemin_souvenirs(mask_id)
+        with open(_c + '.tmp', 'w', encoding='utf-8') as f:
+            json.dump({'souvenirs': _s}, f, ensure_ascii=False, indent=2)
+        os.replace(_c + '.tmp', _c)
+    except OSError as _e:
+        print('[DB] Souvenir de masque non ecrit : %s' % _e)
+
+
+# ══════════════════════════════════════════
 # THREADS
 # ══════════════════════════════════════════
 
