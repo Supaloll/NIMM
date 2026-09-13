@@ -5582,6 +5582,11 @@ document.getElementById('gemini-tts-style')?.addEventListener('change', async (e
 // figé vieillirait à chaque sortie, celui-ci ne fait que des recommandations.
 // Conseils revus le 30/07/2026. Un modèle absent d'ici reste accessible sous
 // « Autres modèles disponibles ».
+// DeepSeek revu le 13/09/2026, catalogue interrogé en direct : le petit modèle
+// s'appelle désormais « deepseek-flash » (DeepSeek-V4.1-Flash) ; son ancien nom
+// « deepseek-v4-flash » a été RETIRÉ et « deepseek-reasoner » ne figure plus au
+// catalogue. L'API les accepte encore par tolérance, mais ils ne désignent plus
+// la version attendue : ne pas les remettre dans les listes ci-dessous.
 const MODELS_BY_PROVIDER = {
     anthropic: [
         { value: 'claude-haiku-4-5-20251001',  label: '💰 Claude Haiku — rapide, economique' },
@@ -5589,8 +5594,9 @@ const MODELS_BY_PROVIDER = {
         { value: 'claude-opus-5',               label: '💰💰💰 Claude Opus — le plus puissant' },
     ],
     deepseek: [
-        { value: 'deepseek-v4-flash',      label: '💰 DeepSeek V4 Flash — usage general' },
-        { value: 'deepseek-reasoner',  label: '💰💰 DeepSeek Reasoner — raisonnement avance' },
+        // Revu le 13/09/2026 — detail du renommage en commentaire au-dessus.
+        { value: 'deepseek-flash',     label: '💰 DeepSeek Flash V4.1 — usage general (contexte 1M)' },
+        { value: 'deepseek-v4-pro',    label: '💰💰💰 DeepSeek V4 Pro — le plus fort (1M, sans vision)' },
     ],
     gemini: [
         { value: 'gemini-3.6-flash',          label: '💰 Gemini 3.6 Flash — rapide, economique' },

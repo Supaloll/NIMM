@@ -199,7 +199,7 @@ def build_prompt(user_msg: str, assistant_reply: str, user_name: str = "Laurent"
 # ══════════════════════════════════════════════════════════
 
 def appel_deepseek(prompt: str, api_key: str, model: str) -> tuple:
-    model = model or "deepseek-v4-flash"
+    model = model or "deepseek-flash"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type":  "application/json",
@@ -348,7 +348,7 @@ def main():
 
     # Modèle par défaut selon provider
     if not model:
-        model = "claude-haiku-4-5-20251001" if provider == "anthropic" else "deepseek-v4-flash"
+        model = "claude-haiku-4-5-20251001" if provider == "anthropic" else "deepseek-flash"
 
     _titre(f"NIMM — DIAGNOSTIC EXTRACTION TRIPLETS ({provider.upper()})")
     print(f"  DB      : {os.path.abspath(DB_PATH)}")

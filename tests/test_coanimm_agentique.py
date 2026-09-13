@@ -2987,10 +2987,15 @@ def test_modeles_conseilles():
     racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
 
-    # (1) Modèles annoncés « Shut down » par Google : ne jamais les proposer
+    # (1) Modèles éteints ou renommés chez leur fournisseur : ne jamais les proposer.
+    #     Google annonce ses « Shut down » ; chez DeepSeek, le catalogue du 13/09/2026
+    #     ne liste plus que « deepseek-flash » (V4.1) et « deepseek-v4-pro ». Les
+    #     anciens noms « deepseek-v4-flash » (retiré) et « deepseek-reasoner »
+    #     répondent encore par tolérance, mais ne désignent plus la bonne version.
     eteints = ('gemini-2.0-flash', 'gemini-2.0-flash-lite',
                'gemini-3.1-flash-lite-preview', 'gemini-3-pro-preview',
-               'imagen-3.0', 'imagen-4.0')
+               'imagen-3.0', 'imagen-4.0',
+               'deepseek-v4-flash', 'deepseek-reasoner')
     debut = app.index('const MODELS_BY_PROVIDER')
     bloc = app[debut:app.index('};', debut)]
     for mort in eteints:

@@ -221,7 +221,11 @@ def _detail_erreur_api(corps: str) -> str:
 # à l'autre : on ne le promet donc pas, et NIMM retombe proprement sur un flux
 # sans outils plutôt que d'envoyer une requête qui serait ignorée.
 FOURNISSEURS_OPENAI_COMPAT = {
-    'deepseek':   {'base': 'https://api.deepseek.com/v1',     'modele': 'deepseek-v4-flash',
+    # DeepSeek a renommé ses modèles (vérifié le 13/09/2026, catalogue interrogé
+    # en direct) : `deepseek-flash` = DeepSeek-V4.1-Flash est le nom officiel ;
+    # `deepseek-v4-flash` n'est plus qu'un ancien nom encore accepté — « the
+    # corresponding models have been retired ».
+    'deepseek':   {'base': 'https://api.deepseek.com/v1',     'modele': 'deepseek-flash',
                    'outils': True},
     'openai':     {'base': 'https://api.openai.com/v1',       'modele': 'gpt-4o-mini',
                    'outils': True},
@@ -281,6 +285,10 @@ def fournisseur_de_secours(provider_courant: str, api_keys: dict = None) -> str:
 # paramètres d'échantillonnage (deepseek-reasoner : « Not Supported Features:
 # Function Calling, FIM ; Not Supported Parameters: temperature, top_p… »).
 # Leur envoyer quand même produit au mieux une requête ignorée, au pire un refus.
+# NB (13/09/2026) : `deepseek-reasoner` ne figure plus au catalogue DeepSeek — c'est
+# `deepseek-flash` qui gère désormais lui-même son mode réflexion (`thinking`).
+# L'API l'accepte encore par tolérance ; le nom est laissé ici comme filet, car il
+# ne désigne plus la version attendue.
 _MODELES_SANS_OUTILS = ('deepseek-reasoner',)
 
 # Modèles SANS APPEL D'OUTILS chez un fournisseur pourtant déclaré « outillé ».
@@ -331,7 +339,8 @@ def reflexion_deepseek_desactivee() -> bool:
 
     QUESTION OUVERTE PAR LAURENT (07/08/2026) : couper la réflexion peut-il
     nuire sur les questions complexes ? Probablement, et c'est bien pour ça
-    que ce réglage existe. `deepseek-v4-*` réfléchit d'office à effort élevé :
+    que ce réglage existe. `deepseek-flash` et `deepseek-v4-pro` réfléchissent
+    d'office, à effort élevé (défaut DeepSeek : `thinking` activé, effort `high`) :
     cette réflexion est INVISIBLE mais elle consomme le budget `max_tokens`
     et ajoute plusieurs secondes avant le premier mot. Sur les tâches courtes
     — titre de fil, extraction mémoire, synthèse — elle vidait le budget avant
@@ -451,7 +460,7 @@ def get_api_key(provider: str, db_keys: dict = None) -> Optional[str]:
 
 _PROVIDER_DEFAULT_MODEL = {
     'anthropic':  'claude-sonnet-4-6',
-    'deepseek':   'deepseek-v4-flash',
+    'deepseek':   'deepseek-flash',
     'openai':     'gpt-4o-mini',
     'openrouter': 'openai/gpt-4o-mini',
     'mistral':    'mistral-small-latest',
@@ -1254,7 +1263,7 @@ async def call_llm(
         return await _call_anthropic(messages, model, system_prompt, max_tokens, temperature, api_keys, images,
                                      tools=tools, output_schema=output_schema, thinking_budget=thinking_budget)
     elif provider == 'deepseek':
-        return await _call_openai_compat(messages, model or 'deepseek-v4-flash', system_prompt, max_tokens, temperature, api_keys, 'deepseek', _base_openai_compat('deepseek'), images=images, output_schema=output_schema)
+        return await _call_openai_compat(messages, model or 'deepseek-flash', system_prompt, max_tokens, temperature, api_keys, 'deepseek', _base_openai_compat('deepseek'), images=images, output_schema=output_schema)
     elif provider == 'gemini':
         return await _call_gemini(messages, model, system_prompt, max_tokens, temperature, api_keys, tools=tools)
     elif provider == 'openai':
