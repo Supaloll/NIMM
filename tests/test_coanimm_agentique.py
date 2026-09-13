@@ -3013,6 +3013,58 @@ def test_modeles_conseilles():
     ok("modèles conseillés : aucun modèle éteint, catalogue vivant fusionné, revue datée")
 
 
+def test_themes_complets():
+    """Un thème incomplet ne se voit qu'à l'usage — donc on le vérifie ici.
+
+    Le socle visuel tient à une poignée de variables CSS. Un thème qui en oublie une
+    n'échoue pas : il HÉRITE silencieusement la valeur d'un autre thème. Deux pannes
+    réelles guettées : un texte clair écrit pour un accent gris qui devient invisible
+    sur l'accent jaune du thème Amstrad (d'où --on-accent, vérifié ici), et une
+    couleur moderne qui ressort au milieu d'un thème rétro.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    css = open(os.path.join(racine, 'frontend', 'styles.css'), encoding='utf-8').read()
+
+    def variables(selecteur):
+        m = re.search(re.escape(selecteur) + r'\s*\{', css)
+        assert m, 'bloc CSS introuvable : ' + selecteur
+        i = css.index('{', m.start())
+        profondeur, j = i, i
+        while j < len(css):
+            if css[j] == '{':
+                profondeur += 1
+            elif css[j] == '}':
+                profondeur -= 1
+                if profondeur == 0:
+                    break
+            j += 1
+        return set(re.findall(r'(--[a-z0-9-]+)\s*:', css[i:j]))
+
+    # (1) Les trois thèmes partagent le même socle
+    reference = variables(':root')
+    assert len(reference) >= 15, 'socle de variables suspicieusement maigre : %d' % len(reference)
+    for theme in ('light', 'cpc'):
+        manquantes = sorted(reference - variables('[data-theme="%s"]' % theme))
+        assert not manquantes, \
+            'thème %s : variable(s) manquante(s) %s — elle(s) hériterai(en)t d\'un autre thème' \
+            % (theme, manquantes)
+
+    # (2) Le texte posé sur un fond d'accent est déclaré, et utilisé
+    assert '--on-accent' in reference, 'déclarer --on-accent dans :root'
+    assert 'var(--on-accent)' in css, 'aucun texte ne se sert de --on-accent'
+    index = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    for trouve in re.findall(r'style="[^"]*var\(--accent[^"]*"', index):
+        assert 'color:#fff' not in trouve, \
+            'texte blanc en dur sur un fond d\'accent : invisible si l\'accent est jaune'
+
+    # (3) Le sélecteur de thème propose bien les trois thèmes
+    app = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    assert "const _THEMES" in app and "'cpc'" in app, 'thème Amstrad absent du script'
+    for valeur in ('dark', 'light', 'cpc'):
+        assert 'value="%s"' % valeur in index, 'thème %s absent du sélecteur' % valeur
+    ok("thèmes : socle de variables identique partout, texte sur accent protégé, 3 thèmes proposés")
+
+
 def test_contrat_interface_serveur():
     """Le piège le plus fréquent de NIMM : une fonction inatteignable.
 
@@ -5356,6 +5408,7 @@ if __name__ == '__main__':
                test_imagerie_reglee, test_video_veo, test_alt_honnete,
                test_contrat_interface_serveur,
                test_accessibilite_des_medias, test_modeles_conseilles,
+               test_themes_complets,
                test_fournisseurs_cables_partout,
                test_anthropic_parametres_echantillonnage,
                test_erreur_api_explique_la_cause,

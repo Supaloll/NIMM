@@ -15,7 +15,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500;600&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260909-geoloc">
+<link rel="stylesheet" href="/static/styles.css?v=20260913-amstrad">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -414,7 +414,7 @@
 
             <!-- Sélecteur de mode -->
             <div style="display:flex;gap:6px;margin-bottom:10px;">
-                <button id="mode-mask-btn" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;font-size:0.85rem;" aria-pressed="true" aria-label="Mode Masque — personnalité prédéfinie"><span aria-hidden="true">🎭</span> Masque</button>
+                <button id="mode-mask-btn" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer;font-size:0.85rem;" aria-pressed="true" aria-label="Mode Masque — personnalité prédéfinie"><span aria-hidden="true">🎭</span> Masque</button>
                 <button id="mode-potards-btn" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-main);cursor:pointer;font-size:0.85rem;" aria-pressed="false" aria-label="Mode Potards — personnalité par curseurs"><span aria-hidden="true">🎛️</span> Potards</button>
             </div>
 
@@ -572,7 +572,7 @@
                 <div style="display:flex;gap:8px;">
                     <input id="stt-dict-from" placeholder="Whisper dit…" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.85rem;">
                     <input id="stt-dict-to" placeholder="Correction…" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:0.85rem;">
-                    <button id="stt-dict-add" style="padding:6px 14px;border-radius:8px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-size:0.85rem;">Ajouter</button>
+                    <button id="stt-dict-add" style="padding:6px 14px;border-radius:8px;border:none;background:var(--accent);color:var(--on-accent);cursor:pointer;font-size:0.85rem;">Ajouter</button>
                 </div>
             </div>
         </div>
@@ -1080,16 +1080,15 @@ Analyse les sentiments de : ..."
         <details class="settings-section-details">
         <summary class="settings-section-title">🎨 Apparence</summary>
 
-        <!-- ── POLICE ── -->
+        <!-- ── THÈME ── -->
         <div class="setting-group">
-            <label>🌙 Thème</label>
-            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
-                <label class="toggle-switch">
-                    <input type="checkbox" id="theme-toggle" aria-label="Activer le mode clair">
-                    <span class="toggle-slider"></span>
-                </label>
-                <span style="font-size:0.78rem;color:var(--text-muted);">Mode clair</span>
-            </div>
+            <label for="theme-select">🌙 Thème</label>
+            <select id="theme-select" class="routing-select" aria-label="Thème de l'interface"
+                style="width:100%;margin-top:6px;">
+                <option value="dark">🌙 Sombre</option>
+                <option value="light">☀️ Clair</option>
+                <option value="cpc">📺 Amstrad CPC — noir, jaune, blanc</option>
+            </select>
         </div>
 
         <div class="setting-group">
@@ -1126,7 +1125,7 @@ Analyse les sentiments de : ..."
         <!-- ── MISE À JOUR ── -->
         <div class="setting-group" style="padding:4px 0 8px;">
             <label>🔄 Mise à jour</label>
-            <button id="btn-update" style="margin-top:8px;padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;">
+            <button id="btn-update" style="margin-top:8px;padding:8px 16px;background:var(--accent);color:var(--on-accent);border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;">
                 Vérifier et installer les mises à jour
             </button>
             <div id="update-status" style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);" aria-live="polite" aria-atomic="true"></div>
@@ -1206,7 +1205,7 @@ Analyse les sentiments de : ..."
             <div id="agenda-form-toggle-row" style="display:flex;justify-content:space-between;align-items:center;">
                 <span style="font-size:0.82rem;color:var(--text-muted);">Ajouter un rendez-vous</span>
                 <button id="agenda-form-toggle" aria-label="Afficher le formulaire d'ajout"
-                    style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:0.82rem;">+ Nouveau</button>
+                    style="background:var(--accent);color:var(--on-accent);border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:0.82rem;">+ Nouveau</button>
             </div>
             <div id="agenda-form" class="hidden" style="margin-top:12px;display:flex;flex-direction:column;gap:10px;" role="group" aria-label="Ajouter un rappel">
                 <div>
@@ -1560,7 +1559,7 @@ Analyse les sentiments de : ..."
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <button id="coanimm-plan-ok"
-                    style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:8px 16px;color:#fff;font-size:0.88rem;cursor:pointer;font-weight:600;">OK, vas-y !</button>
+                    style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:8px 16px;color:var(--on-accent);font-size:0.88rem;cursor:pointer;font-weight:600;">OK, vas-y !</button>
                 <button id="coanimm-plan-no"
                     style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:8px 16px;color:var(--text);font-size:0.88rem;cursor:pointer;">Non, ça n'va pas</button>
                 <button id="coanimm-crapauduc-btn"
@@ -1643,7 +1642,7 @@ Analyse les sentiments de : ..."
             <textarea id="coanimm-result-stderr" readonly rows="4" style="width:100%;font-family:monospace;font-size:0.8rem;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:6px;"></textarea>
             <div id="coanimm-blocked-path" role="alert" hidden style="margin-top:10px;padding:10px;border:2px solid var(--accent,#6ea8fe);border-radius:8px;">
                 <p id="coanimm-blocked-path-msg" style="font-size:0.85rem;margin:0 0 8px;"></p>
-                <button type="button" id="coanimm-blocked-path-add" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">Ajouter ce dossier aux dossiers autorisés</button>
+                <button type="button" id="coanimm-blocked-path-add" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:var(--on-accent);font-size:0.85rem;cursor:pointer;font-weight:600;">Ajouter ce dossier aux dossiers autorisés</button>
                 <p id="coanimm-blocked-path-fb" style="font-size:0.82rem;margin:6px 0 0;" aria-live="polite"></p>
             </div>
             <div id="coanimm-result-files" hidden style="margin-top:10px;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;" aria-label="Fichiers produits" role="region"></div>
@@ -1651,7 +1650,7 @@ Analyse les sentiments de : ..."
                 <p id="coanimm-interact-question" style="font-size:0.88rem;font-weight:600;margin:0 0 8px;" aria-live="polite"></p>
                 <label for="coanimm-interact-input" style="font-size:0.82rem;display:block;margin-bottom:4px;">Votre réponse :</label>
                 <textarea id="coanimm-interact-input" rows="2" placeholder="Tapez votre réponse…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.85rem;margin-bottom:8px;resize:vertical;"></textarea>
-                <button id="coanimm-interact-submit" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:7px 18px;color:#fff;font-size:0.88rem;cursor:pointer;font-weight:600;">Envoyer</button>
+                <button id="coanimm-interact-submit" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:7px 18px;color:var(--on-accent);font-size:0.88rem;cursor:pointer;font-weight:600;">Envoyer</button>
             </div>
             <div id="coanimm-save-panel" hidden style="margin-top:12px;padding:10px;border:1px solid var(--border);border-radius:8px;">
                 <p style="font-size:0.85rem;font-weight:600;margin:0 0 8px;">Enregistrer ce script dans la Promptothèque</p>
@@ -1663,7 +1662,7 @@ Analyse les sentiments de : ..."
                     <label for="coanimm-save-skill-check" style="font-size:0.82rem;margin:0;cursor:pointer;">Aussi mémoriser la méthode comme bond réutilisable (la prochaine tâche semblable le réutilisera)</label>
                 </div>
                 <div style="display:flex;gap:8px;">
-                    <button id="coanimm-save-confirm" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:0.85rem;cursor:pointer;font-weight:600;">Enregistrer</button>
+                    <button id="coanimm-save-confirm" style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:6px 14px;color:var(--on-accent);font-size:0.85rem;cursor:pointer;font-weight:600;">Enregistrer</button>
                     <button id="coanimm-save-cancel"  style="background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--text);font-size:0.85rem;cursor:pointer;">Pas maintenant</button>
                 </div>
                 <p id="coanimm-save-feedback" style="font-size:0.82rem;margin:6px 0 0;" aria-live="polite"></p>
@@ -1682,7 +1681,7 @@ Analyse les sentiments de : ..."
                     placeholder="Ex. : Analyse ce tableau de données et trace un histogramme par catégorie."
                     style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:0.85rem;margin-bottom:8px;resize:vertical;"></textarea>
                 <button type="button" id="coanimm-cloud-ci-run"
-                    style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:7px 18px;color:#fff;font-size:0.88rem;cursor:pointer;font-weight:600;">
+                    style="background:var(--accent,#6ea8fe);border:none;border-radius:6px;padding:7px 18px;color:var(--on-accent);font-size:0.88rem;cursor:pointer;font-weight:600;">
                     Exécuter via Mistral
                 </button>
                 <div id="coanimm-cloud-ci-status" role="status" aria-live="polite" style="margin-top:8px;font-size:0.82rem;min-height:1em;"></div>
@@ -2504,7 +2503,7 @@ Analyse les sentiments de : ..."
 <!-- BOUTON FLOTTANT EXPORT -->
 <button id="export-float-btn" aria-live="polite" aria-label="Exporter les messages marqués"
         style="display:none;position:fixed;bottom:90px;right:20px;z-index:900;
-               background:var(--accent,#6ea8fe);color:#fff;border:none;border-radius:24px;
+               background:var(--accent,#6ea8fe);color:var(--on-accent);border:none;border-radius:24px;
                padding:10px 18px;font-size:0.92rem;cursor:pointer;align-items:center;gap:8px;
                box-shadow:0 4px 16px rgba(0,0,0,0.25);"
         onclick="openExportModal()">📤 Exporter (0)</button>
@@ -2539,7 +2538,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260910-venice2"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260913-amstrad"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

@@ -6149,22 +6149,69 @@ function _initFontPicker() {
     document.addEventListener('click', e => { if (picker.getAttribute('aria-expanded') === 'true' && !picker.contains(e.target)) _close(); });
 }
 
-// ── Thème clair / sombre ──
+// ── Thème : sombre / clair / Amstrad CPC ──
+// Le thème Amstrad impose SA police (VT323). On passe par le MÊME mécanisme que le
+// sélecteur de police (« nimm-font » + police du body) : une règle CSS en dur aurait
+// un impact sur les autres thèmes, et la police choisie par l'utilisateur reprendrait
+// le dessus au chargement suivant. Le choix de l'utilisateur est mis de côté pendant
+// le thème Amstrad, puis restitué en sortant — rien n'est perdu.
+const _THEMES            = ['dark', 'light', 'cpc'];
+const _META_THEME_COLOR  = { dark: '#0d0d0d', light: '#f5f0eb', cpc: '#000000' };
+const _POLICE_CPC        = "'VT323', monospace";
+
+function _appliquerPolice(value, nom) {
+    if (!value) return;
+    document.body.style.fontFamily = value;
+    localStorage.setItem('nimm-font', value);
+    const cur = document.getElementById('font-picker-current');
+    if (cur) {
+        cur.textContent = nom || value;
+        cur.style.fontFamily = value;
+    }
+    document.getElementById('font-picker-list')?.querySelectorAll('.font-picker-option').forEach(o => {
+        o.setAttribute('aria-selected', o.dataset.font === value ? 'true' : 'false');
+    });
+}
+
+// Nom affiché d'une police rangée dans localStorage (lu dans la liste du sélecteur)
+function _nomPolice(value) {
+    const opt = document.getElementById('font-picker-list')
+        ?.querySelector('.font-picker-option[data-font="' + String(value).replace(/"/g, '\\"') + '"]');
+    return opt?.querySelector('.fpn')?.textContent || value;
+}
+
+function _appliquerTheme(nom) {
+    const theme = _THEMES.includes(nom) ? nom : 'dark';
+
+    if (theme === 'dark') delete document.documentElement.dataset.theme;
+    else                  document.documentElement.dataset.theme = theme;
+    localStorage.setItem('nimm-theme', theme);
+
+    // Barre d'état du téléphone (PWA) : elle suit la couleur du thème
+    document.querySelector('meta[name="theme-color"]')
+        ?.setAttribute('content', _META_THEME_COLOR[theme]);
+
+    const police = localStorage.getItem('nimm-font') || '';
+    if (theme === 'cpc') {
+        // On met de côté le choix de l'utilisateur si ce n'est pas déjà la police rétro
+        if (police.indexOf('VT323') === -1) localStorage.setItem('nimm-font-avant-cpc', police);
+        _appliquerPolice(_POLICE_CPC, 'VT323');
+    } else if (localStorage.getItem('nimm-font-avant-cpc') !== null) {
+        // Sortie du thème Amstrad : on rend sa police à l'utilisateur
+        const avant = localStorage.getItem('nimm-font-avant-cpc') || '';
+        localStorage.removeItem('nimm-font-avant-cpc');
+        if (avant) _appliquerPolice(avant, _nomPolice(avant));
+        else       delete document.body.style.fontFamily;
+    }
+}
+
 (function() {
-    const saved = localStorage.getItem('nimm-theme');
-    if (saved === 'light') document.documentElement.dataset.theme = 'light';
-    const toggle = document.getElementById('theme-toggle');
-    if (toggle) {
-        toggle.checked = (localStorage.getItem('nimm-theme') === 'light');
-        toggle.addEventListener('change', () => {
-            if (toggle.checked) {
-                document.documentElement.dataset.theme = 'light';
-                localStorage.setItem('nimm-theme', 'light');
-            } else {
-                delete document.documentElement.dataset.theme;
-                localStorage.setItem('nimm-theme', 'dark');
-            }
-        });
+    const select = document.getElementById('theme-select');
+    const actuel = localStorage.getItem('nimm-theme') || 'dark';
+    _appliquerTheme(_THEMES.includes(actuel) ? actuel : 'dark');
+    if (select) {
+        select.value = _THEMES.includes(actuel) ? actuel : 'dark';
+        select.addEventListener('change', () => _appliquerTheme(select.value));
     }
 })();
 
