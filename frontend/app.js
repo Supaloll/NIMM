@@ -1470,6 +1470,10 @@ async function init() {
         console.error('[NIMM] Erreur onboarding :', e);
     }
 
+    // Rappels hors chat — la modale s'ouvre dès l'entrée dans le profil,
+    // même si l'utilisateur n'écrit pas (voir verifierRappelsOuverture).
+    verifierRappelsOuverture();
+
     await loadThreads();
 
     // Créer un fil par défaut si aucun
@@ -6993,6 +6997,93 @@ function renderAgenda(rappels) {
         });
     });
 }
+
+// ══════════════════════════════════════════
+// RAPPELS HORS CHAT — modale automatique à l'entrée du profil
+// ══════════════════════════════════════════
+
+let _rappelsOuverture = [];   // rappels affichés dans la modale d'ouverture
+
+async function verifierRappelsOuverture() {
+    try {
+        const r = await fetch('/api/rappels/a-signaler');
+        if (!r.ok) return;                      // serveur en retard : silencieux
+        _rappelsOuverture = await r.json();
+    } catch (e) {
+        return;                                 // serveur indisponible — on n'interrompt rien
+    }
+    _majPastilleAgenda(_rappelsOuverture.length);
+    if (!_rappelsOuverture.length) return;
+    const modal = document.getElementById('rappels-alerte-modal');
+    if (!modal) return;
+    _renderRappelsOuverture();
+    _openModal(modal);
+}
+
+function _libelleDelai(rap) {
+    if (rap.retard) {
+        const j = Math.abs(rap.delta);
+        return (j === 1 ? 'hier' : 'il y a ' + j + ' jours') + ' — non confirmé';
+    }
+    if (rap.delta === 0) return "aujourd'hui";
+    if (rap.delta === 1) return 'demain';
+    return 'dans ' + rap.delta + ' jours';
+}
+
+function _renderRappelsOuverture() {
+    const list = document.getElementById('rappels-alerte-list');
+    if (!list) return;
+    list.innerHTML = _rappelsOuverture.map(function(rap) {
+        const badge = _TYPE_BADGE[rap.type] || '⚪';
+        return '<div class="rappels-alerte-item">' +
+            '<span class="rappels-alerte-ico" aria-hidden="true">' + badge + '</span>' +
+            '<div>' +
+                '<div class="rappels-alerte-desc">' + _esc(rap.description) + '</div>' +
+                '<div class="rappels-alerte-date">📅 ' + _formatDate(rap.date) + ' · ' + _libelleDelai(rap) + '</div>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+// Pastille chiffrée sur le bouton Agenda — visible même modale fermée
+function _majPastilleAgenda(n) {
+    const btn = document.getElementById('toggle-agenda');
+    if (!btn) return;
+    let dot = btn.querySelector('.agenda-pastille');
+    if (!n) { if (dot) dot.remove(); return; }
+    if (!dot) {
+        dot = document.createElement('span');
+        dot.className = 'agenda-pastille';
+        btn.appendChild(dot);
+    }
+    dot.textContent = String(n);
+}
+
+// « C'est noté » — marque chaque seuil comme annoncé : le chat ne le répétera pas
+async function _rappelsOuvertureMarquerVus() {
+    const lot = _rappelsOuverture.slice();
+    _rappelsOuverture = [];
+    for (const rap of lot) {
+        try {
+            await fetch('/api/rappels/' + rap.id + '/vu', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ seuil: rap.seuil })
+            });
+        } catch (e) { /* silencieux */ }
+    }
+    _majPastilleAgenda(0);
+    const modal = document.getElementById('rappels-alerte-modal');
+    if (modal) _closeModal(modal);
+}
+
+document.getElementById('rappels-alerte-ok')?.addEventListener('click', _rappelsOuvertureMarquerVus);
+
+document.getElementById('rappels-alerte-agenda')?.addEventListener('click', function() {
+    _closeModal(document.getElementById('rappels-alerte-modal'));
+    document.getElementById('agenda-modal')?.classList.remove('hidden');
+    loadAgenda();
+});
 
 function _esc(str) {
     return String(str == null ? '' : str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');

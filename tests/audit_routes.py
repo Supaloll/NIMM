@@ -237,6 +237,33 @@ async def test_rappels(c: httpx.AsyncClient):
     ids_actifs = [rp["id"] for rp in r.json()]
     record("G6", "Rappel clos absent des actifs", rid not in ids_actifs)
 
+    # ── Rappels hors chat — modale ouverte à l'entrée du profil ──
+    r = await c.post("/api/rappels", json={
+        "description":   "[AUDIT] Rappel du jour",
+        "date_echeance": time.strftime("%Y-%m-%d"),
+        "type_rappel":   "normal"
+    })
+    rid_jour = r.json().get("id") if r.status_code == 200 else None
+    record("G6", "POST /api/rappels (rappel du jour)", rid_jour is not None)
+    if rid_jour is None:
+        return
+
+    r = await c.get("/api/rappels/a-signaler")
+    signales = r.json() if r.status_code == 200 else []
+    ids_signal = [rp["id"] for rp in signales]
+    record("G6", "GET /api/rappels/a-signaler", r.status_code == 200 and rid_jour in ids_signal,
+           f"{len(signales)} a signaler")
+
+    seuil = next((rp["seuil"] for rp in signales if rp["id"] == rid_jour), "j1")
+    r = await c.post(f"/api/rappels/{rid_jour}/vu", json={"seuil": seuil})
+    record("G6", "POST /api/rappels/{id}/vu", r.status_code == 200, f"seuil={seuil}")
+
+    r = await c.get("/api/rappels/a-signaler")
+    ids_signal = [rp["id"] for rp in r.json()] if r.status_code == 200 else []
+    record("G6", "Rappel marque 'vu' absent de a-signaler", rid_jour not in ids_signal)
+
+    await c.delete(f"/api/rappels/{rid_jour}")
+
 
 # ══════════════════════════════════════════
 # G7 — BIBLIOTHÈQUE

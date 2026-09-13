@@ -1022,6 +1022,93 @@ def _bloc_memoire_minimale(user_name: str) -> str:
             + chr(10).join(lignes) + chr(10) + ']')
 
 
+# ══════════════════════════════════════════
+# AGENDA — seuils de signalement (source unique)
+# ══════════════════════════════════════════
+
+def _seuil_rappel(delta: int, type_rappel: str, emis: list):
+    """Retourne le seuil à annoncer ('j7' / 'j2' / 'j1') ou None si rien à signaler.
+
+    RÈGLE UNIQUE, partagée par le prompt du chat et par la modale d'ouverture :
+      — critique  : annoncé à 7, 2 puis 1 jour de l'échéance
+      — important : annoncé la veille
+      — normal    : annoncé la veille
+    Un seuil déjà listé dans `emis` n'est pas réannoncé.
+    """
+    if type_rappel == 'critique':
+        if delta <= 1 and 'j1' not in emis:
+            return 'j1'
+        if delta <= 2 and 'j2' not in emis:
+            return 'j2'
+        if delta <= 7 and 'j7' not in emis:
+            return 'j7'
+    elif type_rappel == 'important' and delta <= 1 and 'j1' not in emis:
+        return 'j1'
+    elif type_rappel == 'normal' and delta <= 1 and 'j1' not in emis:
+        return 'j1'
+    return None
+
+
+def get_rappels_a_signaler() -> list:
+    """Rappels à annoncer MAINTENANT — alimente la modale ouverte à l'entrée du profil.
+
+    Un utilisateur qui ouvre NIMM sans écrire ne recevait rien : les rappels
+    n'étaient poussés que par le prompt du chat. Cette fonction applique la
+    même règle (`_seuil_rappel`) hors conversation.
+
+    Cas particuliers :
+    — rappel « flexible » sans date : jamais annoncé ;
+    — échéance dépassée et jamais annoncée : renvoyé avec `retard = True`
+      (sinon il disparaissait en silence : `perimer_rappels_depasses()` le
+      classe 'perime' au message suivant, sans que l'utilisateur ait rien vu) ;
+    — échéance dépassée mais déjà annoncée avant : ignoré (l'utilisateur a été prévenu).
+
+    Retourne une liste de dicts : id, description, date, type, seuil, delta, retard.
+    """
+    import json as _json
+    from datetime import date as _date
+
+    resultat   = []
+    aujourdhui = _date.today()
+
+    for rap in get_rappels_actifs():
+        date_txt = (rap.get('date_echeance') or '').strip()
+        if not date_txt:
+            continue  # flexible sans date — silencieux
+        try:
+            echeance = _date.fromisoformat(date_txt[:10])
+        except Exception:
+            continue
+        try:
+            emis = _json.loads(rap.get('rappels_emis') or '[]')
+        except Exception:
+            emis = []
+
+        delta       = (echeance - aujourdhui).days
+        type_rappel = rap.get('type', 'normal')
+
+        if delta < 0:
+            if emis:
+                continue  # déjà annoncé avant l'échéance — pas de relance
+            seuil = 'retard'
+        else:
+            seuil = _seuil_rappel(delta, type_rappel, emis)
+            if not seuil:
+                continue
+
+        resultat.append({
+            'id':          rap['id'],
+            'description': rap['description'],
+            'date':        date_txt,
+            'type':        type_rappel,
+            'seuil':       seuil,
+            'delta':       delta,
+            'retard':      delta < 0,
+        })
+
+    return resultat
+
+
 def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = None, presence_note: str = '', last_dominant: str = '', user_name: str = '', biblio_context: str = '', force_mem: bool = False, recent_messages: list = None, location: str = '', session_bilans: list = None, doc_context: str = '', doc_fil: str = '', doc_fil_titre: str = '') -> str:
     parts = []
 
@@ -1210,18 +1297,8 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
             _emis  = _json_rappels.loads(_r.get('rappels_emis', '[]') or '[]')
 
             # Déterminer si ce rappel doit être signalé aujourd'hui
-            _signal = None
-            if _type == 'critique':
-                if _delta <= 1 and 'j1' not in _emis:
-                    _signal = 'j1'
-                elif _delta <= 2 and 'j2' not in _emis:
-                    _signal = 'j2'
-                elif _delta <= 7 and 'j7' not in _emis:
-                    _signal = 'j7'
-            elif _type == 'important' and _delta <= 1 and 'j1' not in _emis:
-                _signal = 'j1'
-            elif _type == 'normal' and _delta <= 1 and 'j1' not in _emis:
-                _signal = 'j1'
+            # (règle commune avec la modale d'ouverture — voir _seuil_rappel)
+            _signal = _seuil_rappel(_delta, _type, _emis)
 
             if _signal:
                 _rappels_a_signaler.append({

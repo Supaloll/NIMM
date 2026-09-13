@@ -2956,6 +2956,48 @@ body {
     color: var(--text);
 }
 
+/* ── Pastille « rappels à voir » sur le bouton Agenda ── */
+#toggle-agenda { position: relative; }
+.agenda-pastille {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    border-radius: 8px;
+    background: #e5484d;
+    color: #fff;
+    font-size: 0.62rem;
+    font-weight: 600;
+    line-height: 15px;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* ── Modale des rappels à l'ouverture (hors chat) ── */
+.rappels-alerte-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: var(--bg-input);
+}
+.rappels-alerte-ico { font-size: 1.05rem; line-height: 1.2; }
+.rappels-alerte-desc {
+    font-size: 0.92rem;
+    color: var(--text);
+    word-break: break-word;
+}
+.rappels-alerte-date {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
 .agenda-edit-form {
     margin-top: 8px;
     display: flex;

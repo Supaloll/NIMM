@@ -4602,6 +4602,27 @@ async def add_rappel(req: RappelCreate):
     rid = create_rappel(req.description.strip(), req.date_echeance or None, req.type_rappel)
     return {"status": "ok", "id": rid}
 
+class RappelVu(BaseModel):
+    seuil: str = 'j1'
+
+@app.get("/api/rappels/a-signaler")
+async def list_rappels_a_signaler():
+    """Rappels à annoncer dès l'ouverture de NIMM — hors conversation.
+
+    Alimente la modale automatique ouverte à l'entrée du profil. Même règle de
+    seuils que le prompt du chat (core/hub.py::_seuil_rappel), plus les rappels
+    en retard jamais annoncés.
+    """
+    from core.hub import get_rappels_a_signaler
+    return get_rappels_a_signaler()
+
+@app.post("/api/rappels/{rappel_id}/vu")
+async def rappel_vu(rappel_id: int, req: RappelVu):
+    """Marque un seuil comme annoncé — la modale remplace le signalement du chat."""
+    from core.database import marquer_rappel_emis
+    marquer_rappel_emis(rappel_id, req.seuil)
+    return {"status": "ok", "id": rappel_id, "seuil": req.seuil}
+
 @app.patch("/api/rappels/{rappel_id}")
 async def edit_rappel(rappel_id: int, req: RappelUpdate):
     """Modifie description, date ou type d'un rappel existant."""
