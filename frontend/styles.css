@@ -2190,8 +2190,12 @@ body {
     #mobile-thread-btn { flex: 0; }
     #top-right { margin-left: auto; }
 
-    /* Rendre le hamburger visible et cliquable */
-    #toggle-history {
+    /* Rendre le hamburger visible et cliquable.
+       Sélecteur volontairement PLUS SPÉCIFIQUE que la règle générale située plus bas
+       dans le fichier (#toggle-history { background:none; border:none; … }) : à
+       spécificité égale, c'est la dernière qui gagne — cette mise en valeur ne
+       s'appliquait donc jamais sur mobile. */
+    #top-bar #toggle-history {
         background: var(--bg-input);
         border: 1px solid var(--border);
         border-radius: 8px;
@@ -2242,6 +2246,12 @@ body {
 #toggle-settings svg {
     color: var(--accent);
     display: block;
+    /* Taille explicite : dans un conteneur flex, un SVG sans dimensions peut se
+       réduire à zéro sur Safari (iPhone) — l'icône disparaît alors que le bouton
+       reste cliquable. Le bouton Agenda déclare déjà sa taille pour la même raison. */
+    width: 20px;
+    height: 16px;
+    flex: none;
 }
 #toggle-history,
 #toggle-settings {

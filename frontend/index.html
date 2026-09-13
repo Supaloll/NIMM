@@ -5,7 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<!-- « black-translucent » faisait passer le contenu SOUS la barre d'état iPhone :
+     la barre du haut (donc le bouton hamburger, tout à gauche) se retrouvait
+     cachée derrière l'heure et la batterie, en appli installée sur l'écran
+     d'accueil. Avec « black », iOS réserve la place au-dessus du contenu — comme
+     le fait Android — et plus rien n'est masqué. -->
 <meta name="apple-mobile-web-app-title" content="NIMM">
 <meta name="theme-color" content="#0d0d0d">
 <link rel="manifest" href="/static/manifest.json">
@@ -29,7 +34,10 @@
     <!-- BARRE SUPÉRIEURE -->
     <header id="top-bar"><h2 class="sr-only">Barre d'outils</h2>
         <button id="toggle-history" title="Fils" aria-label="Fils" aria-keyshortcuts="Alt+Shift+F">
-            <svg viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <!-- width/height obligatoires : un SVG sans dimensions explicites peut
+                 se réduire à rien dans un conteneur flex sur Safari (iPhone). -->
+            <svg viewBox="0 0 20 16" width="20" height="16" fill="none" stroke="currentColor"
+                 stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
                 <line x1="0" y1="2" x2="20" y2="2"/>
                 <line x1="0" y1="8" x2="20" y2="8"/>
                 <line x1="0" y1="14" x2="20" y2="14"/>
