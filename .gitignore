@@ -288,6 +288,7 @@ install_log.txt
 stress_results.json
 prompt demarrage fil.txt
 .clinerules
+.clinerules.bak*
 arborescence.txt
 
 # Scripts de correctifs temporaires
@@ -300,6 +301,7 @@ _insert_css.py
 temp_restore2.txt
 temp_styles_backup.css
 temp_tail.css
+_tmp_*.py
 
 # Notes personnelles
 docs/Bugs NIMM.txt
