@@ -328,6 +328,29 @@ import time as _time
 _STATIC_VERSION = str(int(_time.time()))
 
 
+def _injecter_version_static(html: str, version: str = '') -> str:
+    """Pose le numero de version du serveur sur app.js et styles.css.
+
+    Le numero deja ecrit dans index.html est remplace QUEL QU'IL SOIT. Depuis
+    que la page porte un « ?v=... » fige (session du 24/09/2026), un
+    remplacement sur la chaine nue ne trouvait plus rien : l'automatique etait
+    mort et le numero fige decidait seul. Consequence : un oubli de mise a jour
+    se soldait par un app.js perime servi par le navigateur, sans le moindre
+    avertissement — et le test de forme ne peut pas voir un oubli.
+
+    Repli : une page ecrite SANS « ?v= » recoit quand meme le numero, pour que
+    le mecanisme ne depende pas de la forme de index.html.
+    """
+    version = version or _STATIC_VERSION
+    html, poses = re.subn(
+        r'(/static/(?:app\.js|styles\.css))\?v=[^"]*',
+        lambda m: m.group(1) + '?v=' + version, html)
+    if not poses:
+        html = html.replace('/static/styles.css"', f'/static/styles.css?v={version}"')
+        html = html.replace('/static/app.js"',    f'/static/app.js?v={version}"')
+    return html
+
+
 # ══════════════════════════════════════════
 # FRONTEND
 # ══════════════════════════════════════════
@@ -341,8 +364,7 @@ async def root():
     from fastapi.responses import HTMLResponse
     with open(os.path.join(FRONTEND_DIR, 'index.html'), encoding='utf-8') as _f:
         html = _f.read()
-    html = html.replace('/static/styles.css"', f'/static/styles.css?v={_STATIC_VERSION}"')
-    html = html.replace('/static/app.js"',    f'/static/app.js?v={_STATIC_VERSION}"')
+    html = _injecter_version_static(html)
     # La page index.html elle-meme ne doit jamais etre mise en cache par le
     # navigateur (contrairement a styles.css/app.js qui ont leur propre
     # cache-busting via ?v=). Sans ca, un telephone peut garder une version

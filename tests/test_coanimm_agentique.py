@@ -4495,6 +4495,192 @@ def test_une_seule_porte_vers_les_images():
 
 
 
+def test_image_produite_entre_dans_le_fil():
+    """Une image produite depuis le studio restait enfermée dans son panneau.
+
+    Constat de Laurent : « comme tout passe par le menu, je n'ai plus d'image
+    qui s'affiche dans le chat — toutes les images sont coincées dans ce
+    menu ». Diagnostic : l'entrée « Créer une image » du « + » ne fait plus
+    qu'ouvrir le panneau Images (`_ouvrirStudio`), et le studio rangeait son
+    résultat dans le panneau et la galerie SANS jamais l'écrire dans le fil.
+    La route `/api/imagerie/generer` acceptait pourtant déjà un `thread_id` :
+    le studio ne l'envoyait même pas.
+
+    Trois morceaux font tenir la promesse, et ce test les ancre : le fil est
+    créé au besoin (le cas « aucun message envoyé »), les deux messages sont
+    écrits au format que le fil sait RELIRE, et l'alt posé est la description
+    réellement produite — jamais la consigne.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    # (1) Une seule fonction, et le studio l'appelle : sans l'appel, le
+    #     correctif existe mais ne sert à rien.
+    assert js.count('async function _publierImageDansLeFil(') == 1
+    studio = js[js.index("document.getElementById('studio-image-btn')"):]
+    studio = studio[:studio.index("// ── Vidéo")]
+    assert '_publierImageDansLeFil(' in studio, \
+        'le studio produit une image sans la publier dans le fil'
+    assert "thread_id: currentTabId || currentThreadId || ''" in studio, \
+        "l'image doit être rattachée au fil d'où elle vient"
+
+    corps = js[js.index('async function _publierImageDansLeFil('):]
+    corps = corps[:corps.index('// ENVOI MESSAGE')]
+
+    # (2) Le fil est créé au besoin — c'est le scénario décrit : produire une
+    #     image avant d'avoir envoyé le moindre message.
+    assert "createThread('💬 Nouveau fil')" in corps
+    # (2 bis) Fil fantôme : la promesse « aucune trace » passe avant l'affichage.
+    assert '_ghostMode' in corps and 'return false' in corps
+
+    # (3) Le message assistant écrit doit être RELISIBLE par le fil. On prend
+    #     la reconnaissance réelle du code, pas une copie réécrite ici : une
+    #     copie resterait verte le jour où la vraie change.
+    i = js.index('function _extractGeneratedImage(')
+    zone = js[i:js.index('function _renderBubble(', i)]
+    m = re.search(r'rawText\.match\((/[^\n]+/)\)', zone)
+    assert m, 'la reconnaissance des images persistées a disparu'
+    motif = m.group(1)[1:-1]          # le littéral, sans les barres obliques
+    exemple = ('🎨 Image générée.' + chr(10) + 'Prompt : un chat' + chr(10)
+               + 'Fichier : nimm_1.png')
+    assert re.search(motif, exemple), \
+        'le format écrit ne serait pas relu au chargement du fil'
+    assert "role: 'assistant'" in corps and "role: 'user'" in corps
+    assert "'Fichier : '" in corps, \
+        'la ligne « Fichier : » est ce qui rend le message relisible'
+
+    # (4) L'alt est la description réelle venue de la génération, et l'image
+    #     s'affiche comme les autres : bulle utilisateur + bulle assistant.
+    assert 'fiche.alt' in corps and '_esc(alt)' in corps
+    assert 'appendUserMessage(' in corps
+    assert 'messagesDiv.appendChild(div)' in corps
+
+    # (5) Le retour de la fonction dit la vérité : c'est lui que le studio
+    #     compte pour annoncer « affichée dans la conversation ».
+    assert 'return false' in corps and 'return true' in corps
+    assert '_srAnnounce' in corps, 'ajout silencieux au lecteur d’écran'
+    ok("images : une image produite entre dans le fil, même sans message envoyé")
+
+
+
+def test_cache_busting_automatique_malgre_le_numero_fige():
+    """Le cache-busting automatique etait mort, et rien ne le disait.
+
+    [main.py] calcule un numero de version a chaque demarrage et l'injecte
+    dans la page servie. Depuis que index.html porte un « ?v=... » FIGE
+    (session du 24/09/2026), la substitution ne trouvait plus la chaine
+    cherchee : zero remplacement. L'automatique etait donc mort, et seul le
+    numero ecrit a la main decidait — un oubli se soldait par un app.js perime
+    dans le navigateur, sans aucun avertissement. Le test de forme ne peut pas
+    voir cet oubli : il regarde la forme, pas la date reelle.
+
+    Ce test execute la VRAIE fonction d'injection, extraite du source de
+    main.py par AST : une copie recopiee ici resterait verte le jour ou la
+    vraie change.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    # (1) La page porte bien un numero date fige sur les DEUX fichiers : c'est
+    #     la forme a laquelle l'injection doit s'adapter.
+    for fichier in ('app.js', 'styles.css'):
+        assert re.search(r'/static/' + re.escape(fichier) + r'\?v=\d{8}-[0-9a-z-]+', html), \
+            '%s ne porte plus de numero date dans index.html' % fichier
+
+    # (2) La fonction existe, et c'est bien ELLE que la page servie appelle.
+    import ast
+    arbre = ast.parse(mn)
+    noeud = next((n for n in arbre.body
+                  if isinstance(n, ast.FunctionDef)
+                  and n.name == '_injecter_version_static'), None)
+    assert noeud, 'main.py ne pose plus le numero de version sur la page servie'
+    route = mn[mn.index('async def root():'):]
+    route = route[:route.index('@app.get', 10)]
+    assert '_injecter_version_static(' in route, \
+        'la page servie contourne la fonction d injection'
+
+    espace = {'re': re, '_STATIC_VERSION': '1758999999'}
+    exec(compile(ast.get_source_segment(mn, noeud), 'main.py', 'exec'), espace)
+    injecter = espace['_injecter_version_static']
+
+    # (3) Le numero FIGE ne survit pas : le navigateur reprend la nouvelle
+    #     version a chaque demarrage du serveur, sans rien a penser.
+    sortie = injecter(html)
+    paires = re.findall(r'/static/(app\.js|styles\.css)\?v=([^"]*)', sortie)
+    assert len(paires) == 2, 'la page ne porte plus ses deux fichiers'
+    for fichier, version in paires:
+        assert version == '1758999999', \
+            '%s garde le numero fige (%s) : le navigateur servirait l ancienne version' \
+            % (fichier, version)
+
+    # (4) ... et le repli tient : une page ecrite SANS « ?v= » recoit quand meme
+    #     le numero. Le mecanisme ne doit dependre d'aucune forme.
+    nu = ('<link rel="stylesheet" href="/static/styles.css">' + chr(10)
+          + '<script src="/static/app.js"></script>')
+    secours = injecter(nu, '99999999')
+    assert '/static/styles.css?v=99999999' in secours \
+        and '/static/app.js?v=99999999' in secours, \
+        'sans « ?v= » dans la page, l automatique ne s applique plus'
+    ok("cache-busting : le numero du serveur remplace le numero fige, quelle que soit la forme")
+
+
+def test_description_image_survit_au_rechargement():
+    """Recharger le fil faisait redevenir la CONSIGNE un texte alternatif.
+
+    L'alt honnete est pose a l'affichage immediat, mais le message range en
+    base ne portait que « Prompt : ... » : au rechargement, la description
+    relue etait la consigne — le mensonge qu'on venait de corriger revenait par
+    cette porte. Le message porte desormais une ligne « Description : », placee
+    AVANT « Fichier : » (la reconnaissance du fil exige que cette derniere soit
+    la derniere ligne), et le rendu la prefere. Sans description enregistree,
+    le rendu le DIT au lieu de se rabattre sur la consigne.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+
+    i = js.index('function _extractGeneratedImage(')
+    zone = js[i:js.index('function _renderBubble(', i)]
+
+    # (1) La description est lue A PART de la consigne, et les deux repartent :
+    #     la consigne reste AFFICHEE sous l'image, la description sert d'alt.
+    assert r'Description\s*:\s*(.+)' in zone, \
+        'la description enregistree n est plus relue'
+    assert re.search(r'return \{ filename, caption, description \}', zone), \
+        'la relecture ne rend plus la description'
+
+    # (2) Le format ecrit doit etre relu par la reconnaissance REELLE, avec la
+    #     description en place et « Fichier : » toujours en dernier.
+    m = re.search(r'rawText\.match\((/[^\n]+/)\)', zone)
+    assert m, 'la reconnaissance des images persistees a disparu'
+    motif = m.group(1)[1:-1]
+    exemple = ('🎨 Image générée.' + chr(10) + 'Description : un chat noir assis'
+               + chr(10) + 'Prompt : un chat' + chr(10) + 'Fichier : nimm_1.png')
+    assert re.search(motif, exemple), \
+        'le message ecrit avec sa description ne serait pas relu'
+
+    # (3) L'ecriture : la description part sur UNE ligne, et AVANT « Fichier : ».
+    corps = js[js.index('async function _publierImageDansLeFil('):]
+    corps = corps[:corps.index('// ENVOI MESSAGE')]
+    assert "'Description : '" in corps, 'le message range ne porte pas la description'
+    assert corps.index("'Description : '") < corps.index("'Fichier : '"), \
+        '« Fichier : » doit rester la derniere ligne, sinon le message n est plus relu'
+    alt = corps[corps.index('const altUneLigne'):]
+    alt = alt[:alt.index(chr(10))]
+    assert r'replace(/\s+/g' in alt, \
+        'une description multiligne casserait la relecture'
+
+    # (4) Le rendu prefere la description, et dit l'absence — JAMAIS la consigne.
+    bloc = js[js.index('const _genImg = _extractGeneratedImage(rawText);'):]
+    bloc = bloc[:bloc.index('return;')]
+    assert '_genImg.description' in bloc, 'le rendu ignore la description enregistree'
+    assert 'sans description enregistrée' in bloc, \
+        'sans description, il faut le dire plutot que de se rabattre sur la consigne'
+    assert '_esc(_genImg.caption)' in bloc, \
+        'la consigne doit rester AFFICHEE sous l image'
+    ok("images : la description enregistrée survit au rechargement du fil")
+
+
 def test_mise_a_jour_dit_la_verite():
     """« Mise à jour appliquée ! » était faux sur les trois quarts du logiciel.
 
@@ -5230,6 +5416,13 @@ def test_embeddings_installation_silencieuse():
         import modules.memory as M
         temoin = os.path.join(tempfile.mkdtemp(prefix='nimm_emb_'), 'temoin.json')
         M._chemin_temoin_install = lambda: temoin
+        # Le garde-fou se mesure SANS le paquet : sur une machine ou
+        # sentence-transformers est deja installe (cas de celle de Laurent
+        # depuis que l'installation silencieuse a reussi), la fonction rend
+        # 'ready' — juste pour elle, mais le test ne mesurerait alors plus du
+        # tout la pause anti-relance. L'etat d'une machine ne doit pas decider
+        # de ce qu'un test mesure.
+        M.paquet_embeddings_present = lambda: False
         def poser(quand):
             json.dump({'etat': 'failed', 'detail': 'x',
                        'horodatage': quand.isoformat()},
@@ -5429,6 +5622,9 @@ if __name__ == '__main__':
                test_cles_api_toutes_enregistrables,
                test_menu_plus_dit_ou_il_mene,
                test_une_seule_porte_vers_les_images,
+               test_image_produite_entre_dans_le_fil,
+               test_description_image_survit_au_rechargement,
+               test_cache_busting_automatique_malgre_le_numero_fige,
                test_mise_a_jour_dit_la_verite,
                test_requirements_complet_et_sans_doublon,
                test_regle_de_retenue_dans_le_prompt,

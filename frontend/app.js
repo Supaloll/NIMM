@@ -2835,7 +2835,8 @@ function _wrapBareQuiz(text) {
 
 // Persistance images : reconnaît un message assistant qui référence une image
 // générée (chemin tag %%IMAGE:%% ou bouton dédié 🖼️, tous deux terminés par
-// une ligne "Fichier : ...") et en extrait le nom de fichier + la légende.
+// une ligne "Fichier : ...") et en extrait le nom de fichier, la consigne
+// affichée et la description enregistrée (texte alternatif).
 // Retourne null si le message n'est pas de ce type — texte normal inchangé.
 function _extractGeneratedImage(rawText) {
     const m = rawText.match(/^(?:\[Système — image générée\]|🎨 Image générée\.)[\s\S]*?\nFichier\s*:\s*(\S+)\s*$/);
@@ -2843,7 +2844,12 @@ function _extractGeneratedImage(rawText) {
     const filename  = m[1];
     const capMatch  = rawText.match(/Prompt(?:\s+utilisé)?\s*:\s*(.+)/);
     const caption   = capMatch ? capMatch[1].trim() : '';
-    return { filename, caption };
+    // La description est lue À PART de la consigne : au lecteur d'écran, la
+    // consigne dit ce qu'on a demandé, pas ce qui a été produit. Sans ligne
+    // « Description : », il n'y a pas de description — et on le dira.
+    const descMatch = rawText.match(/Description\s*:\s*(.+)/);
+    const description = descMatch ? descMatch[1].trim() : '';
+    return { filename, caption, description };
 }
 
 function _renderBubble(bubble, rawText) {
@@ -2852,7 +2858,11 @@ function _renderBubble(bubble, rawText) {
     const _genImg = _extractGeneratedImage(rawText);
     if (_genImg) {
         const src = `/api/images/file/${encodeURIComponent(_genImg.filename)}`;
-        const alt = _genImg.caption || 'Image générée';
+        // Le texte alternatif est la description ENREGISTRÉE, jamais la
+        // consigne : au rechargement du fil, la consigne relue disait ce qui
+        // avait été demandé au lieu de ce qui a été produit — le mensonge
+        // qu'on venait de corriger revenait par cette porte.
+        const alt = _genImg.description || 'Image générée, sans description enregistrée';
         bubble.innerHTML = `<img src="${src}" alt="${_esc(alt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">`
             + (_genImg.caption ? `<span style="font-size:0.8rem;color:var(--text-muted);">${_esc(_genImg.caption)}</span>` : '');
         _attachQuizListeners(bubble);
@@ -4728,6 +4738,126 @@ async function requestSummary(conversationId) {
         if (btn) { btn.disabled = false; btn.textContent = '📋'; }
     }
 }
+
+// ══════════════════════════════════════════
+// PUBLICATION D'UNE IMAGE PRODUITE HORS DU FIL
+// ══════════════════════════════════════════
+//
+// POURQUOI CETTE FONCTION EXISTE
+// Le studio Images (modale « 🖼️ Images ») génère avec ses réglages — modèle,
+// format, résolution — et décrit l'image produite. Mais il rangeait son
+// résultat dans le panneau et la galerie SEULEMENT : rien n'apparaissait dans
+// la conversation. Constat de Laurent : « toutes les images sont coincées
+// dans ce menu ». Une image produite pendant une conversation appartient au
+// fil, même si aucun message n'a encore été envoyé — c'est d'ailleurs ce que
+// promet l'entrée « Créer une image » du menu « + ».
+//
+// Trois conséquences voulues :
+//   1. le fil est créé au besoin, comme le fait l'envoi d'un message ;
+//   2. les deux messages sont écrits en base, au format que le fil sait
+//      relire (`Fichier : …`, reconnu par _extractGeneratedImage) ;
+//   3. l'alt est la VRAIE description venue de la génération, jamais la
+//      consigne : au lecteur d'écran, dire ce qu'on a demandé à la place de
+//      ce qui a été produit est un texte alternatif qui ment.
+async function _publierImageDansLeFil(fiche) {
+    if (!fiche || !fiche.fichier) return false;
+    // Fil fantôme : la promesse est « aucune trace ». On n'écrit rien.
+    if (_ghostMode) return false;
+
+    let cid = currentTabId || currentThreadId;
+    if (!cid) {
+        await createThread('💬 Nouveau fil');
+        cid = currentTabId || currentThreadId;
+        if (!cid) return false;
+    }
+
+    const prompt = fiche.prompt || '';
+    const src    = fiche.url || `/api/images/file/${encodeURIComponent(fiche.fichier)}`;
+    const alt    = fiche.alt || 'Image générée, sans description disponible';
+
+    appendUserMessage('🖼️ ' + prompt);
+
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+    const emojiEl = document.createElement('div');
+    emojiEl.className = 'bubble-emoji';
+    emojiEl.setAttribute('aria-hidden', 'true');
+    emojiEl.textContent = '🎨';
+    const bubble = document.createElement('div');
+    bubble.className = 'message-bubble';
+    bubble.innerHTML = `<img src="${src}" alt="${_esc(alt)}" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px;">`
+        + `<span style="font-size:0.8rem;color:var(--text-muted);">${_esc(prompt)}</span><br>`
+        + `<div style="display:flex;gap:8px;margin-top:8px;">`
+        + `<button class="img-download-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Télécharger l'image">⬇ Télécharger</button>`
+        + `<button class="img-edit-btn" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text-muted);border-radius:6px;padding:4px 12px;font-size:0.8rem;cursor:pointer;" aria-label="Modifier l'image">✏️ Modifier</button></div>`;
+
+    bubble.querySelector('.img-download-btn').addEventListener('click', async () => {
+        try {
+            const resp = await fetch(src);
+            const blob = await resp.blob();
+            const a    = document.createElement('a');
+            a.href     = URL.createObjectURL(blob);
+            a.download = fiche.fichier || 'nimm-image.png';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        } catch(e) {
+            const a    = document.createElement('a');
+            a.href     = src;
+            a.download = fiche.fichier || 'nimm-image.png';
+            a.target   = '_blank';
+            a.click();
+        }
+    });
+    // La retouche travaille sur des octets : on ne lit l'image qu'au clic,
+    // pour ne pas promener un base64 dans la page sans raison.
+    bubble.querySelector('.img-edit-btn').addEventListener('click', async function () {
+        this.disabled = true;
+        try {
+            const r    = await fetch(src);
+            const blob = await r.blob();
+            const b64  = await new Promise((res, rej) => {
+                const fr = new FileReader();
+                fr.onload = () => res(String(fr.result).split(',')[1] || '');
+                fr.onerror = rej;
+                fr.readAsDataURL(blob);
+            });
+            if (b64) openImageEditModal(b64, prompt);
+        } catch (e) {
+            console.warn('[NIMM] Image illisible pour la retouche :', e);
+        } finally { this.disabled = false; }
+    });
+
+    div.appendChild(emojiEl);
+    div.appendChild(bubble);
+    messagesDiv.appendChild(div);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+    // Persistance — le fil doit retrouver l'image ET sa description au prochain
+    // chargement. Chaque valeur est ramenée sur UNE ligne : un saut de ligne
+    // dans la consigne ou dans la description casserait la relecture.
+    // La ligne « Description : » passe AVANT « Fichier : » : la reconnaissance
+    // du message (voir _extractGeneratedImage) exige que « Fichier : » soit la
+    // dernière ligne.
+    const NL = String.fromCharCode(10);
+    const uneLigne = prompt.replace(/\s+/g, ' ');
+    const altUneLigne = (fiche.alt || '').replace(/\s+/g, ' ').trim();
+    fetch(`/api/threads/${cid}/messages`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ role: 'user', content: '🖼️ ' + uneLigne })
+    }).catch(() => {});
+    const contenu = '🎨 Image générée.'
+        + (altUneLigne ? NL + 'Description : ' + altUneLigne : '')
+        + NL + 'Prompt : ' + uneLigne
+        + NL + 'Fichier : ' + fiche.fichier;
+    fetch(`/api/threads/${cid}/messages`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ role: 'assistant', content: contenu })
+    }).catch(() => {});
+
+    _srAnnounce('Image ajoutée dans la conversation.');
+    return true;
+}
+
 
 // ══════════════════════════════════════════
 // ENVOI MESSAGE
@@ -13982,6 +14112,10 @@ init();
                     ratio: document.getElementById('studio-image-ratio')?.value || '1:1',
                     taille: document.getElementById('studio-image-taille')?.value || '1K',
                     decrire: !!document.getElementById('studio-image-decrire')?.checked,
+                    // Le fil courant accompagne l'image : elle y sera publiée
+                    // juste après (voir _publierImageDansLeFil), et la galerie
+                    // saura de quelle conversation elle vient.
+                    thread_id: currentTabId || currentThreadId || '',
                     images_ref: _stImageRef ? [_stImageRef] : []
                 })
             });
@@ -14029,10 +14163,25 @@ init();
                     out.appendChild(bloc);
                 });
             }
-            var avecAlt = (d.images || []).filter(function (i) { return i.alt; }).length;
+            // Chaque image produite entre AUSSI dans la conversation en cours.
+            // C'est le sens de l'entrée « Créer une image » du menu « + », et
+            // c'est ce qui manquait : le résultat restait enfermé dans ce
+            // panneau (voir _publierImageDansLeFil).
+            var _publiees = 0;
+            var _liste = d.images || [];
+            for (var j = 0; j < _liste.length; j++) {
+                try {
+                    if (await _publierImageDansLeFil(_liste[j])) _publiees++;
+                } catch (e) { console.warn('[NIMM] Publication dans le fil échouée :', e); }
+            }
+
+            var avecAlt = _liste.filter(function (i) { return i.alt; }).length;
             _stImgStatus('Image prête en ' + d.secondes + ' secondes'
                 + (avecAlt ? ', avec sa description ci-dessous.' : '.')
-                + ' Elle est aussi rangée dans la galerie.');
+                + (_publiees
+                    ? ' Elle est affichée dans la conversation en cours (ferme'
+                      + ' cette fenêtre pour la voir), et rangée dans la galerie.'
+                    : ' Elle est rangée dans la galerie.'));
         } catch (e) { _stImgStatus('Erreur : ' + e.message); }
         finally { btn.disabled = false; }
     });
