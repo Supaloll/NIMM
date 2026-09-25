@@ -1137,6 +1137,21 @@ Analyse les sentiments de : ..."
                 Vérifier et installer les mises à jour
             </button>
             <div id="update-status" style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);" aria-live="polite" aria-atomic="true"></div>
+
+            <!-- yt-dlp est le SEUL paquet de NIMM qui périme : il parle à des
+                 sites tiers qui changent leurs défenses. Une version ancienne
+                 ne « bugue » pas, elle CESSE de marcher d'un coup. On VÉRIFIE
+                 tout seul (une requête de quelques kilo-octets) ; on n'installe
+                 que sur un clic, jamais dans le dos de l'utilisateur. -->
+            <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
+                <div id="ytdlp-etat" style="font-size:0.8rem;color:var(--text-muted);" aria-live="polite" aria-atomic="true">
+                    Vérification de la version de yt-dlp…
+                </div>
+                <button id="btn-ytdlp" style="margin-top:8px;padding:8px 16px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:0.85rem;">
+                    Mettre à jour yt-dlp (lecture des vidéos)
+                </button>
+                <div id="ytdlp-status" style="margin-top:8px;font-size:0.8rem;color:var(--text-muted);" aria-live="polite" aria-atomic="true"></div>
+            </div>
         </div>
 
         </div><!-- /settings-tab-params -->
@@ -2546,7 +2561,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260924-description-image"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20260925-maj-ytdlp"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

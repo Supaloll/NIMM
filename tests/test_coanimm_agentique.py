@@ -5564,6 +5564,243 @@ def test_releve_decisions_ne_devine_rien():
     ok('relevé de décisions : rien n’est deviné, chaque ligne porte sa citation')
 
 
+def test_lecture_texte_video():
+    """Une vidéo ne se lisait qu'en l'ENVOYANT à Gemini : clé payante, 18 Mo
+    maximum en local, et une DESCRIPTION en retour — jamais le texte.
+
+    Or dans une conférence, un tutoriel ou une interview, l'essentiel est DIT
+    avant d'être montré, et YouTube publie ce texte : les sous-titres. Les lire
+    ne coûte rien, ne demande aucune clé, et le texte se range ensuite dans la
+    base de connaissances comme n'importe quel document.
+
+    Ce test verrouille les deux moitiés : l'analyse des formats de sous-titres
+    (hors ligne, avec les pièges RÉELS — numérotation, en-têtes, balises,
+    entités, format mal annoncé) et le câblage complet, qui doit résister à la
+    panne silencieuse classique : un outil déclaré au modèle mais jamais
+    exécuté, ou ajouté sans étiquette française.
+    """
+    from modules import youtube as Y
+
+    # (1) Horodatage, aller et retour — au-delà de l'heure, et avec la virgule
+    #     décimale des fichiers SRT.
+    assert Y._horodatage(0) == '00:00'
+    assert Y._horodatage(832) == '13:52'
+    assert Y._horodatage(3725) == '1:02:05', Y._horodatage(3725)
+    assert Y._ms_depuis_horodatage('00:01:23.456') == 83456
+    assert Y._ms_depuis_horodatage('01:23.456') == 83456
+    assert Y._ms_depuis_horodatage('00:00:01,000') == 1000, 'virgule décimale (SRT)'
+    assert Y._ms_depuis_horodatage('n importe quoi') == 0, \
+        'illisible -> 0, jamais une exception'
+
+    # (2) Le lien, collé sans « https:// » depuis un mobile, doit passer.
+    assert Y.est_lien_video('https://www.youtube.com/watch?v=abc')
+    assert Y.est_lien_video('https://youtu.be/abc')
+    assert Y.est_lien_video('youtube.com/watch?v=abc')
+    assert not Y.est_lien_video('https://example.com/video')
+    assert Y._normaliser('youtube.com/watch?v=abc') == 'https://youtube.com/watch?v=abc'
+
+    # (3) json3 : les morceaux d'un même événement se recollent, un événement
+    #     vide ne produit pas de ligne vide horodatée, et un contenu illisible
+    #     rend une liste vide au lieu de lever.
+    json3 = ('{"events": ['
+             '{"tStartMs": 0, "segs": [{"utf8": "Bonjour "}, {"utf8": "à tous"}]},'
+             '{"tStartMs": 1500, "segs": [{"utf8": "deuxième"}]},'
+             '{"tStartMs": 31000, "segs": [{"utf8": "plus loin"}]},'
+             '{"tStartMs": 32000, "segs": [{"utf8": "   "}]}]}')
+    assert Y._repliques_json3(json3) == [(0, 'Bonjour à tous'),
+                                        (1500, 'deuxième'),
+                                        (31000, 'plus loin')]
+    assert Y._repliques_json3('pas du json') == []
+
+    # (4) VTT : numérotation de réplique, en-têtes WEBVTT/Kind/Language, NOTE,
+    #     balises <c> et réplique sur plusieurs lignes. Tous ces cas sont réels.
+    vtt = 'WEBVTT' + chr(10) + 'Kind: captions' + chr(10) + 'Language: fr' + chr(10) \
+        + chr(10) + '1' + chr(10) + '00:00:01.000 --> 00:00:04.000' + chr(10) \
+        + '<c>Bonjour</c> tout le monde' + chr(10) + chr(10) \
+        + '2' + chr(10) + '00:00:04.500 --> 00:00:07.000' + chr(10) \
+        + 'ligne une' + chr(10) + 'ligne deux' + chr(10) + chr(10) \
+        + 'NOTE un commentaire de traducteur' + chr(10) + chr(10) \
+        + '3' + chr(10) + '00:00:39.000 --> 00:00:41.000' + chr(10) \
+        + 'l&amp;apostrophe' + chr(10)
+    r = Y._repliques_vtt(vtt)
+    assert r[0] == (1000, 'Bonjour tout le monde'), r[0]
+    assert r[1] == (4500, 'ligne une ligne deux'), r[1]
+    assert r[2] == (39000, 'l&apostrophe'), 'les entités HTML sont décodées'
+
+    # (5) Un format mal annoncé ne doit pas perdre la piste : c'est le contenu
+    #     qui décide de l'analyseur, pas l'étiquette.
+    assert Y._repliques(json3, 'vtt') == Y._repliques_json3(json3)
+
+    # (6) Le regroupement. Une réplique par ligne rendrait des milliers de
+    #     lignes pour une conférence ; on veut des repères utilisables. Le bloc
+    #     doit se FERMER avant la réplique suivante, sinon celle qui déclenche
+    #     la coupure serait horodatée avec le bloc précédent.
+    lignes = Y._assembler(r, bloc_secondes=30).split(chr(10))
+    assert len(lignes) == 2, 'deux blocs attendus (vers 1 s et 39 s) : %r' % lignes
+    assert lignes[0] == '[00:01] Bonjour tout le monde ligne une ligne deux', lignes[0]
+    assert lignes[1] == '[00:39] l&apostrophe', lignes[1]
+
+    # (7) Choix de la piste : une piste ÉCRITE À LA MAIN par l'auteur passe
+    #     avant une piste générée automatiquement (ponctuation, noms propres).
+    manuels = {'en': [{'ext': 'vtt', 'url': 'M1'}],
+               'fr': [{'ext': 'vtt', 'url': 'M2'}]}
+    autos = {'fr': [{'ext': 'json3', 'url': 'A1'}]}
+    p = Y._choisir_piste(manuels, autos, ('fr', 'en'))
+    assert p['url'] == 'M2' and p['auto'] is False, p
+    assert Y._choisir_piste({}, autos, ('fr',))['url'] == 'A1', 'repli automatique'
+    assert Y._choisir_piste({}, autos, ('de',)) == {}, \
+        'aucune langue demandée disponible -> choix vide, pas une exception'
+    p = Y._choisir_piste({'fr': [{'ext': 'ttml', 'url': 'T'},
+                                 {'ext': 'json3', 'url': 'J'}]}, {}, ('fr',))
+    assert p['url'] == 'J', 'le format le plus simple à lire est préféré'
+    assert Y._codes_candidats({'fr': [], 'fr-FR': [], 'fr-orig': [], 'en': []}, 'fr') \
+        == ['fr', 'fr-orig', 'fr-FR'], 'exact, puis origine, puis variante régionale'
+
+    # (8) Le garde-fou : le lien vient de l'utilisateur ou d'un modèle, et il
+    #     sort vers le réseau. Même règle que le reste de NIMM.
+    res = Y.lire_sous_titres('http://127.0.0.1:8080/coquin')
+    assert res['ok'] is False and 'refus' in res['erreur'].lower(), res
+    assert Y.lire_sous_titres('')['ok'] is False
+
+    # (9) Le câblage, bout en bout. Un outil déclaré sans branche est exactement
+    #     le défaut que raconte test_outils_tous_atteignables.
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _lire(*morceaux):
+        return open(os.path.join(racine, *morceaux), encoding='utf-8').read()
+
+    hub = _lire('core', 'hub.py')
+    mn = _lire('main.py')
+    coa = _lire('modules', 'coanimm.py')
+    saf = _lire('modules', 'coanimm_safety.py')
+    js = _lire('frontend', 'app.js')
+    req = _lire('requirements.txt')
+
+    assert '"name": "read_video_transcript"' in hub, 'outil non déclaré au modèle'
+    assert "name == 'read_video_transcript'" in hub, 'déclaré mais jamais exécuté'
+    assert 'lire_sous_titres' in hub and 'lire_et_verser' in hub, \
+        'le Hub doit savoir lire, et savoir ranger'
+    assert "read_video_transcript: 'une vidéo'" in js, \
+        "un outil sans étiquette serait annoncé sous son nom technique"
+
+    assert '/api/coanimm/video_transcript' in mn
+    assert 'video_transcript' in mn and 'list_coanimm_disabled_tools' in mn, 'désactivable'
+    assert 'video_transcript' in mn[mn.index('_COANIMM_TOOLS'):], 'absent du catalogue'
+    assert coa.count('nimm_video_transcript') >= 3, 'helper + prologue + documentation'
+    assert "'nimm_video_transcript': 'recherche'" in saf, \
+        'le lien sort vers le réseau : la capacité doit être déclarée'
+    assert 'yt-dlp' in req, 'dépendance absente de requirements.txt'
+
+    # Le module ne doit PAS importer yt-dlp en tête : sur une machine où il
+    # manque, NIMM doit démarrer et le dire en français plutôt que refuser.
+    # On ne regarde que le PREMIER niveau : un import sous `try` ou dans une
+    # fonction est un CHOIX (il est rattrapé), pas une dépendance dure.
+    video = _lire('modules', 'youtube.py')
+    for n in ast.parse(video).body:
+        noms = []
+        if isinstance(n, ast.Import):
+            noms = [a.name for a in n.names]
+        elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+            noms = [n.module]
+        assert 'yt_dlp' not in noms, \
+            'yt-dlp importé en tête : NIMM ne démarrerait plus sans lui'
+    ok("vidéo : le texte des sous-titres lu sans clé, horodaté, et rangeable")
+
+
+def test_maj_ytdlp_prevent_sans_installer():
+    """yt-dlp est le SEUL paquet de NIMM qui périmé — et il faut que ça se dise.
+
+    Il parle à des sites tiers qui changent leurs défenses : une version
+    ancienne ne « bugue » pas, elle CESSE de marcher, d'un coup, sans prévenir.
+    numpy, fastapi, whisper : une version ancienne tourne des années. D'où la
+    règle, non négociable : on ne surveille QUE lui, et on ne met JAMAIS à jour
+    tout `requirements.txt` tout seul (versions épinglées qui sautent,
+    gigaoctets retéléchargés).
+
+    Trois pièges, tous vérifiés en interrogeant le VRAI catalogue :
+
+    1. **Les numéros de version ne se comparent pas comme du texte.** yt-dlp
+       s'annonce « 2026.08.19 » quand PyPI publie « 2026.8.19 ». C'est la même
+       version. Une comparaison de chaînes la déclarerait plus ancienne que
+       elle-même — pour toujours, et le bouton deviendrait un mensonge permanent.
+    2. **« Je n'ai pas pu savoir » n'est pas « c'est à jour ».** Panne réseau :
+       `a_jour` doit valoir None, jamais True.
+    3. **La détection n'installe rien.** Elle lit un catalogue (quelques
+       kilo-octets) ; l'installation est une action séparée, sur un clic.
+    """
+    from modules import youtube as Y
+
+    # (1) Les nombres, pas le texte. Le cas réel, tel qu'il s'est produit.
+    assert Y._version_nombres('2026.08.19') == (2026, 8, 19)
+    assert Y._version_nombres('2026.8.19') == (2026, 8, 19)
+    assert Y._version_nombres('2026.08.19') == Y._version_nombres('2026.8.19'), \
+        'les deux écritures de la MÊME version doivent être égales'
+    assert Y._version_nombres('2026.9.2') > Y._version_nombres('2026.8.31'), \
+        'en nombres, le mois prime sur le jour'
+    assert Y._version_nombres('') == (0,) and Y._version_nombres('inconnu') == (0,)
+
+    # Ce que ferait une comparaison de TEXTE, telle qu'on l'écrirait d'instinct.
+    # C'est LE bug évité : la version en place paraîtrait plus ancienne qu'elle-même.
+    assert not ('2026.08.19' >= '2026.8.19'), \
+        'en texte, la version en place paraît antérieure à la même version'
+    assert Y._version_nombres('2026.08.19') >= Y._version_nombres('2026.8.19')
+
+    # (2) La détection ne lance AUCUN sous-processus : elle ne peut pas installer.
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    source = open(os.path.join(racine, 'modules', 'youtube.py'),
+                  encoding='utf-8').read()
+    arbre = ast.parse(source)
+
+    def _source_de(nom):
+        for n in arbre.body:
+            if isinstance(n, ast.FunctionDef) and n.name == nom:
+                return ast.get_source_segment(source, n) or ''
+        return ''
+
+    detection = _source_de('maj_disponible')
+    assert detection, 'maj_disponible introuvable'
+    assert 'subprocess' not in detection, \
+        'la détection ne doit RIEN installer : aucun sous-processus dans ce chemin'
+    assert 'externally' not in detection
+    assert "'a_jour': None" in detection, \
+        "l'état inconnu doit exister : sinon une panne réseau annonce « à jour »"
+
+    pypi = _source_de('_infos_pypi')
+    assert pypi and 'requests.get' in pypi and 'subprocess' not in pypi, \
+        '_infos_pypi doit LIRE le catalogue, pas installer'
+
+    # (3) L'installation, elle, passe par LE BON interpréteur. Installer dans
+    #     l'autre Python de la machine donnerait un paquet bien présent — et que
+    #     NIMM ne verrait jamais (piège déjà documenté pour les embeddings, et
+    #     rencontré en vrai le 25/09/2026).
+    install = _source_de('mettre_a_jour')
+    assert install, 'mettre_a_jour introuvable'
+    assert 'sys.executable' in install, \
+        '« pip » tout court installerait dans un autre Python que celui de NIMM'
+    assert "'-m', 'pip'" in install
+    assert '--upgrade' in install, 'sans --upgrade, un paquet ancien ne bouge pas'
+    assert 'timeout=' in install, 'sans délai, un réseau lent bloque l interface'
+    assert 'except' in install, 'cette fonction ne doit jamais lever'
+
+    # (4) Le câblage : les routes, et un frontend qui PRÉVIENT avant d'agir.
+    mn = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    assert '/api/video/maj' in mn and '/api/video/maj/installer' in mn
+    assert 'async def video_maj(' in mn and 'async def video_maj_installer(' in mn
+    assert "'/api/video/maj/installer'" in js, 'le bouton doit appeler la route'
+    assert "method: 'POST'" in js[js.index("'/api/video/maj/installer'"):][:200]
+    # L'état est ANNONCÉ : inutile de savoir qu'une version est périmée si on
+    # ne l'entend pas — même règle que l'instruction de redémarrage.
+    zone = html[html.index('id="ytdlp-etat"'):]
+    assert 'aria-live' in zone[:zone.index('>') + 1], \
+        "l'état de yt-dlp doit être annoncé au lecteur d'écran"
+    assert '_coanimmAnnounce' in js[js.index('btn-ytdlp'):], \
+        'le résultat doit être dit, pas seulement écrit'
+    ok("yt-dlp : version comparée en nombres, détection qui n'installe rien, "
+       "installation sur un clic")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -5582,7 +5819,9 @@ if __name__ == '__main__':
                test_panne_fournisseur_reprise, test_plan_de_la_reponse,
                test_modele_de_raisonnement, test_specificites_gemini_et_openai,
                test_caches_de_contexte, test_visibilite_selon_les_cles,
-               test_description_video, test_correlation_modele_agent_recherche,
+               test_description_video, test_lecture_texte_video,
+               test_maj_ytdlp_prevent_sans_installer,
+               test_correlation_modele_agent_recherche,
                test_reprise_sans_couture,
                test_description_audio, test_documents_epingles, test_lot_gemini,
                test_document_de_la_conversation,

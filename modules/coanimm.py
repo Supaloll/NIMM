@@ -137,6 +137,12 @@ GENERATE_SYSTEM_PROMPT = (
     "  nimm_read_url(url: str) -> str\n"
     "  Extrait le texte principal d'une page web précise (protégé anti-SSRF). À distinguer "
     "de nimm_web_search qui, lui, prend une requête.\n"
+    "  nimm_video_transcript(url: str, langues: str = '', ranger: bool = False) -> str\n"
+    "  Lit le TEXTE (les sous-titres) d'une vidéo à partir de son lien — YouTube et "
+    "d'autres sites — sans clé d'API et sans télécharger l'image, avec des repères de "
+    "temps. Bien moins coûteux que nimm_describe_video, qui regarde l'image. "
+    "ranger=True range les sous-titres dans la base de connaissances (permanent).\n"
+
     "  nimm_translate(text: str, target_lang: str = 'anglais') -> str\n"
     "  Traduit un texte dans la langue cible et retourne la traduction.\n"
     "  nimm_expurgate(text: str, consigne: str = '') -> str\n"
@@ -218,7 +224,7 @@ GENERATE_SYSTEM_PROMPT = (
     "(mise en page, tableaux, figures, pages SCANNÉES). À préférer à nimm_extract_text quand "
     "le texte seul ne suffit pas : document scanné, tableau complexe, description accessible.\n"
     "N'importe aucun de ces helpers (nimm_generate_image, nimm_web_search, nimm_github_search, "
-    "nimm_search_documents, nimm_ask_documents, nimm_extract_text, nimm_read_pdf_visual, nimm_describe_video, nimm_describe_audio, nimm_pin_document, nimm_ask_pinned, nimm_ask_llm, nimm_read_url, nimm_translate, "
+    "nimm_search_documents, nimm_ask_documents, nimm_extract_text, nimm_read_pdf_visual, nimm_describe_video, nimm_describe_audio, nimm_pin_document, nimm_ask_pinned, nimm_ask_llm, nimm_read_url, nimm_video_transcript, nimm_translate, "
     "nimm_expurgate, nimm_coloring_page, nimm_make_document, nimm_transcribe, nimm_speak, "
     "nimm_describe_image, nimm_simplify, nimm_resize_image, nimm_anonymize, nimm_merge_pdf, "
     "nimm_split_pdf, nimm_pdf_from_images, nimm_read_table, nimm_audio_overview, "
@@ -560,6 +566,16 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
         "    with _nimm_ur.urlopen(_req, timeout=120) as _r:\n"
         "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
     ) % tid
+    vt = (
+        "def nimm_video_transcript(url, langues='', ranger=False, _tid='%s'):\n"
+        "    _data = _nimm_json.dumps({\"url\": url, \"langues\": langues,\n"
+        "        \"ranger\": ranger, \"thread_id\": _tid}).encode()\n"
+        "    _req = _nimm_ur.Request(\n"
+        "        \"http://localhost:8080/api/coanimm/video_transcript\",\n"
+        "        data=_data, headers={\"Content-Type\": \"application/json\"})\n"
+        "    with _nimm_ur.urlopen(_req, timeout=180) as _r:\n"
+        "        return _nimm_json.loads(_r.read()).get(\"result\", \"\")\n"
+    ) % tid
     parts.append(ds if "doc_search" not in _disabled else _stub("nimm_search_documents", "consulter la base de connaissances"))
     parts.append(ex if "extract_text" not in _disabled else _stub("nimm_extract_text", "extraire le texte d'un document"))
     parts.append(pv if "read_pdf_visual" not in _disabled else _stub("nimm_read_pdf_visual", "lire un PDF visuellement"))
@@ -586,6 +602,7 @@ def _build_prologue(thread_id: str, workdir: str) -> str:
             parts.append(_stub(_n, _l))
     parts.append(al if "ask_llm" not in _disabled else _stub("nimm_ask_llm", "sous-tache IA"))
     parts.append(ru if "read_url" not in _disabled else _stub("nimm_read_url", "lire une page web"))
+    parts.append(vt if "video_transcript" not in _disabled else _stub("nimm_video_transcript", "lire le texte d'une vidéo"))
     tr = (
         "def nimm_translate(text, target_lang='anglais', _tid='%s'):\n"
         "    _data = _nimm_json.dumps({\"text\": text, \"target_lang\": target_lang, \"thread_id\": _tid}).encode()\n"

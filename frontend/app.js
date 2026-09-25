@@ -5662,6 +5662,9 @@ document.getElementById('toggle-settings').addEventListener('click', async () =>
         const tog = document.getElementById('embeddings-toggle');
         if (tog) tog.checked = d.enabled === true;
     } catch(e) {}
+    // yt-dlp périme : on VÉRIFIE à l'ouverture des Paramètres. Rien ne
+    // s'installe ici — c'est le bouton dédié qui décide, plus bas.
+    _verifierMajYtdlp();
 });
 
 // Gestion du sélecteur de voix TTS
@@ -9571,6 +9574,86 @@ document.getElementById('btn-update').addEventListener('click', async () => {
         btn.disabled = false;
         btn.textContent = 'Vérifier et installer les mises à jour';
     }
+});
+
+
+// ══════════════════════════════════════════
+// yt-dlp — LE SEUL PAQUET QUI PÉRIME
+// ══════════════════════════════════════════
+//
+// Pourquoi lui et pas les autres : yt-dlp parle à des sites tiers qui changent
+// leurs défenses. Une version ancienne ne « bugue » pas, elle CESSE de marcher,
+// d'un coup, sans prévenir. numpy, fastapi, whisper : une version ancienne
+// tourne des années sans souci. Donc on ne surveille QUE lui.
+//
+// On VÉRIFIE tout seul (une requête de quelques kilo-octets sur le catalogue
+// Python) ; on n'INSTALLE que sur un clic. Un environnement ne se modifie pas
+// dans le dos de son propriétaire.
+
+async function _verifierMajYtdlp(forcer) {
+    const etat = document.getElementById('ytdlp-etat');
+    if (!etat) return;
+    const statut = document.getElementById('ytdlp-status');
+    etat.textContent = 'Vérification de la version de yt-dlp…';
+    if (statut) statut.textContent = '';
+    try {
+        const r = await fetch('/api/video/maj' + (forcer ? '?verifier=1' : ''));
+        const d = await r.json().catch(() => ({}));
+        // TROIS cas, pas deux : à jour, périmé, et « je n'ai pas pu savoir ».
+        // Annoncer « à jour » dans le troisième serait un mensonge — celui que
+        // NIMM s'interdit déjà pour la description d'image.
+        if (d.a_jour === true) {
+            etat.textContent = '✅ ' + (d.message || 'yt-dlp est à jour.');
+        } else if (d.a_jour === false && d.installee) {
+            etat.textContent = '⚠️ ' + (d.message || 'Une nouvelle version existe.')
+                + (d.poids_mo ? ' Téléchargement : ' + d.poids_mo + ' Mo.' : '');
+        } else {
+            etat.textContent = '❔ ' + (d.message || 'Version de yt-dlp indéterminée.');
+        }
+    } catch (e) {
+        etat.textContent = '❔ Impossible de vérifier la version de yt-dlp : '
+            + 'le serveur ne répond pas.';
+    }
+}
+
+document.getElementById('btn-ytdlp')?.addEventListener('click', async () => {
+    const btn    = document.getElementById('btn-ytdlp');
+    const statut = document.getElementById('ytdlp-status');
+    const libelle = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Mise à jour en cours…';
+    if (statut) statut.textContent = 'Téléchargement depuis le catalogue Python. '
+        + 'Ne ferme pas cette page.';
+    try {
+        const r = await fetch('/api/video/maj/installer', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        const texte = d.message || (r.ok ? 'Mise à jour terminée.' : 'Échec.');
+        if (statut) statut.textContent = (d.ok ? '✅ ' : '❌ ') + texte;
+        // « Actif au prochain démarrage » est inutile si on ne l'entend pas :
+        // même règle que pour la mise à jour du code.
+        if (typeof _coanimmAnnounce === 'function') _coanimmAnnounce(texte);
+        if (d.detail) {
+            const det = document.createElement('details');
+            det.style.marginTop = '6px';
+            det.innerHTML = '<summary style="cursor:pointer;font-size:0.8rem;">'
+                + 'Détail technique</summary>';
+            const zone = document.createElement('textarea');
+            zone.readOnly = true;
+            zone.rows = 4;
+            zone.style.cssText = 'width:100%;box-sizing:border-box;margin-top:6px;'
+                + 'font-size:0.78rem;background:var(--bg-input);color:var(--text);'
+                + 'border:1px solid var(--border);border-radius:6px;padding:6px 10px;';
+            zone.value = d.detail;
+            det.appendChild(zone);
+            if (statut) statut.appendChild(det);
+        }
+        // L'état affiché plus haut date d'avant l'installation : on le relit.
+        await _verifierMajYtdlp(true);
+    } catch (e) {
+        if (statut) statut.textContent = '❌ Impossible de joindre le serveur.';
+    }
+    btn.disabled = false;
+    btn.textContent = libelle;
 });
 
 
@@ -14543,6 +14626,7 @@ const LIVE_NOMS_OUTILS = {
     get_exchange_rate:   'les taux de change',
     geocode_address:     'une adresse',
     extract_url_content: 'une page web',
+    read_video_transcript: 'une vidéo',
     lookup_book:         'un livre',
     get_country_info:    'des informations sur un pays',
     search_commune:      'une commune',

@@ -3061,6 +3061,7 @@ _COANIMM_TOOLS = [
     {"tool": "read_pdf_visual", "label": "Lire un PDF visuellement (mise en page, tableaux, scans)", "category": "Documents"},
     {"tool": "ask_documents", "label": "Interroger la base de connaissances avec citations", "category": "Documents"},
     {"tool": "describe_video", "label": "Décrire une vidéo (fichier ou lien)", "category": "Images"},
+    {"tool": "video_transcript", "label": "Lire le texte d'une vidéo (sous-titres)", "category": "Images"},
     {"tool": "describe_audio", "label": "Décrire un document sonore (ton, bruits, musique)", "category": "Audio & voix"},
     {"tool": "pin_document", "label": "Épingler un document et l'interroger (cache Gemini)", "category": "Documents"},
     {"tool": "thread_document", "label": "Attacher un document à la conversation", "category": "Documents"},
@@ -3132,6 +3133,11 @@ class CoanimmAskLlmReq(BaseModel):
     thread_id: Optional[str] = None
 class CoanimmReadUrlReq(BaseModel):
     url: str = ""
+    thread_id: Optional[str] = None
+class CoanimmVideoTranscriptReq(BaseModel):
+    url: str = ""
+    langues: str = ""      # « fr,en » : ordre de préférence. Vide = défaut (fr puis en).
+    ranger: bool = False   # verser les sous-titres dans la base de connaissances
     thread_id: Optional[str] = None
 
 @app.post("/api/coanimm/doc_search")
@@ -3219,6 +3225,72 @@ async def coanimm_read_url(req: CoanimmReadUrlReq):
         return {"result": "[Aucun contenu exploitable à cette adresse.]"}
     head = (f"# {titre}\n" if titre else "")
     return {"result": (head + texte)[:8000]}
+
+@app.post("/api/coanimm/video_transcript")
+async def coanimm_video_transcript(req: CoanimmVideoTranscriptReq):
+    """Lit le TEXTE (les sous-titres) d'une vidéo : le propos, sans l'image.
+
+    Beaucoup moins coûteux que /describe_video, qui envoie la vidéo à Gemini :
+    ici aucune clé d'API n'est nécessaire, et le texte peut être rangé dans la
+    base de connaissances pour devenir interrogeable comme un document.
+    """
+    import core.database as _db, asyncio as _aio
+    if "video_transcript" in _db.list_coanimm_disabled_tools():
+        return {"result": "[Outil lecture de vidéo (sous-titres) désactivé dans les réglages CoaNIMM]"}
+    url = (req.url or "").strip()
+    if not url:
+        return {"result": "(lien de vidéo vide)"}
+    langues = tuple(x.strip() for x in (req.langues or "").split(",") if x.strip())
+    try:
+        from modules import youtube as _yt
+        lecture = _yt.lire_et_verser if req.ranger else _yt.lire_sous_titres
+        res = await _aio.to_thread(lecture, url, langues or None)
+    except Exception as e:
+        return {"result": f"[Erreur lecture des sous-titres : {e}]"}
+    if not res.get("ok"):
+        return {"result": f"[Vidéo] {res.get('erreur') or 'Lecture impossible.'}"}
+    entete = []
+    if res.get("titre"):
+        entete.append(res["titre"])
+    if res.get("chaine"):
+        entete.append(f"chaîne : {res['chaine']}")
+    if res.get("duree_texte"):
+        entete.append(f"durée : {res['duree_texte']}")
+    entete.append("sous-titres en %s%s"
+                  % (res.get("langue") or "?",
+                     " (automatiques)" if res.get("auto") else ""))
+    if req.ranger:
+        entete.append("rangé dans la base de connaissances : %s"
+                      % ("oui" if res.get("verse") else "NON"))
+    fiche = "[Vidéo — %s]" % " | ".join(entete)
+    return {"result": (fiche + chr(10) * 2 + (res.get("texte") or ""))[:200000]}
+
+@app.get("/api/video/maj")
+async def video_maj(verifier: int = 0):
+    """État de yt-dlp : à jour, périmé, ou indéterminé. N'INSTALLE RIEN.
+
+    `verifier=1` force une nouvelle interrogation du catalogue Python ; sinon,
+    la réponse en cache (6 h) est rendue telle quelle.
+    """
+    import asyncio as _aio
+    from modules import youtube as _yt
+    return await _aio.to_thread(_yt.maj_disponible, bool(verifier))
+
+@app.post("/api/video/maj/installer")
+async def video_maj_installer():
+    """Installe la dernière version de yt-dlp — SUR UN CLIC, jamais tout seul.
+
+    Pourquoi ce paquet-là et pas les autres : c'est le SEUL dont la péremption
+    casse la fonction, parce qu'il parle à des sites tiers qui changent leurs
+    défenses. Une version ancienne de numpy ou de whisper tourne des années.
+
+    Mettre à jour tout `requirements.txt` automatiquement serait un autre sujet,
+    et un vrai risque : versions épinglées qui sautent, plusieurs gigaoctets
+    retéléchargés. On ne le fait pas.
+    """
+    import asyncio as _aio
+    from modules import youtube as _yt
+    return await _aio.to_thread(_yt.mettre_a_jour)
 
 class CoanimmTranslateReq(BaseModel):
     text: str = ""

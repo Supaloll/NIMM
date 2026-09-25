@@ -2295,6 +2295,32 @@ NIMM_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_video_transcript",
+            "description": (
+                "Lit le TEXTE (les sous-titres) d'une video a partir de son lien "
+                "(YouTube et des centaines d'autres sites). Utilise cet outil quand "
+                "l'utilisateur partage un lien de video et demande de la resumer, "
+                "de la citer ou d'en retenir le propos. Beaucoup plus econome que "
+                "describe_video, qui envoie l'image a Gemini : ici on ne lit que le "
+                "texte, horodate, et aucune cle d'API n'est necessaire."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string",
+                            "description": "Lien de la video (https://...)"},
+                    "ranger": {"type": "boolean",
+                               "description": ("true pour ranger les sous-titres dans "
+                                               "la base de connaissances (permanent). "
+                                               "Par defaut false : on lit sans ecrire.")}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "lookup_book",
             "description": (
                 "Recherche des informations sur un livre : titre, auteur, date de parution, "
@@ -3607,6 +3633,43 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         except Exception as e:
             print(f"[HUB] ⚠️ Erreur extract_url_content : {e}")
             return f'[Erreur extraction URL : {e}]'
+
+    elif name == 'read_video_transcript':
+        url = (args.get('url') or '').strip()
+        if not url:
+            return '[read_video_transcript] Lien de vidéo manquant.'
+        ranger = bool(args.get('ranger'))
+        try:
+            from modules import youtube as _yt
+            _res = await asyncio.to_thread(
+                _yt.lire_et_verser if ranger else _yt.lire_sous_titres, url)
+            if not _res.get('ok'):
+                return '[Vidéo] %s' % (_res.get('erreur') or 'Lecture impossible.')
+            # Le modele recoit une fiche courte en tete, puis le texte horodate :
+            # il peut ainsi citer (« vers 12:30 ») sans recopier l'entete.
+            fiche = []
+            if _res.get('titre'):
+                fiche.append(_res['titre'])
+            if _res.get('chaine'):
+                fiche.append('chaîne : %s' % _res['chaine'])
+            if _res.get('duree_texte'):
+                fiche.append('durée : %s' % _res['duree_texte'])
+            fiche.append('sous-titres en %s%s'
+                         % (_res.get('langue') or '?',
+                            ' (automatiques)' if _res.get('auto') else ''))
+            if ranger:
+                fiche.append('rangé dans la base de connaissances : %s'
+                             % ('oui' if _res.get('verse') else 'NON'))
+            corps = _res.get('texte') or ''
+            if _res.get('tronque'):
+                corps += (chr(10) + chr(10)
+                          + "[Texte tronqué : la vidéo dépasse ce que cet outil "
+                            "rend en une fois, seul le début est donné.]")
+            print(f"[HUB] 🎬 Tool read_video_transcript({url[:60]!r}) -> {len(corps)} chars")
+            return '[Vidéo — %s]%s%s' % (' | '.join(fiche), chr(10) * 2, corps)
+        except Exception as e:
+            print(f"[HUB] ⚠️ Erreur read_video_transcript : {e}")
+            return f'[Erreur lecture des sous-titres : {e}]'
 
     elif name == 'lookup_book':
         bquery = args.get('query', query).strip()
