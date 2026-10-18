@@ -104,6 +104,22 @@
 [data-theme="cpc"] { scrollbar-color: #ffff00 #000000; }
 [data-theme="cpc"] ::selection { background: #ffff00; color: #000000; }
 
+/* ── Repère de focus clavier, visible dans TOUS les thèmes (audit 18/10/2026) ──
+   Partout ailleurs le focus n'était qu'un changement de couleur de bordure
+   (outline: none), et le thème Amstrad supprimait le seul anneau du projet
+   (box-shadow: none !important) : en CPC, blanc → jaune, soit environ 1,07:1,
+   imperceptible. Un contour (outline) n'est pas touché par cette règle.
+   !important : nécessaire face aux nombreux « .x:focus { outline: none } »,
+   plus spécifiques. Les éléments à tabindex="-1" (une fenêtre qui reçoit le
+   focus par programme) en sont exclus : ils ne sont pas atteints au clavier. */
+:focus-visible:not([tabindex="-1"]) {
+    outline: 2px solid var(--accent) !important;
+    outline-offset: 2px !important;
+}
+[data-theme="cpc"] :focus-visible:not([tabindex="-1"]) {
+    outline-width: 3px !important;
+}
+
 /* ── Reset ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -3054,7 +3070,8 @@ body {
     height: 15px;
     padding: 0 3px;
     border-radius: 8px;
-    background: #e5484d;
+    /* #e5484d donnait 3,95:1 avec le blanc, sous le seuil : --danger donne 5,6:1 */
+    background: var(--danger);
     color: #fff;
     font-size: 0.62rem;
     font-weight: 600;

@@ -6361,8 +6361,18 @@ function _appliquerTheme(nom) {
         // Sortie du thème Amstrad : on rend sa police à l'utilisateur
         const avant = localStorage.getItem('nimm-font-avant-cpc') || '';
         localStorage.removeItem('nimm-font-avant-cpc');
-        if (avant) _appliquerPolice(avant, _nomPolice(avant));
-        else       delete document.body.style.fontFamily;
+        // Une police choisie PENDANT le thème Amstrad l'emporte sur celle mise
+        // de côté à l'entrée (audit 18/10/2026).
+        const choisie = police && police.indexOf('VT323') === -1 ? police : avant;
+        if (choisie) {
+            _appliquerPolice(choisie, _nomPolice(choisie));
+        } else {
+            // Aucune police personnalisée : on revient à celle du thème. « delete »
+            // sur une propriété de style ne fait rien, et VT323 restait en mémoire,
+            // donc revenait au prochain chargement.
+            document.body.style.fontFamily = '';
+            localStorage.removeItem('nimm-font');
+        }
     }
 }
 
@@ -7264,10 +7274,16 @@ function _majPastilleAgenda(n) {
     const btn = document.getElementById('toggle-agenda');
     if (!btn) return;
     let dot = btn.querySelector('.agenda-pastille');
+    // aria-label écrase le contenu du bouton : la pastille n'était jamais lue.
+    // Le nombre passe donc dans l'étiquette elle-même (audit 18/10/2026).
+    const libelle = n ? 'Agenda, ' + n + (n > 1 ? ' rappels' : ' rappel') + ' à voir' : 'Agenda';
+    btn.setAttribute('aria-label', libelle);
+    btn.setAttribute('title', libelle);
     if (!n) { if (dot) dot.remove(); return; }
     if (!dot) {
         dot = document.createElement('span');
         dot.className = 'agenda-pastille';
+        dot.setAttribute('aria-hidden', 'true');
         btn.appendChild(dot);
     }
     dot.textContent = String(n);
@@ -8582,7 +8598,47 @@ function _openModal(overlayOrModal) {
         ? overlayOrModal : overlayOrModal.closest('.modal-overlay') || overlayOrModal;
     overlay.__prevFocus = document.activeElement;
     overlay.classList.remove('hidden');
+    // Le focus ENTRE dans la fenêtre. Sans cela, une fenêtre qui s'ouvre seule
+    // (rappels à l'ouverture du profil) restait muette au lecteur d'écran.
+    // Un appelant qui place lui-même le focus plus tard (setTimeout de 90 à
+    // 120 ms) garde la main : on n'agit que si le focus est resté dehors.
+    setTimeout(() => {
+        if (overlay.classList.contains('hidden') || overlay.contains(document.activeElement)) return;
+        const dlg = overlay.querySelector('[role="dialog"],[role="alertdialog"]') || overlay;
+        if (!dlg.hasAttribute('tabindex')) dlg.setAttribute('tabindex', '-1');
+        dlg.focus();
+    }, 40);
 }
+
+// Piège de focus : tant qu'une fenêtre modale est ouverte, Tab et Maj+Tab
+// tournent à l'intérieur. Sans lui, on sortait dans la page de derrière sans
+// le savoir — la page est masquée à la vue, pas au clavier (audit 18/10/2026).
+const _FOCUSABLES = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),'
+    + 'select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+function _modaleOuverte() {
+    const ouvertes = Array.from(document.querySelectorAll('.modal-overlay:not(.hidden)'))
+        .filter(el => el.getClientRects().length);
+    if (!ouvertes.length) return null;
+    // La plus haute : z-index le plus grand, puis la dernière dans la page
+    return ouvertes.reduce((a, b) =>
+        ((parseInt(getComputedStyle(b).zIndex, 10) || 0) >= (parseInt(getComputedStyle(a).zIndex, 10) || 0)) ? b : a);
+}
+document.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const ov = _modaleOuverte();
+    if (!ov || ov.id === 'pin-modal') return;   // le pavé PIN a son propre piège (_trapTab)
+    const elems = Array.from(ov.querySelectorAll(_FOCUSABLES))
+        .filter(el => el.getClientRects().length && !el.closest('.hidden,[hidden]'));
+    if (!elems.length) { e.preventDefault(); return; }
+    const premier = elems[0], dernier = elems[elems.length - 1];
+    const dedans = ov.contains(document.activeElement);
+    if (!dedans) { e.preventDefault(); (e.shiftKey ? dernier : premier).focus(); return; }
+    if (e.shiftKey && (document.activeElement === premier || !elems.includes(document.activeElement) && document.activeElement.matches('[role="dialog"],[role="alertdialog"]'))) {
+        e.preventDefault(); dernier.focus();
+    } else if (!e.shiftKey && document.activeElement === dernier) {
+        e.preventDefault(); premier.focus();
+    }
+}, true);
 function _closeModal(overlayOrModal) {
     const overlay = overlayOrModal.classList.contains('modal-overlay')
         ? overlayOrModal : overlayOrModal.closest('.modal-overlay') || overlayOrModal;

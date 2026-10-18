@@ -1297,8 +1297,12 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
             _emis  = _json_rappels.loads(_r.get('rappels_emis', '[]') or '[]')
 
             # Déterminer si ce rappel doit être signalé aujourd'hui
-            # (règle commune avec la modale d'ouverture — voir _seuil_rappel)
-            _signal = _seuil_rappel(_delta, _type, _emis)
+            # (règle commune avec la modale d'ouverture — voir _seuil_rappel).
+            # Échu et jamais annoncé : signalé « en retard », une fois.
+            if _delta < 0:
+                _signal = None if _emis else 'retard'
+            else:
+                _signal = _seuil_rappel(_delta, _type, _emis)
 
             if _signal:
                 _rappels_a_signaler.append({
@@ -1329,7 +1333,8 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
             for _rap in _rappels_a_signaler:
                 _j = "aujourd'hui" if _rap['delta'] == 0 else (
                      "demain"      if _rap['delta'] == 1 else
-                     f"dans {_rap['delta']} jours"
+                     (f"EN RETARD de {-_rap['delta']} jour(s), échéance passée sans avoir été annoncée"
+                      if _rap['delta'] < 0 else f"dans {_rap['delta']} jours")
                 )
                 _ton = {
                     'critique':  '⚠️ CRITIQUE',
@@ -2530,21 +2535,21 @@ NIMM_TOOLS = [
         "function": {
             "name": "describe_image",
             "description": (
-                "T\xc3\xa9l\xc3\xa9charge une image depuis une URL et retourne une description accessible d\xc3\xa9taill\xc3\xa9e. "
-                "Appeler quand l\'utilisateur donne une URL d\'image, demande de d\xc3\xa9crire une illustration, "
-                "v\xc3\xa9rifier l\'accessibilit\xc3\xa9 d\'une image ou g\xc3\xa9n\xc3\xa9rer un texte alternatif WCAG. "
-                "Retourne une description textuelle pr\xc3\xa9cise utilisable comme attribut alt."
+                "Télécharge une image depuis une URL et retourne une description accessible détaillée. "
+                "Appeler quand l\'utilisateur donne une URL d\'image, demande de décrire une illustration, "
+                "vérifier l\'accessibilité d\'une image ou générer un texte alternatif WCAG. "
+                "Retourne une description textuelle précise utilisable comme attribut alt."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "URL publique de l\'image \xc3\xa0 d\xc3\xa9crire (jpg, png, webp, gif)."
+                        "description": "URL publique de l\'image à décrire (jpg, png, webp, gif)."
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "Consigne de description (ex: \'texte alternatif WCAG\', \'d\xc3\xa9cris l\'interface\', \'est-ce accessible ?\')."
+                        "description": "Consigne de description (ex: \'texte alternatif WCAG\', \'décris l\'interface\', \'est-ce accessible ?\')."
                     }
                 },
                 "required": ["url"]
@@ -4324,7 +4329,7 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     if name == 'describe_image':
         _di_url    = args.get('url', '').strip()
         _di_prompt = args.get('prompt', '').strip() or (
-            "D\xc3\xa9cris cette image de fa\xc3\xa7on pr\xc3\xa9cise et concise, comme un texte alternatif accessible (attribut alt WCAG), en fran\xc3\xa7ais.")
+            "Décris cette image de façon précise et concise, comme un texte alternatif accessible (attribut alt WCAG), en français.")
         if not _di_url:
             return "[describe_image] URL manquante."
         try:
@@ -4357,7 +4362,7 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                 _di_pm = _gs_di("pixtral_model", "pixtral-12b-2409")
             _di_desc = await call_vision(_b64_di, _mime_di, _di_prompt, _di_prov,
                                          _di_settings.get("api_keys", {}), vision_model=_di_pm)
-            return _di_desc or "[describe_image] Aucune description retourn\xc3\xa9e."
+            return _di_desc or "[describe_image] Aucune description retournée."
         except Exception as e:
             return f"[Erreur description image : {e}]"
 
@@ -4466,26 +4471,37 @@ def _get_llm_history(thread_id: str, limit: int = 60) -> list:
 
 
 def _add_msg(thread_id: str, role: str, content: str) -> None:
-    """Sauvegarde le message SAUF si le fil est en mode fant\xc3\xb4me (confidentiel).
-    En mode fant\xc3\xb4me, aucune trace n'est persist\xc3\xa9e en base, mais l'echange
+    """Sauvegarde le message SAUF si le fil est en mode fantôme (confidentiel).
+    En mode fantôme, aucune trace n'est persistée en base, mais l'echange
     est conserve en MEMOIRE VIVE (cache de session) pour que l'assistant garde le
     fil de la conversation en cours sans rien ecrire sur disque."""
     if _is_ghost_thread(thread_id):
+        # Décision de Fernando (18/10/2026) : le fantôme l'emporte. Rien n'est
+        # écrit sur disque, pas même la mémoire propre d'un masque de jeu —
+        # la case promet « aucun message, aucune mémoire ».
         _ghost_session_push(thread_id, role, content)
-        _masque_souvenir_push(thread_id, role, content)
         return
     add_message(thread_id, role, content)
+    _masque_souvenir_push(thread_id, role, content)
+
+
+_MASQUE_DERNIERE_QUESTION = {}   # thread_id → dernier message utilisateur (mémoire vive)
 
 
 def _masque_souvenir_push(thread_id: str, role: str, content: str) -> None:
     """Mémoire privée d'un masque de jeu (champ `memoire_du_masque`).
 
-    EXCEPTION ASSUMÉE AU MODE FANTÔME : un fil fantôme n'écrit rien sur disque,
-    sauf ce fragment — et seulement si le masque le déclare. Le fichier vit dans
+    Fils NORMAUX uniquement depuis le 18/10/2026 : l'« exception assumée au mode
+    fantôme » a été retirée à la demande de Fernando — un fil fantôme n'écrit
+    plus rien, ce fragment compris. Le fichier vit dans
     `data/souvenirs_masques/` (ignoré par git) et n'est relu que par ce masque :
     il ne se mêle ni à la table `memory`, ni aux autres masques.
     """
     try:
+        if role == 'user':
+            # Mémorisé en vive pour accompagner la réponse qui suit.
+            _MASQUE_DERNIERE_QUESTION[thread_id] = content or ''
+            return
         if role != 'assistant':
             return
         _t = get_thread(thread_id)
@@ -4495,11 +4511,7 @@ def _masque_souvenir_push(thread_id: str, role: str, content: str) -> None:
         _mask = load_mask(_mid)
         if not _mask.get('memoire_du_masque'):
             return
-        _q = ''
-        for _m in reversed(_ghost_session_messages(thread_id, 6)):
-            if _m.get('role') == 'user':
-                _q = _m.get('content') or ''
-                break
+        _q = _MASQUE_DERNIERE_QUESTION.pop(thread_id, '')
         _rep = re.sub(r'%%[^%]*%%', '', content or '').strip()
         from core.database import add_souvenir_masque as _asm
         _asm(_mid, _q, _rep)

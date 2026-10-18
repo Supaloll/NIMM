@@ -6008,6 +6008,112 @@ def test_volet_institutionnel_cite_et_verifie():
        "Word en français")
 
 
+def test_audit_lot2_promesses_et_accessibilite():
+    """Audit du 18/10/2026, lot 2 — promesses tenues et accessibilité.
+
+    1. Mode fantôme : décision de Fernando, le fantôme l'emporte. Un masque à
+       mémoire propre n'écrit plus rien dans un fil fantôme ; sa mémoire vit
+       désormais dans les fils normaux (elle n'existait QUE dans les fantômes).
+    2. Un rappel échu jamais annoncé ne se périme plus au premier message : il
+       reste actif, signalé « en retard », et ne se périme qu'une fois vu.
+    3. Une fenêtre qui s'ouvre (seule ou non) reçoit le focus, et Tab y reste.
+    4. Le nombre de rappels du bouton Agenda est LU (aria-label l'écrasait).
+    5. Un repère de focus visible dans tous les thèmes, Amstrad compris.
+    6. Textes envoyés au modèle ou affichés : plus de séquences « \\xc3\\xa9 ».
+    """
+    import sqlite3
+    import glob
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+
+    # 1. Fantôme : la branche fantôme de _add_msg n'écrit plus le souvenir de masque
+    add_msg = hub[hub.index('def _add_msg('):hub.index('_MASQUE_DERNIERE_QUESTION = {}')]
+    branche = add_msg[add_msg.index('if _is_ghost_thread(thread_id):'):add_msg.index('add_message(thread_id')]
+    assert '_masque_souvenir_push' not in branche, 'un fil fantôme écrit encore la mémoire du masque'
+    assert '_masque_souvenir_push(thread_id, role, content)' in add_msg[add_msg.index('add_message(thread_id'):], \
+        'la mémoire du masque ne vit plus nulle part : elle doit fonctionner dans les fils normaux'
+    # ... et elle marche vraiment : la question de l'utilisateur accompagne la réponse
+    #     Exécutée isolément (extraite du source) : d'autres scénarios remplacent
+    #     core.database par une doublure, ce qui interdit d'importer core.hub ici.
+    ecrits = []
+    debut = hub.index('_MASQUE_DERNIERE_QUESTION = {}')
+    fin = hub.index(chr(10) + 'async def ', debut)
+    fin = min(fin, hub.index(chr(10) + 'def ', hub.index('def _masque_souvenir_push') + 10))
+    espace = {'re': re, 'get_thread': lambda tid: {'mask_id': 'm1'},
+              'load_mask': lambda mid: {'memoire_du_masque': True}}
+    faux_db = types.ModuleType('core.database')
+    faux_db.add_souvenir_masque = lambda mid, q, r: ecrits.append((mid, q, r))
+    ancien_db = sys.modules.get('core.database')
+    sys.modules['core.database'] = faux_db
+    try:
+        exec(compile(hub[debut:fin], 'souvenir_masque', 'exec'), espace)
+        espace['_masque_souvenir_push']('filX', 'user', 'Te souviens-tu de la forêt ?')
+        espace['_masque_souvenir_push']('filX', 'assistant', 'Oui, la forêt des brumes. %%MEM:x%%')
+    finally:
+        if ancien_db is not None:
+            sys.modules['core.database'] = ancien_db
+        else:
+            sys.modules.pop('core.database', None)
+    assert ecrits == [('m1', 'Te souviens-tu de la forêt ?', 'Oui, la forêt des brumes.')], ecrits
+    idx = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    assert 'aucun message, aucune mémoire, aucune note de carnet ne sera' in idx
+
+    # 2. Rappels : exécution réelle de la règle de péremption sur une base temporaire
+    db_src = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    f = db_src[db_src.index('def perimer_rappels_depasses'):]
+    sql = re.search(r'"""(UPDATE rappels.*?)"""', f, re.S).group(1)
+    con = sqlite3.connect(':memory:')
+    con.execute("CREATE TABLE rappels (id INTEGER PRIMARY KEY, date_echeance TEXT, statut TEXT, rappels_emis TEXT)")
+    con.executemany("INSERT INTO rappels VALUES (?,?,?,?)", [
+        (1, '2020-01-01', 'actif', '[]'),          # échu, jamais annoncé → reste actif
+        (2, '2020-01-01', 'actif', '["j1"]'),      # échu, annoncé → périmé
+        (3, '2020-01-01', 'actif', None),          # échu, colonne vide → reste actif
+        (4, '2999-01-01', 'actif', '["j1"]'),      # à venir → reste actif
+    ])
+    con.execute(sql, ('2026-10-18',))
+    etat = dict(con.execute('SELECT id, statut FROM rappels'))
+    assert etat == {1: 'actif', 2: 'perime', 3: 'actif', 4: 'actif'}, etat
+    prompt = hub[hub.index('# Rappels / Agenda'):hub.index('# Note de présence temporelle')]
+    assert "_signal = None if _emis else 'retard'" in prompt and 'EN RETARD de' in prompt
+
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    # 3. Focus : il entre dans la fenêtre, et Tab tourne dedans
+    om = js[js.index('function _openModal('):js.index('function _closeModal(')]
+    assert 'dlg.focus()' in om and 'overlay.contains(document.activeElement)' in om
+    assert 'function _modaleOuverte()' in om and "e.key !== 'Tab'" in om, 'piège de focus absent'
+    # 4. Pastille : le nombre passe dans l'étiquette lue
+    p = js[js.index('function _majPastilleAgenda'):]
+    p = p[:p.index('\n}\n')]
+    assert "setAttribute('aria-label', libelle)" in p and "dot.setAttribute('aria-hidden', 'true')" in p
+    # Police : un choix fait pendant le thème Amstrad survit à la sortie
+    th = js[js.index('function _appliquerTheme('):]
+    th = th[:th.index('\n}\n')]
+    assert 'delete document.body.style.fontFamily' not in th and "localStorage.removeItem('nimm-font')" in th
+    # 5. Focus visible et contraste de la pastille
+    css = open(os.path.join(racine, 'frontend', 'styles.css'), encoding='utf-8').read()
+    assert ':focus-visible:not([tabindex="-1"])' in css and 'outline: 2px solid var(--accent) !important' in css
+    pastille = css[css.index('.agenda-pastille {'):]
+    assert 'background: var(--danger)' in pastille[:pastille.index('}')]
+    # Étiquettes : les champs relevés par l'audit ont un nom accessible
+    for motif in ('id="stt-dict-close" aria-label=', 'id="stt-dict-from" placeholder="Whisper dit…" aria-label=',
+                  'id="stt-dict-to" placeholder="Correction…" aria-label=', 'id="coanimm-explore-stdout" readonly aria-label=',
+                  'id="coanimm-cloud-ci-code" readonly aria-label=', 'id="coanimm-cloud-ci-output" readonly aria-label=',
+                  '<label for="new-thread-mask-select"', 'id="memory-edit-input" type="text" aria-labelledby=',
+                  'id="galerie-rename-input" type="text" aria-label='):
+        assert motif in idx, 'nom accessible manquant : ' + motif
+
+    # 6. Plus d'accents écrits en séquences d'échappement dans le code
+    for chemin in [os.path.join(racine, 'main.py')] + glob.glob(os.path.join(racine, 'core', '*.py')) \
+            + glob.glob(os.path.join(racine, 'modules', '*.py')):
+        src = open(chemin, encoding='utf-8').read()
+        assert not re.search(r'\\x[cC][23]\\x[89abAB]', src), \
+            '%s : accents en séquences \\xc3\\x.. (le modèle ou l’utilisateur lit « Ã© »)' % os.path.basename(chemin)
+    archi = open(os.path.join(racine, 'ARCHITECTURE.md'), encoding='utf-8').read()
+    assert not re.search(r'Ã[\x80-\xbf©¨ª«®´ ]|Â[«»° ]', archi), 'mojibake dans ARCHITECTURE.md'
+    ok("audit lot 2 : fantôme sans exception, rappel en retard conservé, focus dans les fenêtres, "
+       "pastille lue, focus visible, accents réparés")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -6081,6 +6187,7 @@ if __name__ == '__main__':
                test_embeddings_installation_silencieuse,
                test_releve_decisions_ne_devine_rien,
                test_audit_securite_20261018,
-               test_volet_institutionnel_cite_et_verifie]:
+               test_volet_institutionnel_cite_et_verifie,
+               test_audit_lot2_promesses_et_accessibilite]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
