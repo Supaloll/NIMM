@@ -170,15 +170,56 @@ def _esc(t: str) -> str:
 
 # ── DOCX ──────────────────────────────────────────────────────────────────────
 
+_LANGUES_DOCX = {'fr': 'fr-FR', 'en': 'en-GB', 'pt': 'pt-PT', 'es': 'es-ES',
+                 'de': 'de-DE', 'it': 'it-IT'}
+
+
+def _poser_langue_docx(doc, lang: str = 'fr'):
+    """Pose la langue par défaut des styles (w:rPrDefault/w:lang) et du style Normal."""
+    try:
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+        code = _LANGUES_DOCX.get((lang or 'fr').lower()[:2], lang or 'fr-FR')
+        styles = doc.styles.element
+        rpr_def = styles.find(qn('w:docDefaults'))
+        cibles = []
+        if rpr_def is not None:
+            rpr = rpr_def.find(qn('w:rPrDefault'))
+            if rpr is not None:
+                inner = rpr.find(qn('w:rPr'))
+                if inner is None:
+                    inner = OxmlElement('w:rPr')
+                    rpr.append(inner)
+                cibles.append(inner)
+        cibles.append(doc.styles['Normal'].element.get_or_add_rPr())
+        for rp in cibles:
+            el = rp.find(qn('w:lang'))
+            if el is None:
+                el = OxmlElement('w:lang')
+                rp.append(el)
+            el.set(qn('w:val'), code)
+            el.set(qn('w:eastAsia'), code)
+    except Exception as e:
+        print('[FILE_WRITER] Langue du document non posée : %s' % e)
+
+
 def _write_docx(content: str, filepath: str, title: str = 'Document', lang: str = 'fr'):
     from docx import Document
     from docx.shared import Pt
     doc = Document()
     doc.core_properties.title = title
     doc.core_properties.language = lang
-    # Titre principal
-    doc.add_heading(title, level=0)
+    # Langue du TEXTE, pas seulement des propriétés : le modèle python-docx
+    # marque tout en « en-US ». Word et les lecteurs d'écran suivent ce
+    # marquage — un document français était lu par la voix anglaise (même
+    # défaut que les PDF déclarés en anglais). Audit du 18/10/2026.
+    _poser_langue_docx(doc, lang)
     lignes_src = content.splitlines()
+    # Titre principal — sauf si le contenu ouvre déjà sur un titre de niveau 1 :
+    # sinon le titre est annoncé deux fois de suite au lecteur d'écran.
+    _premiere = next((l for l in lignes_src if l.strip()), '')
+    if not _premiere.startswith('# '):
+        doc.add_heading(title, level=0)
     i = 0
     while i < len(lignes_src):
         line = lignes_src[i]

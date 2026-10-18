@@ -5885,6 +5885,129 @@ def test_audit_securite_20261018():
     ok("audit sécurité 18/10 : écoute locale, rendu filtré, échappements réels, secrets illisibles")
 
 
+def test_volet_institutionnel_cite_et_verifie():
+    """Préparer une réunion, rédiger un avis, suivre un texte : rien n'est deviné, tout est cité.
+
+    Ces trois outils (18/10/2026) complètent le relevé de décisions du 07/09.
+    Leur risque commun : un élément inventé ou une citation reformulée, repris
+    en commission ou signé dans un avis sans que personne n'aille vérifier.
+    D'où ce qui est verrouillé ici :
+      - les extraits sont VÉRIFIÉS contre le texte réel (le relevé se contentait
+        de demander « mot pour mot ») ;
+      - un projet d'avis ne prend jamais position : une position absente des
+        notes est signalée DANS le corps de l'avis, pas seulement en annexe ;
+      - ce qui a changé entre deux versions d'un texte est établi par le CODE ;
+        seule la « portée probable » vient du modèle, et le document le dit ;
+      - en fil fantôme, aucune note de carnet (relevé de décisions compris) ;
+      - les documents Word sont marqués en français dans le TEXTE, pas seulement
+        dans les propriétés — sinon la voix anglaise du lecteur d'écran les lit.
+    """
+    import importlib
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    Ci = importlib.import_module('modules.citations')
+    R = importlib.import_module('modules.reunion')
+    A = importlib.import_module('modules.avis')
+    S = importlib.import_module('modules.suivi_textes')
+
+    # 1. Vérification des citations : tolérante à la typographie, pas à la reformulation
+    t = "L’article 3 prévoit que le registre public d’accessibilité est mis à jour chaque année."
+    assert Ci.citation_verifiee("le registre public d'accessibilité est mis à jour chaque année", t)
+    assert Ci.citation_verifiee("« L'article 3 prévoit […] mis à jour chaque année »", t)
+    assert not Ci.citation_verifiee("le registre est mis à jour tous les deux ans", t)
+    assert not Ci.citation_verifiee("L'article 3", t), 'un extrait trop court ne prouve rien'
+    assert not Ci.citation_verifiee("mis à jour chaque année … L'article 3 prévoit que", t), \
+        "des morceaux dans le désordre ne sont pas une citation"
+
+    # 2. Réunion : une question sur un silence n'est jamais adossée à un faux extrait
+    assert 'n\'invente jamais un extrait' in R.PROMPT_REUNION
+    prep = R.parser_preparation('```json\n{"objet":"x","questions":[{"question":"Qui contrôle ?",'
+                                '"citation":"","silence":true},{"question":""}],"vigilance":[{"point":'
+                                '"Dérogations","citation":"accordées par le préfet sans aucun contrôle"}]}\n```')
+    assert len(prep['questions']) == 1 and prep['questions'][0]['silence']
+    sources = [{'titre': 'Projet', 'texte': 'Les dérogations sont accordées par le préfet.'}]
+    assert R.verifier(prep, sources) == 1, "l'extrait inventé n'a pas été repéré"
+    md = R.rendre_markdown('Commission', prep, sources)
+    assert Ci.MENTION_NON_VERIFIEE in md and 'aucun extrait ne s\'y rapporte' in md
+    for mauvais in ('', 'pas de json', '[1, 2]', None):
+        R.parser_preparation(mauvais)          # ne lève jamais
+
+    # 3. Avis : aucune position hors des notes, et elle saute aux yeux si le modèle en invente une
+    p = A.prompt_structurer()
+    assert "JAMAIS position à la place de l'auteur" in p and 'UNIQUEMENT de ses notes' in p
+    assert 'jamais « exige »' in p
+    texte = "Article 1er\nLe registre est public.\nArticle 2\nIl est mis à jour chaque année.\nArticle 3 bis\nx"
+    notes = "Avis favorable avec réserves. Article 2 : la mise à jour annuelle est insuffisante."
+    st = A.parser_structure('{"observations_generales":[{"observation":"Le texte va dans le bon sens.",'
+                            '"appui_notes":"inventé"}],"observations_articles":[{"article":"2",'
+                            '"observation":"Mise à jour insuffisante.","appui_notes":'
+                            '"la mise à jour annuelle est insuffisante"}],"avis":{"sens":"plutôt oui"}}')
+    assert st['avis']['sens'] == '', 'un sens hors liste doit être écarté, pas « corrigé »'
+    A.verifier_structure(st, [texte], notes)
+    projet = A.rendre_projet('RPA', st, [{'titre': 'T', 'texte': texte}], notes)
+    corps = projet.split('## Annexe')[0]
+    assert 'Le texte va dans le bon sens. ' + A.POSITION_NON_RETROUVEE in corps, \
+        "une position absente des notes n'est pas signalée dans le corps de l'avis"
+    assert 'Mise à jour insuffisante.' + chr(10) in corps
+    assert A.A_COMPLETER in corps, "le sens de l'avis manquant doit rester à compléter"
+    assert A.articles_non_commentes(texte, "l'article 2") == ['1er', '3 bis'], \
+        'le relevé des articles non commentés doit être exact (c\'est un décompte)'
+    trame = A.charger_trame(os.path.join(racine, 'data', 'prompts', 'avis_trame.txt'))
+    assert [x[0] for x in trame] == ['saisine', 'presentation', 'observations_generales',
+                                     'observations_articles', 'demandes', 'avis']
+    assert [x[0] for x in A.charger_trame('/chemin/inexistant')][-1] == 'avis'
+    rel = A.parser_relecture('{"remarques":[{"nature":"inconnue","passage":"absent","remarque":"r"}]}')
+    A.verifier_relecture(rel, notes, [texte])
+    assert rel['remarques'][0]['nature'] == 'argument contestable' and not rel['remarques'][0]['passage_ok']
+    assert "NI l'orthographe" in A.PROMPT_RELIRE
+
+    # 4. Suivi : la comparaison est déterministe, la portée est étiquetée comme analyse
+    v1 = "Vu le code ;\nArticle 1er\nMis à jour chaque année.\nArticle 2\nConsultable sur place.\nArticle 3\nDérogations."
+    v2 = "Vu le code ;\nArticle 1er\nMis à jour tous les deux ans.\nArticle 3\nDérogations.\nArticle 3 bis\nPublié en ligne."
+    c = S.comparer(v1, v2)
+    assert [(x['unite'], x['nature']) for x in c['changements']] == [
+        ('Article 1er', 'modifié'), ('Article 3 bis', 'ajouté'), ('Article 2', 'supprimé')]
+    assert c['changements'][0]['details'] == ['« chaque année. » remplacé par « tous les deux ans. »']
+    assert S.comparer(v1, v1.replace('\n', '\n  '))['changements'] == [], 'des espaces ne sont pas un changement'
+    assert S.empreinte(v1) == S.empreinte(v1 + '   ')
+    c['changements'][0]['portee'] = 'Obligation allégée.'
+    md = S.rendre_markdown('Arrêté', c, 'v1', 'v2')
+    assert 'Portée probable (analyse de NIMM, à vérifier)' in md and 'sans interprétation' in md
+    assert '| Article | Changement |' in md
+    src_s = open(os.path.join(racine, 'modules', 'suivi_textes.py'), encoding='utf-8').read()
+    assert 'call_llm' not in src_s[src_s.index('def comparer'):src_s.index('# ── Portée')], \
+        'aucun modèle ne doit intervenir dans la comparaison'
+
+    # 5. Câblage : déclarés, aiguillés, rangés ; pas de carnet en fil fantôme
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    corps_exec = hub[hub.index('async def _execute_tool'):]
+    for nom in ('preparer_reunion', 'rediger_avis', 'suivre_texte'):
+        assert '"name": "%s"' % nom in hub and "name == '%s'" % nom in corps_exec
+    g = hub[hub.index('def _note_carnet_si_permise'):]
+    assert g[:g.index('def ', 10)].count('_is_ghost_thread') == 1
+    rd = corps_exec[corps_exec.index("if name == 'relever_decisions':"):]
+    assert '_note_carnet_si_permise(thread_id, note)' in rd[:rd.index("if name == 'search_memory'")], \
+        'le relevé de décisions écrit encore une note de carnet en fil fantôme'
+
+    # 6. Documents Word : français dans le texte, titre annoncé une seule fois
+    fw = importlib.import_module('modules.file_writer')
+    try:
+        import docx  # noqa: F401
+    except ImportError:
+        docx = None
+    if docx is not None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chemin = fw.write_file('# Titre unique' + chr(10) + chr(10) + 'Texte.', 'docx',
+                                   os.path.join(tmp, 'a.docx'), 'Titre unique', 'fr', '')
+            import zipfile
+            z = zipfile.ZipFile(chemin)
+            assert 'w:val="fr-FR"' in z.read('word/styles.xml').decode('utf-8'), \
+                'le texte du document Word est marqué dans une autre langue que le français'
+            assert 'w:val="Title"' not in z.read('word/document.xml').decode('utf-8'), \
+                'le titre est annoncé deux fois (style Titre puis Titre 1)'
+    ok("volet institutionnel : extraits vérifiés, aucune position inventée, comparaison exacte, "
+       "Word en français")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -5957,6 +6080,7 @@ if __name__ == '__main__':
                test_banc_retenue_coherent,
                test_embeddings_installation_silencieuse,
                test_releve_decisions_ne_devine_rien,
-               test_audit_securite_20261018]:
+               test_audit_securite_20261018,
+               test_volet_institutionnel_cite_et_verifie]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

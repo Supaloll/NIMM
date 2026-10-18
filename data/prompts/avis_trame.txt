@@ -1,0 +1,10 @@
+# Trame d'un avis — lue par modules/avis.py (fonction « aider à rédiger un avis »).
+# Une rubrique par ligne : identifiant | titre affiché | ce que la rubrique contient.
+# Les lignes qui commencent par # sont ignorées. Les identifiants sont fixes :
+# on peut changer l'ordre, les titres et les consignes, pas les identifiants.
+saisine | Saisine | Le texte examiné, l'administration qui saisit, la date de saisine, tels qu'ils figurent dans les documents.
+presentation | Présentation du texte | Ce que le texte prévoit, en quelques points, d'après le texte lui-même.
+observations_generales | Observations générales | Les appréciations d'ensemble, tirées uniquement des notes de l'auteur.
+observations_articles | Observations article par article | Pour chaque article commenté dans les notes : l'observation, rattachée à l'article du texte.
+demandes | Demandes de modification | Les modifications demandées, formulées précisément, tirées uniquement des notes.
+avis | Avis | Le sens de l'avis (favorable, favorable avec réserves, défavorable) et son motif, tels que les notes les donnent.
