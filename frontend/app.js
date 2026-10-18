@@ -36,7 +36,33 @@ if (window.marked) {
 }
 
 // Sécurité (anti-XSS) : échappement HTML + désinfection du Markdown rendu
-function _safeHTML(h){ try { return window.DOMPurify ? DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']}) : h; } catch(e){ return h; } }
+// Désinfection du HTML produit par le modèle. DOMPurify vient d'un CDN : hors
+// connexion (mode local, Ollama) il manque, et l'ancienne version laissait alors
+// TOUT passer. Repli : document inerte (DOMParser n'exécute rien), puis retrait
+// des balises actives, des attributs on* et des liens javascript: (audit 18/10/2026).
+function _safeHTMLRepli(h){
+    const doc = new DOMParser().parseFromString('<body>' + String(h || '') + '</body>', 'text/html');
+    doc.body.querySelectorAll('script,style,iframe,object,embed,link,meta,base,form,svg,math,template').forEach(el => el.remove());
+    doc.body.querySelectorAll('*').forEach(el => {
+        Array.from(el.attributes).forEach(a => {
+            const nom = a.name.toLowerCase();
+            const val = (a.value || '').replace(/[\s\u0000-\u001f]/g, '').toLowerCase();
+            if (nom.startsWith('on') || nom === 'srcdoc' || nom === 'style'
+                || (/^(href|src|xlink:href|action|formaction)$/.test(nom) && /^(javascript|vbscript|data):/.test(val) && !/^data:image\/(png|jpe?g|gif|webp);/.test(val))) {
+                el.removeAttribute(a.name);
+            }
+        });
+    });
+    return doc.body.innerHTML;
+}
+function _safeHTML(h){
+    try {
+        if (window.DOMPurify) return DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']});
+        return _safeHTMLRepli(h);
+    } catch(e) {
+        return escapeHtml(String(h || '').replace(/<[^>]*>/g, ''));
+    }
+}
 
 // Rend cliquables les URLs sans schéma (domaine + chemin) que marked n'auto-lie pas
 // (ex. "support.apple.com/fr-fr/122208"). Conservateur : exige un /chemin pour éviter
@@ -3998,7 +4024,9 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
             for (let i = _renderedUpTo; i < limit; i++) {
                 const raw = parts[i].trim();
                 if (!raw) continue;
-                const html = window.marked ? marked.parse(_linkifyBareUrls(raw)) : raw.replace(/\n/g,'<br>');
+                // Désinfection AVANT insertion : le rendu final est filtré, mais une balise piégée
+                // (<img onerror=...>) s'exécuterait dès cet affichage progressif (audit 18/10/2026).
+                const html = _safeHTML(window.marked ? marked.parse(_linkifyBareUrls(raw)) : raw.replace(/\n/g,'<br>'));
                 let span;
                 if (_paraNodes[i]) {
                     span = _paraNodes[i];
@@ -8341,7 +8369,8 @@ function renderMemory(memories) {
         const isPermanent = m.type_temporal === 'permanent';
         const poidsBar  = isPermanent ? '⭐' : (m.poids >= 2.0 ? '▓▓▓' : m.poids >= 1.0 ? '▓▓░' : '▓░░');
         const poidsText = isPermanent ? 'permanent' : (m.poids >= 2.0 ? 'fort' : m.poids >= 1.0 ? 'moyen' : 'faible');
-        const rowLabel  = `${escapeHtml(sujet)} — ${escapeHtml(m.predicat || '')} — ${escapeHtml(m.valeur || '')}, ${poidsText}`;
+        // Passé à setAttribute : texte brut, aucun échappement (sinon « l&#39;école » est lu tel quel).
+        const rowLabel  = `${sujet} — ${m.predicat || ''} — ${m.valeur || ''}, ${poidsText}`;
         const row = document.createElement('div');
         row.className   = 'memory-row';
         row.dataset.key = m.key;
@@ -8354,10 +8383,21 @@ function renderMemory(memories) {
             <span class="memory-predicat">${escapeHtml(m.predicat || '')}</span>
             <span class="memory-valeur">${escapeHtml(m.valeur || '')}</span>
             <div class="memory-row-actions">
-                <button aria-label="${m.locked ? 'Déverrouiller' : 'Verrouiller'} ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" title="${m.locked ? 'Déverrouiller' : 'Verrouiller'}" onclick="toggleLockMemory('${m.key}')">${m.locked ? '🔒' : '🔓'}</button>
-                <button aria-label="Modifier ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="editMemory('${m.key}', '${escapeAttr(m.valeur)}')">✏️</button>
-                <button aria-label="Supprimer ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="deleteMemory('${m.key}')">🗑️</button>
+                <button aria-label="${m.locked ? 'Déverrouiller' : 'Verrouiller'} ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" title="${m.locked ? 'Déverrouiller' : 'Verrouiller'}" data-mem-action="lock">${m.locked ? '🔒' : '🔓'}</button>
+                <button aria-label="Modifier ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" data-mem-action="edit">✏️</button>
+                <button aria-label="Supprimer ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" data-mem-action="delete">🗑️</button>
             </div>`;
+        // Les valeurs passent par la fermeture, jamais par du texte HTML : une
+        // apostrophe (« l'école ») cassait le bouton Modifier, et un guillemet
+        // permettait d'injecter un attribut (audit 18/10/2026).
+        row.querySelectorAll('[data-mem-action]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const action = btn.dataset.memAction;
+                if (action === 'lock')   toggleLockMemory(m.key);
+                if (action === 'edit')   editMemory(m.key, m.valeur || '');
+                if (action === 'delete') deleteMemory(m.key);
+            });
+        });
         return row;
     }
 
@@ -8585,13 +8625,16 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 // ══════════════════════════════════════════
 
 function escapeHtml(text) {
-    const d = document.createElement('div');
-    d.textContent = text || '';
-    return d.innerHTML;
+    // innerHTML n'échappe pas les guillemets : utilisé dans un attribut
+    // (aria-label="..."), un « " » cassait l'étiquette lue au lecteur d'écran.
+    return String(text == null ? '' : text)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function escapeAttr(str) {
-    return (str || '').replace(/&/g,'&').replace(/"/g,'"').replace(/'/g,'&#39;');
+    // Les deux premiers remplacements étaient sans effet (& → &, " → ") : réparé.
+    return escapeHtml(str);
 }
 
 // ══════════════════════════════════════════

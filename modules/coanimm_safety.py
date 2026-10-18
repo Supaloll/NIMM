@@ -21,6 +21,7 @@ Deux mécanismes complémentaires, selon la politique choisie par l'utilisateur
    Toute écriture hors zone lève PermissionError avec un message clair.
 """
 import ast
+import os
 
 
 # ──────────────────────────────────────────
@@ -211,7 +212,18 @@ def build_guard_prologue(allowed_dirs, allow_network: bool = False) -> str:
     dirs = [str(d) for d in (allowed_dirs or []) if d]
     literal = "[" + ", ".join(repr(d) for d in dirs) + "]"
     net_block = "" if allow_network else _NET_BLOCK_SNIPPET
-    return _GUARD_TEMPLATE.replace("__ALLOWED_DIRS__", literal).replace("__NET_BLOCK__", net_block)
+    return (_GUARD_TEMPLATE.replace("__ALLOWED_DIRS__", literal)
+            .replace("__NIMM_DATA_DIR__", repr(_NIMM_DATA_DIR))
+            .replace("__NET_BLOCK__", net_block))
+
+
+# Dossier data/ de NIMM : ses fichiers DIRECTS sont des secrets (clé Fernet qui
+# déchiffre les clés d'API, secret de déverrouillage, profils et PIN hachés,
+# bases de chaque profil). Les sous-dossiers (dont l'espace de travail CoaNIMM)
+# ne sont PAS concernés. Audit du 18/10/2026 : un script généré pouvait lire
+# .nimm_api_keyfile + nimm_*.db et déchiffrer toutes les clés d'API.
+_NIMM_DATA_DIR = os.path.realpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'data'))
 
 
 _NET_BLOCK_SNIPPET = (
@@ -256,9 +268,28 @@ def _nimm_deny(path, what):
     raise PermissionError(
         "CoaNIMM a bloque " + what + " hors des dossiers autorises : " + str(path)
         + ". Ajoute ce dossier dans les Dossiers autorises de CoaNIMM si c'est voulu.")
+# Fichiers secrets de NIMM : interdits en LECTURE comme en ecriture
+_NIMM_DATA = _nimm_os.path.normcase(__NIMM_DATA_DIR__)
+def _nimm_secret(path):
+    if isinstance(path, int):
+        return False
+    rp = _nimm_real(path)
+    if not rp:
+        return False
+    rp = _nimm_os.path.normcase(rp)
+    if _nimm_os.path.dirname(rp) != _NIMM_DATA:
+        return False
+    _b = _nimm_os.path.basename(rp)
+    return _b.startswith('.nimm_') or _b == 'users.json' or (_b.startswith('nimm_') and '.db' in _b)
+def _nimm_deny_secret(path):
+    raise PermissionError(
+        "CoaNIMM a bloque l'acces a un fichier protege de NIMM (cles, profils ou bases) : "
+        + str(path) + ". Ces fichiers ne sont jamais accessibles aux scripts.")
 # builtins.open (couvre aussi pathlib.Path.open / write_text / write_bytes)
 _nimm_open0 = _nimm_b.open
 def _nimm_open(file, mode='r', *a, **k):
+    if _nimm_secret(file):
+        _nimm_deny_secret(file)
     if not isinstance(file, int):
         _m = mode if isinstance(mode, str) else 'r'
         if any(_c in _m for _c in ('w', 'a', 'x', '+')):
@@ -269,10 +300,21 @@ _nimm_b.open = _nimm_open
 # io.open (utilisé par pathlib.Path.open / write_text / write_bytes)
 import io as _nimm_io
 _nimm_io.open = _nimm_open
+# Python 3.10 : pathlib garde sa propre reference a io.open (_NormalAccessor),
+# capturee a l'import — sans ceci, Path.read_text / write_text echappaient au
+# garde-fou (lectures secretes ET ecritures hors zone). Inutile a partir de 3.11.
+try:
+    import pathlib as _nimm_pl
+    if hasattr(getattr(_nimm_pl, '_NormalAccessor', None), 'open'):
+        _nimm_pl._NormalAccessor.open = staticmethod(_nimm_open)
+except Exception:
+    pass
 # os.open (bas niveau)
 _nimm_osopen0 = _nimm_os.open
 _NIMM_WFLAGS = _nimm_os.O_WRONLY | _nimm_os.O_RDWR | _nimm_os.O_CREAT | _nimm_os.O_APPEND | getattr(_nimm_os, 'O_TRUNC', 0)
 def _nimm_osopen(path, flags, *a, **k):
+    if _nimm_secret(path):
+        _nimm_deny_secret(path)
     if (flags & _NIMM_WFLAGS) and not _nimm_ok(path):
         _nimm_deny(path, "une ecriture de fichier")
     return _nimm_osopen0(path, flags, *a, **k)
@@ -325,6 +367,21 @@ if _nimm_rmtree0 is not None:
             _nimm_deny(path, "la suppression d'un dossier entier")
         return _nimm_rmtree0(path, *a, **k)
     _nimm_sh.rmtree = _nimm_rmtree
+# sqlite3.connect ouvre le fichier sans passer par open()
+try:
+    import sqlite3 as _nimm_sql
+    _nimm_sqlc0 = _nimm_sql.connect
+    def _nimm_sqlc(database, *a, **k):
+        _p = database
+        if isinstance(_p, str) and _p.startswith('file:'):
+            _p = _p[5:].split('?')[0]
+        if isinstance(_p, (str, bytes)) or hasattr(_p, '__fspath__'):
+            if _nimm_secret(_p):
+                _nimm_deny_secret(database)
+        return _nimm_sqlc0(database, *a, **k)
+    _nimm_sql.connect = _nimm_sqlc
+except Exception:
+    pass
 __NET_BLOCK__# === fin garde-fou CoaNIMM ===
 '''
 

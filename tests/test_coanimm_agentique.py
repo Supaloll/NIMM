@@ -5801,6 +5801,90 @@ def test_maj_ytdlp_prevent_sans_installer():
        "installation sur un clic")
 
 
+def test_audit_securite_20261018():
+    """Audit du 18/10/2026 — quatre failles, verrouillées pour ne pas revenir.
+
+    1. Les lanceurs Windows écoutaient sur 0.0.0.0 : tout le réseau local
+       pilotait l'API sans authentification (le correctif de juin n'avait
+       touché que main.py, puis le lanceur Linux).
+    2. L'affichage progressif insérait le HTML du modèle SANS DOMPurify : seul
+       le rendu final était filtré, trop tard pour un <img onerror>.
+    3. escapeAttr ne faisait rien (& → &, " → ") et escapeHtml n'échappait
+       pas les guillemets : une apostrophe cassait le bouton Modifier de la
+       mémoire, un guillemet cassait les aria-label.
+    4. Un script CoaNIMM pouvait LIRE data/.nimm_api_keyfile et les bases, donc
+       déchiffrer toutes les clés d'API (seules les écritures étaient confinées).
+    """
+    import glob
+    import subprocess
+    import modules.coanimm_safety as S
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # 1. Aucun lanceur n'écoute sur toutes les interfaces
+    for chemin in glob.glob(os.path.join(racine, '*.bat')) + glob.glob(os.path.join(racine, '*.vbs')) \
+            + glob.glob(os.path.join(racine, '*.sh')):
+        texte = open(chemin, encoding='utf-8', errors='replace').read()
+        for motif in ("'--host','0.0.0.0'", '--host 0.0.0.0', 'HOST="0.0.0.0"', "HOST='0.0.0.0'"):
+            assert motif not in texte, f"{os.path.basename(chemin)} écoute sur 0.0.0.0 ({motif})"
+
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    lignes = js.split('\n')
+
+    # 2. Tout rendu Markdown passe par _safeHTML (même ligne ou les deux suivantes)
+    for i, ligne in enumerate(lignes):
+        if 'marked.parse(' in ligne and not ligne.lstrip().startswith('//'):
+            fenetre = '\n'.join(lignes[i:i + 3])
+            assert '_safeHTML(' in fenetre, f"app.js ligne {i + 1} : marked.parse sans _safeHTML"
+    # ... et _safeHTML ne laisse plus tout passer quand DOMPurify manque (hors connexion)
+    assert "DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']}) : h;" not in js, \
+        "_safeHTML renvoie le HTML brut quand DOMPurify est absent"
+    assert 'function _safeHTMLRepli(' in js
+
+    # 3. Échappements réels, et plus aucun onclick construit avec escapeAttr
+    def corps(nom):
+        m = re.search(r'function ' + nom + r'\s*\([^)]*\)\s*\{.*?\n\}', js, re.S)
+        assert m, f"fonction {nom} introuvable"
+        return m.group(0)
+    assert "replace(/&/g,'&')" not in corps('escapeAttr').replace(' ', ''), "escapeAttr sans effet"
+    esc = corps('escapeHtml')
+    for entite in ('&amp;', '&lt;', '&quot;', '&#39;'):
+        assert entite in esc, f"escapeHtml n'échappe pas {entite}"
+    assert not re.search(r'onclick="[^"]*\$\{escapeAttr', js), "onclick construit avec escapeAttr"
+
+    # 4. Le garde-fou interdit la lecture des secrets — exécution RÉELLE
+    with tempfile.TemporaryDirectory() as tmp:
+        data = os.path.join(tmp, 'data')
+        ws = os.path.join(data, 'espace')
+        os.makedirs(ws)
+        for nom in ('.nimm_api_keyfile', 'users.json', 'nimm_test.db', 'mood_prompts.json'):
+            open(os.path.join(data, nom), 'w', encoding='utf-8').write('x')
+        ancien = S._NIMM_DATA_DIR
+        S._NIMM_DATA_DIR = os.path.realpath(data)
+        try:
+            garde = S.build_guard_prologue([])
+        finally:
+            S._NIMM_DATA_DIR = ancien
+        interdits = [
+            f"open({os.path.join(data, '.nimm_api_keyfile')!r}).read()",
+            f"import pathlib; pathlib.Path({os.path.join(data, 'users.json')!r}).read_text()",
+            f"import sqlite3; sqlite3.connect({os.path.join(data, 'nimm_test.db')!r})",
+            "open('../.nimm_api_keyfile').read()",
+        ]
+        permis = [
+            f"open({os.path.join(data, 'mood_prompts.json')!r}).read()",
+            "open('sortie.txt', 'w').write('x')",
+        ]
+        for code in interdits + permis:
+            r = subprocess.run([sys.executable, '-c', garde + '\n' + code], cwd=ws,
+                               capture_output=True, text=True, timeout=60)
+            bloque = 'fichier protege' in r.stderr
+            if code in interdits:
+                assert bloque, f"lecture secrète NON bloquée : {code}"
+            else:
+                assert not bloque and r.returncode == 0, f"usage légitime bloqué : {code} — {r.stderr[-200:]}"
+    ok("audit sécurité 18/10 : écoute locale, rendu filtré, échappements réels, secrets illisibles")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -5872,6 +5956,7 @@ if __name__ == '__main__':
                test_pas_de_chemin_personnel_dans_le_code,
                test_banc_retenue_coherent,
                test_embeddings_installation_silencieuse,
-               test_releve_decisions_ne_devine_rien]:
+               test_releve_decisions_ne_devine_rien,
+               test_audit_securite_20261018]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

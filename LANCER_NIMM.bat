@@ -14,7 +14,10 @@ tailscale serve --bg http://localhost:8080 >nul 2>&1
 :: indiagnosticable -- et de toute facon illisible au lecteur d'ecran.
 :: Elle est desormais ecrite dans nimm.log, que les Reglages savent afficher.
 if exist "%NIMM_DIR%\nimm.log" move /Y "%NIMM_DIR%\nimm.log" "%NIMM_DIR%\nimm.log.1" >nul 2>&1
-powershell -NoProfile -WindowStyle Hidden -Command "Start-Process 'py' -ArgumentList @('-m','uvicorn','main:app','--host','0.0.0.0','--port','8080') -WorkingDirectory '%NIMM_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%NIMM_DIR%\nimm.log' -RedirectStandardError '%NIMM_DIR%\nimm.err.log'"
+:: Ecoute sur 127.0.0.1 UNIQUEMENT (audit du 18/10/2026) : en 0.0.0.0, tout appareil
+:: du reseau local pouvait piloter l'API sans authentification. L'acces mobile
+:: passe par `tailscale serve`, qui vise localhost : il n'est pas touche.
+powershell -NoProfile -WindowStyle Hidden -Command "Start-Process 'py' -ArgumentList @('-m','uvicorn','main:app','--host','127.0.0.1','--port','8080') -WorkingDirectory '%NIMM_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%NIMM_DIR%\nimm.log' -RedirectStandardError '%NIMM_DIR%\nimm.err.log'"
 
 timeout /t 4 /nobreak >nul
 start http://localhost:8080
