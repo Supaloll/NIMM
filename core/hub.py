@@ -3681,7 +3681,7 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                         "conversation, ou passe-le dans le paramètre texte.]")
 
             from modules.decisions import (relever, rendre_markdown,
-                                           rendre_note_carnet)
+                                           rendre_note_carnet, non_verifiees)
             _reglages = load_settings(thread_id)
             releves, avert = await relever(texte, _reglages)
             md = rendre_markdown(titre, releves, source, avert)
@@ -3713,6 +3713,10 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                       'd\'information.' % (n_d, n_a, n_i)]
             if avert:
                 lignes.append('Avertissement : ' + avert)
+            _nv = non_verifiees(releves)
+            if _nv:
+                lignes.append('%d extrait(s) non retrouvé(s) dans le compte rendu : '
+                              'signalés dans le document, à vérifier.' % _nv)
             for r in releves:
                 if r['type'] != 'action':
                     continue

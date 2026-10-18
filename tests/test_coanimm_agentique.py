@@ -6004,8 +6004,21 @@ def test_volet_institutionnel_cite_et_verifie():
                 'le texte du document Word est marqué dans une autre langue que le français'
             assert 'w:val="Title"' not in z.read('word/document.xml').decode('utf-8'), \
                 'le titre est annoncé deux fois (style Titre puis Titre 1)'
-    ok("volet institutionnel : extraits vérifiés, aucune position inventée, comparaison exacte, "
-       "Word en français")
+    # 7. Le relevé de décisions vérifie lui aussi ses extraits (ajout du 18/10/2026)
+    Dm = importlib.import_module('modules.decisions')
+    cr = "Il faudra relancer la commission. Marie Dupont rédige la note pour le 12 novembre."
+    rel = Dm.parser_releve('[{"type":"action","intitule":"Relancer","citation":"Il faudra relancer la '
+                           'commission."},{"type":"action","intitule":"Note","citation":'
+                           '"Marie rédigera la note avant le 12"}]')
+    Ci.marquer_citations(rel, [cr])
+    assert [r['verifiee'] for r in rel] == [True, False] and Dm.non_verifiees(rel) == 1
+    md = Dm.rendre_markdown('Commission', rel, 'cr')
+    assert "rien n'a été deviné" in md and '1 extrait(s) non retrouvé(s)' in md
+    assert md.count(Ci.MENTION_NON_VERIFIEE) == 1, "seul l'extrait reformulé doit être signalé"
+    src_d = open(os.path.join(racine, 'modules', 'decisions.py'), encoding='utf-8').read()
+    assert 'marquer_citations(releves, [texte])' in src_d, 'relever() ne vérifie plus les extraits'
+    ok("volet institutionnel : extraits vérifiés (relevé compris), aucune position inventée, "
+       "comparaison exacte, Word en français")
 
 
 def test_audit_lot2_promesses_et_accessibilite():
