@@ -5,6 +5,8 @@
 #   "ff_siwis"              → Kokoro
 #   "piper:nom_voix"        → Piper (piper_voices/)
 #   "edge:fr-FR-DeniseNeural" → Edge TTS (Microsoft, en ligne)
+#   texte ALLEMAND détecté  → voix Edge allemande du même genre
+#                             (de-DE-KatjaNeural / de-DE-ConradNeural)
 # ============================================
 
 import io
@@ -495,6 +497,318 @@ def synthesize_gemini_multi(transcript, speakers, style='', api_key=''):
 
 
 # ══════════════════════════════════════════
+# PRONONCIATION ALLEMANDE AUTOMATIQUE
+# ══════════════════════════════════════════
+# Une réponse peut contenir un passage allemand (Maya fait des ponts
+# français/allemand). Lue par une voix française, une phrase allemande
+# s'entend tout de suite : le ü, le ö et le ß n'ont pas d'équivalent.
+#
+# La détection est un jeu de règles EXPLICITE, pas un modèle : elle doit être
+# vérifiable hors ligne, et un faux positif se paie cher — une phrase
+# française lue avec l'accent allemand. Trois signaux suffisent :
+#   1. les caractères ä ö ü ß, qui n'existent pas en français (signal fort) ;
+#   2. au moins 3 mots-outils allemands, et la moitié des mots du texte ;
+#   3. au moins 2 mots-outils allemands dans un texte de 4 mots ou moins.
+# DEUX ÉTAGES, essayés dans cet ordre :
+#   1. la phrase est MIXTE (un morceau allemand au milieu d'une phrase
+#      française) : `segmenter_par_langue()` la découpe en morceaux, chacun est
+#      synthétisé avec SA voix, puis les MP3 sont recollés — c'est le cas
+#      d'école « En allemand, « Ich habe Hunger » veut dire j'ai faim », lu
+#      avec les deux accents au bon endroit ;
+#   2. sinon (phrase entièrement allemande, ou moteur sans découpage) : la
+#      voix bascule d'un bloc.
+# Le seuil de détection reste volontairement haut : un faux positif se paie
+# plus cher (toute une phrase française à l'accent allemand) qu'un court
+# passage laissé en français.
+#
+# La substitution se fait DANS LE MÊME MOTEUR, et seulement si ce moteur a
+# une voix allemande : c'est le cas d'Edge (voix par défaut et voix de
+# masque). Kokoro n'a pas de voix DE dans son catalogue, piper_voices/ ne
+# contient que du français, et Gemini / Voxtral / Mistral sont multilingues —
+# ces moteurs ne sont pas touchés.
+
+LETTRES_ALLEMANDES = 'äöüß'
+
+# Mots-outils et mots courants SANS ambiguïté avec le français. Écartés pour
+# cause d'homographe : en anglais (`in`, `an`, `so`, `man`, `was`, `will`,
+# `tag`, `warm`, `hand`, `blind`) et en français (`du` de « du pain », `sein`
+# de « du sein » : sans cette précaution, « le cancer du sein » était classé
+# allemand). « die » est gardé : très fréquent en allemand, rare en français.
+MOTS_ALLEMANDS = frozenset({
+    'der', 'die', 'das', 'den', 'dem', 'ein', 'eine', 'einen',
+    'einem', 'einer', 'eines', 'und', 'oder', 'aber', 'nicht', 'kein',
+    'keine', 'keinen', 'ich', 'dich', 'dir', 'mir', 'euch', 'ihr', 'mein',
+    'meine', 'dein', 'deine', 'seine', 'ist', 'sind', 'bist', 'bin', 'habe',
+    'hast', 'hat', 'geht', 'gehe', 'gehen', 'komme', 'kommst', 'kommt',
+    'mache', 'machst', 'machen', 'weiß', 'wissen', 'kenne', 'kennst',
+    'brauche', 'brauchst', 'finde', 'findest', 'glaube', 'denke', 'esse',
+    'hunger', 'durst', 'deutsch', 'wetter', 'sagt', 'erklärt',
+    'essen', 'isst', 'trinke', 'helfen', 'hilfst', 'spielt', 'spielen',
+    'haben', 'hatte', 'kann', 'kannst', 'können', 'muss', 'musst',
+    'möchte', 'möchtest', 'soll', 'werden', 'wird', 'würde', 'war', 'wenn',
+    'weil', 'dass', 'auch', 'noch', 'schon', 'nur', 'sehr', 'immer',
+    'wieder', 'jetzt', 'heute', 'gestern', 'morgen', 'mit', 'für', 'von',
+    'bei', 'nach', 'über', 'unter', 'zwischen', 'auf', 'aus', 'durch',
+    'gegen', 'ohne', 'wie', 'wer', 'wohin', 'warum', 'bitte', 'danke',
+    'hallo', 'guten', 'wiedersehen', 'tschüss', 'willkommen', 'vielen',
+    'dank', 'grüße', 'entschuldigung', 'richtig', 'falsch', 'gut',
+    'schlecht', 'sprechen',
+    'spricht', 'lernen', 'lerne', 'üben', 'verstehen', 'sagen', 'fragen',
+    'antworten', 'schreiben', 'schreibe', 'schreibst', 'lesen', 'hören',
+    'satz', 'sätze', 'im', 'perfekt', 'präsens', 'beispiel', 'aufgabe',
+    'wort', 'wörter',
+    'schule', 'lehrer', 'lehrerin', 'kind', 'mädchen', 'junge', 'hund',
+    'katze', 'haus', 'wohnung', 'wasser', 'brot', 'buch', 'bücher',
+    'vokabeln', 'wortschatz', 'hausaufgabe', 'klassenzimmer', 'heft',
+    'stunde', 'prüfung', 'nummer', 'tabelle',
+    'eins', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht',
+    'neun', 'zehn', 'ja', 'nein',
+})
+
+# Correspondance de voix, par moteur : la voix allemande garde le GENRE de la
+# voix française, pour que le personnage ne change pas de timbre au milieu
+# d'une réponse.
+VOIX_DE_PAR_MOTEUR = {
+    'edge': {'feminin': 'de-DE-KatjaNeural', 'masculin': 'de-DE-ConradNeural'},
+}
+
+# Voix Edge FRANÇAISES masculines connues (toutes les autres sont féminines).
+EDGE_VOIX_FR_MASCULINES = frozenset({
+    'fr-FR-HenriNeural', 'fr-FR-RemyMultilingualNeural', 'fr-BE-GerardNeural',
+    'fr-CH-FabriceNeural', 'fr-CA-AntoineNeural', 'fr-CA-ThierryNeural',
+})
+
+
+def detecter_allemand(texte: str) -> bool:
+    """Dit si un texte est majoritairement allemand (voir le bloc ci-dessus).
+
+    Fonction PURE : aucun réseau, aucune base, aucun état — donc testable
+    hors ligne. Un texte vide ne déclenche rien.
+    """
+    if not texte:
+        return False
+    bas = texte.lower()
+    if any(c in bas for c in LETTRES_ALLEMANDES):
+        return True
+    mots = re.findall(r'[^\W\d_]+', bas)
+    if not mots:
+        return False
+    allemands = sum(1 for m in mots if m in MOTS_ALLEMANDS)
+    if allemands >= 3 and allemands * 2 >= len(mots):
+        return True
+    return allemands >= 2 and len(mots) <= 4
+
+
+def _voix_allemande(voice: str) -> Optional[str]:
+    """Voix allemande équivalente à `voice`, ou None s'il n'y en a pas.
+
+    Seule une voix Edge FRANÇAISE est convertie : une voix Edge d'une autre
+    langue traduit un choix explicite, on n'y touche pas — et un moteur sans
+    voix allemande n'a pas besoin de changement.
+    """
+    if not voice or not voice.startswith('edge:'):
+        return None
+    nom = voice[5:]
+    if not nom.startswith('fr-'):
+        return None
+    genre = 'masculin' if nom in EDGE_VOIX_FR_MASCULINES else 'feminin'
+    voix_de = VOIX_DE_PAR_MOTEUR['edge'].get(genre)
+    return 'edge:' + voix_de if voix_de else None
+
+
+# ── Découper une phrase MIXTE en morceaux de langue ────────────────────────
+# « En allemand, « Ich habe Hunger » veut dire j'ai faim. » n'est ni française
+# ni allemande : elle contient un morceau de chaque. La lire d'une seule voix
+# la trahit forcément. On la découpe donc en morceaux, chacun avec SA voix, et
+# on recolle l'audio dans le même moteur (MP3 Edge, cf. plus bas).
+
+# Mots-outils et vocabulaire français : ils servent de BORNE. Un mot inconnu
+# collé à un morceau allemand est absorbé par ce morceau (« Hunger » dans
+# « Ich habe Hunger »), mais un mot français ne l'est jamais.
+# Écrits SANS ACCENT : la comparaison passe par `_cle_fr()`, qui neutralise les
+# accents français (é è ê à ç…) mais PAS ä ö ü ß, gardés comme marqueurs de
+# l'allemand.
+MOTS_FRANCAIS = frozenset({
+    # déterminants et pronoms
+    'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'au', 'aux', 'ce',
+    'cet', 'cette', 'ces', 'mon', 'ma', 'mes', 'ton', 'ta', 'tes', 'son',
+    'sa', 'ses', 'notre', 'nos', 'votre', 'vos', 'leur', 'leurs', 'je',
+    'tu', 'il', 'elle', 'on', 'nous', 'vous', 'ils', 'elles', 'me', 'te',
+    'se', 'moi', 'toi', 'lui', 'eux', 'qui', 'que', 'quoi', 'dont', 'y',
+    'ca', 'cela', 'ceci',
+    # verbes courants
+    'est', 'sont', 'etait', 'etaient', 'etais', 'ete', 'etre', 'a', 'ai',
+    'as', 'ont', 'avait', 'avaient', 'avoir', 'avons', 'avez', 'fait',
+    'faire', 'fais', 'dit', 'dire', 'dis', 'dites', 'veut', 'veux',
+    'veulent', 'vouloir', 'peut', 'peux', 'pouvez', 'pouvoir', 'doit',
+    'dois', 'devez', 'devoir', 'sait', 'sais', 'savoir', 'voit', 'vois',
+    'voir', 'va', 'vas', 'aller', 'vient', 'viens', 'venir', 'prend',
+    'prendre', 'met', 'mettre', 'appelle', 'appeler', 'trouve', 'trouver',
+    'pense', 'penser', 'crois', 'croire', 'parle', 'parler', 'parlent',
+    'apprend', 'apprends', 'apprendre', 'ecrit', 'ecrire', 'lis', 'lire',
+    'ecoute', 'ecouter', 'comprend', 'comprends', 'comprendre', 'traduit',
+    'traduire', 'signifie', 'signifier', 'repond', 'repondre', 'demande',
+    'demander', 'explique', 'expliquer', 'mange', 'manger', 'boit', 'boire',
+    # mots-outils
+    'et', 'ou', 'mais', 'donc', 'or', 'ni', 'car', 'quand', 'comment',
+    'pourquoi', 'parce', 'puisque', 'si', 'tres', 'bien', 'tout', 'tous',
+    'toute', 'toutes', 'aussi', 'encore', 'deja', 'toujours', 'jamais',
+    'plus', 'moins', 'trop', 'peu', 'beaucoup', 'ici', 'la', 'alors',
+    'ensuite', 'apres', 'avant', 'dans', 'sur', 'sous', 'avec', 'sans',
+    'chez', 'entre', 'pour', 'par', 'vers', 'contre', 'pendant', 'depuis',
+    'ne', 'pas', 'non', 'oui', 'aujourd', 'hui', 'meme', 'autre', 'autres',
+    'chaque', 'quelque', 'quelques', 'plusieurs', 'rien',
+    # adjectifs et vocabulaire de classe
+    'grand', 'grande', 'petit', 'petite', 'bon', 'bonne', 'mauvais',
+    'mauvaise', 'beau', 'belle', 'nouveau', 'nouvelle', 'vieux', 'vieille',
+    'jeune', 'francais', 'francaise', 'allemand', 'allemande', 'anglais',
+    'anglaise', 'mot', 'mots', 'phrase', 'phrases', 'exemple', 'exemples',
+    'exercice', 'exercices', 'reponse', 'reponses', 'question', 'questions',
+    'lecon', 'lecons', 'professeur', 'prof', 'eleve', 'eleves', 'classe',
+    'ecole', 'cours', 'devoir', 'devoirs', 'grammaire', 'regle', 'regles',
+    'chose', 'choses', 'fois', 'verbe', 'verbes', 'sujet', 'texte', 'ligne',
+    'lignes', 'nom', 'adjectif', 'traduction',
+})
+
+_ACCENTS_FR = str.maketrans('áàâãéèêëíìîïóòôõúùûçñœæ', 'aaaaeeeeiiiioooouuucnoa')
+
+MIN_MOTS_ALLEMAND = 2   # en dessous, on ne détache pas de morceau
+MAX_EXTENSION     = 2   # mots inconnus absorbés au plus, de chaque côté
+
+
+def _cle_fr(mot: str) -> str:
+    """Forme de comparaison française : minuscules, accents français retirés."""
+    return mot.lower().translate(_ACCENTS_FR)
+
+
+def _est_allemand(mot: str) -> bool:
+    """Un mot est allemand s'il est connu, ou s'il porte un caractère allemand."""
+    bas = mot.lower()
+    return bas in MOTS_ALLEMANDS or any(c in bas for c in LETTRES_ALLEMANDES)
+
+
+def segmenter_par_langue(texte: str) -> list:
+    """Découpe `texte` en morceaux (texte, langue) — langue vaut 'de' ou 'fr'.
+
+    Fonction PURE, testable hors ligne. La concaténation des morceaux rend
+    EXACTEMENT le texte d'entrée : rien ne se perd au passage.
+
+    Quatre étapes :
+      1. chaque mot est marqué allemand ou non (liste, ou caractère ä ö ü ß) ;
+      2. un mot non allemand ENCADRÉ par deux mots allemands devient allemand
+         (« du » dans « Kannst du mir helfen ? ») ;
+      3. on obtient des suites de mots allemands, ÉTENDUES aux mots inconnus
+         qui les touchent (au plus MAX_EXTENSION de chaque côté) ;
+      4. une suite devient un morceau si elle compte au moins MIN_MOTS_ALLEMAND
+         mots allemands, ou si elle porte un ä ö ü ß. Un mot allemand isolé au
+         milieu d'une phrase française reste donc français — sauf « Übung »,
+         qu'un umlaut suffit à détacher.
+    """
+    if not texte or not texte.strip():
+        return []
+    mots = list(re.finditer(r'[^\W\d_]+', texte))
+    if not mots:
+        return [(texte, 'fr')]
+    allemand = [_est_allemand(m.group(0)) for m in mots]
+
+    # (2) enveloppement
+    for i in range(1, len(mots) - 1):
+        if not allemand[i] and allemand[i - 1] and allemand[i + 1]:
+            allemand[i] = True
+
+    # (3) suites de mots allemands contigus
+    suites, debut = [], None
+    for i, est in enumerate(allemand):
+        if est and debut is None:
+            debut = i
+        elif not est and debut is not None:
+            suites.append([debut, i - 1])
+            debut = None
+    if debut is not None:
+        suites.append([debut, len(mots) - 1])
+
+    etendues = []
+    for d, f in suites:
+        reste_g = reste_d = MAX_EXTENSION
+        while (d > 0 and reste_g and not allemand[d - 1]
+               and _cle_fr(mots[d - 1].group(0)) not in MOTS_FRANCAIS):
+            d -= 1
+            reste_g -= 1
+        while (f < len(mots) - 1 and reste_d and not allemand[f + 1]
+               and _cle_fr(mots[f + 1].group(0)) not in MOTS_FRANCAIS):
+            f += 1
+            reste_d -= 1
+        etendues.append([d, f])
+
+    # deux suites peuvent se rejoindre après extension : on les fusionne
+    fusion = []
+    for d, f in etendues:
+        if fusion and d <= fusion[-1][1] + 1:
+            fusion[-1][1] = max(fusion[-1][1], f)
+        else:
+            fusion.append([d, f])
+
+    # (4) seuil : de vrais mots allemands, ou un caractère allemand
+    retenues = []
+    for d, f in fusion:
+        nb = sum(1 for i in range(d, f + 1) if allemand[i])
+        texte_suite = texte[mots[d].start():mots[f].end()].lower()
+        if nb >= MIN_MOTS_ALLEMAND or any(c in texte_suite for c in LETTRES_ALLEMANDES):
+            retenues.append((d, f))
+    if not retenues:
+        return [(texte, 'fr')]
+
+    # morceaux : allemand aux bornes retenues, français partout ailleurs
+    morceaux, curseur = [], 0
+    for d, f in retenues:
+        debut_txt, fin_txt = mots[d].start(), mots[f].end()
+        if debut_txt > curseur:
+            morceaux.append((texte[curseur:debut_txt], 'fr'))
+        morceaux.append((texte[debut_txt:fin_txt], 'de'))
+        curseur = fin_txt
+    if curseur < len(texte):
+        morceaux.append((texte[curseur:], 'fr'))
+    morceaux = [(t, lg) for t, lg in morceaux if t.strip()]
+
+    # La ponctuation ne se prononce pas : un morceau sans AUCUNE lettre ne
+    # mérite pas sa propre voix — il rejoint son voisin de gauche, ou celui de
+    # droite s'il ouvre le texte. Sans cela, le point final de
+    # « Der Hund ist groß. » faisait un second morceau, et une voix française
+    # était appelée pour lire un point.
+    propres = []
+    for t, lg in morceaux:
+        if re.search(r'[^\W\d_]', t):
+            propres.append([t, lg])
+        elif propres:
+            propres[-1][0] += t
+        else:
+            propres.append([t, lg])
+    if len(propres) > 1 and not re.search(r'[^\W\d_]', propres[0][0]):
+        propres[1][0] = propres[0][0] + propres[1][0]
+        propres.pop(0)
+    morceaux = [(t, lg) for t, lg in propres if re.search(r'[^\W\d_]', t)]
+    return morceaux or [(texte, 'fr')]
+
+
+def _assembler_segments_edge(segments: list, voice: str, voice_de: str) -> Optional[bytes]:
+    """Synthétise chaque morceau avec SA voix, puis recolle les MP3.
+
+    Les MP3 d'Edge commencent directement sur une trame, sans en-tête ID3
+    (vérifié) : deux flux de même format se recollent bout à bout, un simple
+    `b''.join` suffit. Retourne None dès qu'un morceau échoue — l'appelant
+    retombe alors sur la synthèse en voix unique, jamais sur du silence.
+    """
+    morceaux = []
+    for segment, langue in segments:
+        voix_segment = voice_de[5:] if langue == 'de' else voice[5:]
+        audio = synthesize_edge(segment, voix_segment)
+        if not audio:
+            return None
+        morceaux.append(audio)
+    return b''.join(morceaux) if morceaux else None
+
+
+# ══════════════════════════════════════════
 # ROUTEUR PRINCIPAL
 # ══════════════════════════════════════════
 
@@ -506,7 +820,30 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = '', api_key: 
     Voix préfixée 'edge:'   → Edge   (audio/mpeg)
     Voix préfixée 'gemini:' → Gemini TTS (audio/wav) — style optionnel
     Tout le reste           → Kokoro (audio/wav)
+
+    Un passage ALLEMAND fait lire le texte par la voix allemande du même
+    moteur (cf. bloc « prononciation allemande » plus haut) — même si le
+    masque déclare une voix française. Deux étages :
+      - phrase MIXTE (un morceau allemand au milieu d'une phrase française) :
+        chaque morceau reçoit SA voix, puis les MP3 sont recollés (Edge seul) ;
+      - sinon, phrase entièrement allemande : la voix bascule d'un bloc.
+    Si un morceau échoue, la synthèse en voix unique prend le relais : jamais
+    de silence à la place d'une réponse.
     """
+    _voix_de = _voix_allemande(voice)
+    if _voix_de:
+        if voice.startswith('edge:'):
+            _segments = segmenter_par_langue(text)
+            if len(_segments) > 1:
+                _audio = _assembler_segments_edge(_segments, voice, _voix_de)
+                if _audio:
+                    print("[TTS] Phrase mixte (%s) -> %d morceaux"
+                          % ('+'.join(l for _, l in _segments), len(_segments)))
+                    return _audio, 'audio/mpeg'
+        if detecter_allemand(text):
+            print(f"[TTS] Passage allemand detecte -> voix {_voix_de}")
+            voice = _voix_de
+
     if voice.startswith('piper:'):
         return synthesize_piper(text, voice[6:]), 'audio/wav'
     if voice.startswith('edge:'):
