@@ -6250,8 +6250,34 @@ def test_modes_emploi_archives_et_interroges():
     assert '• interroger_appareils(' in hub, 'le modèle doit savoir que l’outil existe'
     gi = open(os.path.join(racine, '.gitignore'), encoding='utf-8').read()
     assert 'data/appareils/' in gi, 'les PDF archivés partiraient sur le dépôt public'
+    # PDF joint au trombone : gardé EN MÉMOIRE VIVE seulement (2 h, 5 fichiers),
+    # jamais sur disque avant que l'archivage soit demandé.
+    import time as _t
+    sauve_tel = dict(AP._TELEVERSEMENTS)
+    try:
+        AP._TELEVERSEMENTS.clear()
+        ref = AP.garder_televersement('notice.pdf', b'%PDF-1.4 a')
+        assert ref and AP.reprendre_televersement(ref) == ('notice.pdf', b'%PDF-1.4 a')
+        AP.garder_televersement('autre.pdf', b'%PDF-1.4 b')
+        assert AP.reprendre_televersement('dernier')[0] == 'autre.pdf'
+        for i in range(8):
+            AP.garder_televersement('f%d.pdf' % i, b'%PDF-1.4 c')
+        assert len(AP._TELEVERSEMENTS) == AP.TELEVERSEMENT_MAX == 5
+        for r in list(AP._TELEVERSEMENTS):
+            AP._TELEVERSEMENTS[r] = (_t.time() - 3 * 3600,) + AP._TELEVERSEMENTS[r][1:]
+        assert AP.reprendre_televersement('dernier') is None, 'un fichier joint doit être oublié après 2 h'
+    finally:
+        AP._TELEVERSEMENTS.clear()
+        AP._TELEVERSEMENTS.update(sauve_tel)
+    src_ap = open(os.path.join(racine, 'modules', 'appareils.py'), encoding='utf-8').read()
+    bloc = src_ap[src_ap.index('def garder_televersement'):src_ap.index('def reprendre_televersement')]
+    assert 'open(' not in bloc and 'write' not in bloc, 'un PDF joint ne doit jamais être écrit sur disque'
+    main_src = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    up = main_src[main_src.index('async def upload_file'):]
+    assert 'garder_televersement(file.filename, data)' in up[:2500] and 'téléversement {_ref}' in up[:2500]
+    assert "if televersement:" in hub and "'televersement'" in hub
     ok("modes d'emploi : PDF conservé, pages citées, recherche par racines, mauvais modèle "
-       "signalé, vision sur les seules pages utiles, chemins gardés")
+       "signalé, vision sur les seules pages utiles, chemins gardés, trombone en mémoire vive")
 
 
 if __name__ == '__main__':

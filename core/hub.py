@@ -1528,8 +1528,10 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               maison (réglage, voyant, panne, entretien) : répond d\'après SES\n'
         '                               modes d\'emploi archivés, pages citées ; décrit les schémas.\n'
         '                               À préférer à la recherche web pour un appareil archivé.\n'
-        '• ajouter_appareil(nom, marque, modele, piece, url, chemin) → archiver une notice (lien, PDF\n'
-        '                               sur l\'ordinateur, ou recherche en ligne) ; gerer_appareils(action)\n'
+        '• ajouter_appareil(nom, marque, modele, piece, televersement, url, chemin) → archiver une\n'
+        '                               notice : PDF joint au trombone (« téléversement tXXXXXX » dans le\n'
+        '                               message), lien, PDF sur l\'ordinateur, ou recherche en ligne.\n'
+        '                               N\'archive QUE si l\'utilisateur le demande. gerer_appareils(action)\n'
         '                               → lister ou retirer les appareils archivés.\n'
         '• demander_precision(question, options) → poser UNE question de clarification\n'
         '                               et s\'arrêter là, au lieu d\'agir sur une demande floue.\n'
@@ -2820,8 +2822,8 @@ AJOUTER_APPAREIL_TOOL = {
         "description": (
             "Archive le mode d'emploi d'un appareil de la maison (four, lave-linge, box, "
             "chaudière…) pour pouvoir l'interroger ensuite. Le PDF est conservé et découpé par "
-            "page. Source : un lien vers le PDF, le chemin d'un PDF sur l'ordinateur, ou à "
-            "défaut une recherche en ligne à partir de la marque et de la référence (le PDF "
+            "page. Source : un PDF joint dans la conversation (référence « téléversement »), un "
+            "lien vers le PDF, le chemin d'un PDF sur l'ordinateur, ou à défaut une recherche en ligne à partir de la marque et de la référence (le PDF "
             "trouvé n'est accepté que s'il mentionne bien la référence). À appeler quand "
             "l'utilisateur veut ajouter, ranger, enregistrer ou chercher la notice d'un appareil."
         ),
@@ -2834,6 +2836,9 @@ AJOUTER_APPAREIL_TOOL = {
                 "piece": {"type": "string", "description": "Pièce de la maison, ex. « cuisine »."},
                 "url": {"type": "string", "description": "Lien direct vers le PDF de la notice, si l'utilisateur le donne."},
                 "chemin": {"type": "string", "description": "Chemin d'un fichier PDF sur l'ordinateur, si l'utilisateur le donne."},
+                "televersement": {"type": "string",
+                                  "description": ("PDF joint dans la conversation avec le trombone : la référence "
+                                                  "notée « téléversement tXXXXXX » dans le message, ou « dernier ».")},
                 "rechercher": {"type": "boolean",
                                "description": "Chercher la notice en ligne quand ni lien ni chemin ne sont donnés (oui par défaut)."}
             },
@@ -3765,9 +3770,17 @@ async def _outil_appareils(name: str, args: dict, thread_id: str) -> str:
         piece = (args.get('piece') or '').strip()
         url = (args.get('url') or '').strip()
         chemin = (args.get('chemin') or '').strip()
+        televersement = (args.get('televersement') or '').strip()
         journal, octets, source = [], None, ''
         loop = _aio_ap.get_running_loop()
-        if chemin:
+        if televersement:
+            joint = AP.reprendre_televersement(televersement)
+            if not joint:
+                return ('[Le PDF joint n\'est plus disponible : NIMM ne garde un fichier joint '
+                        'que deux heures, en mémoire, et l\'oublie au redémarrage. Joins-le de '
+                        'nouveau avec le trombone.]')
+            source, octets = 'fichier joint : %s' % joint[0], joint[1]
+        elif chemin:
             try:
                 p = _chemin_manuel_autorise(chemin)
             except ValueError as e:

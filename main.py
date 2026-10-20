@@ -6376,7 +6376,15 @@ async def upload_file(file: UploadFile = File(...)):
     if filename.endswith('.pdf'):
         from modules.pdf_reader import extract_text
         text = extract_text(data)
-        return {"type": "pdf", "text": f"[PDF : {file.filename}]\n{text[:4000]}"}
+        # Octets gardés EN MÉMOIRE VIVE (2 h, jamais sur disque) : de quoi archiver
+        # ce PDF comme mode d'emploi si l'utilisateur le demande (ajouter_appareil).
+        try:
+            from modules.appareils import garder_televersement
+            _ref = garder_televersement(file.filename, data)
+        except Exception:
+            _ref = ''
+        _entete = f"[PDF : {file.filename}" + (f" — téléversement {_ref}]" if _ref else "]")
+        return {"type": "pdf", "text": f"{_entete}\n{text[:4000]}"}
 
     # Image
     elif filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):

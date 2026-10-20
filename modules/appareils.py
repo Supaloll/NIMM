@@ -40,6 +40,50 @@ _MOTS_VISUELS = ('schéma', 'schema', 'figure', 'illustration', 'dessin', 'image
                  'repère', 'repere', 'flèche', 'fleche', 'décris la page', 'decris la page')
 
 
+# ── PDF joints dans le chat (trombone) ────────────────────────────────────
+# /api/upload ne garde que le TEXTE d'un PDF. Pour pouvoir l'archiver comme mode
+# d'emploi sans redemander le fichier, on garde ses octets EN MÉMOIRE VIVE
+# seulement : jamais sur disque (un PDF joint pour un résumé confidentiel ne doit
+# laisser aucune trace), 2 heures au plus, 5 fichiers au plus, perdus au
+# redémarrage. Seul l'archivage demandé écrit le fichier dans data/appareils/.
+_TELEVERSEMENTS = {}          # réf → (instant, nom de fichier, octets)
+TELEVERSEMENT_DUREE = 2 * 3600
+TELEVERSEMENT_MAX = 5
+
+
+def _purger_televersements(maintenant=None):
+    import time
+    maintenant = maintenant or time.time()
+    for ref in [r for r, (t, _n, _o) in _TELEVERSEMENTS.items() if maintenant - t > TELEVERSEMENT_DUREE]:
+        _TELEVERSEMENTS.pop(ref, None)
+    while len(_TELEVERSEMENTS) > TELEVERSEMENT_MAX:
+        _TELEVERSEMENTS.pop(min(_TELEVERSEMENTS, key=lambda r: _TELEVERSEMENTS[r][0]), None)
+
+
+def garder_televersement(nom: str, octets: bytes) -> str:
+    """Garde un PDF joint en mémoire vive ; rend sa référence courte (ex. « t3f9a2 »)."""
+    import secrets
+    import time
+    if not octets or len(octets) > TAILLE_MAX:
+        return ''
+    ref = 't' + secrets.token_hex(3)
+    _TELEVERSEMENTS[ref] = (time.time(), nom or 'document.pdf', octets)
+    _purger_televersements()
+    return ref
+
+
+def reprendre_televersement(ref: str):
+    """(nom, octets) d'un PDF joint, ou None. « dernier » : le plus récent."""
+    _purger_televersements()
+    ref = (ref or '').strip().lower()
+    if ref in ('dernier', 'last', 'le dernier', 'derniere', 'dernière'):
+        if not _TELEVERSEMENTS:
+            return None
+        ref = max(_TELEVERSEMENTS, key=lambda r: _TELEVERSEMENTS[r][0])
+    e = _TELEVERSEMENTS.get(ref)
+    return (e[1], e[2]) if e else None
+
+
 # ── Normalisation ─────────────────────────────────────────────────────────
 
 def sans_accents(s: str) -> str:
