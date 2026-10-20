@@ -75,6 +75,7 @@ DOSSIER_RES = os.path.join(RACINE, 'tests', 'results')
 OUTILS_PRODUCTION = {
     'run_code', 'write_file', 'relever_decisions',
     'preparer_reunion', 'rediger_avis', 'suivre_texte',
+    'ajouter_appareil', 'gerer_appareils',
     'rename_file', 'move_file', 'delete_file', 'make_folder',
     'expurgate_document', 'run_ricochet',
 }
@@ -83,7 +84,7 @@ OUTILS_CONSULTATION = {
     'search_documents', 'search_carnet', 'find_skill', 'search_acceslibre',
     'search_food_product', 'search_recipe', 'get_weather', 'get_jours_feries',
     'get_exchange_rate', 'geocode_address', 'extract_url_content',
-    'read_video_transcript',
+    'read_video_transcript', 'interroger_appareils',
     'lookup_book', 'get_country_info', 'search_commune', 'search_wikipedia',
     'search_wikidata', 'search_sirene', 'search_datagouv', 'describe_image',
     'list_files', 'extract_document_text', 'summarize_document',

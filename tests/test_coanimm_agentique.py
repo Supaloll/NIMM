@@ -6127,6 +6127,133 @@ def test_audit_lot2_promesses_et_accessibilite():
        "pastille lue, focus visible, accents réparés")
 
 
+def test_modes_emploi_archives_et_interroges():
+    """Mes appareils (18/10/2026) : les modes d'emploi de la maison, interrogeables.
+
+    Verrouillé ici :
+      - le PDF d'origine est CONSERVÉ (les schémas y sont) et le texte est
+        découpé PAR PAGE (une réponse dit « page 23 ») ;
+      - la recherche marche sans le moteur par le sens : par racines (« régler »
+        retrouve « Réglage »), sans que le nom de l'appareil fausse le classement ;
+      - un manuel du mauvais modèle est signalé (référence absente) ;
+      - seules les pages utiles partent au modèle de vision, avec leurs VRAIS
+        numéros ;
+      - le modèle ne peut pas faire archiver un fichier de data/ (clés, profils) :
+        seul un .pdf hors du dossier de NIMM est accepté ;
+      - les PDF archivés ne partent jamais sur le dépôt public.
+    """
+    import importlib
+    import sqlite3
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    AP = importlib.import_module('modules.appareils')
+
+    assert AP.ref_compacte('WAN-28 2H8 FF') == AP.ref_compacte('wan282h8ff')
+    assert AP.demande_visuelle('où se trouve la touche horloge ?')
+    assert AP.demande_visuelle('que signifie ce voyant')
+    assert not AP.demande_visuelle("comment régler l'heure")
+    assert AP._racine('regler') == AP._racine('reglage') == 'regl'
+    assert AP.liens_candidats('https://a.fr/page https://b.com/manual/X.pdf.')[0] == 'https://b.com/manual/X.pdf'
+    assert 'utilise CES numéros' in open(os.path.join(racine, 'modules', 'appareils.py'), encoding='utf-8').read()
+
+    try:
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        canvas = None
+    if canvas is not None:
+        import io as _io
+        def fabrique(pages):
+            b = _io.BytesIO()
+            c = canvas.Canvas(b)
+            for lignes in pages:
+                y = 800
+                for l in lignes:
+                    c.drawString(50, y, l)
+                    y -= 20
+                c.showPage()
+            c.save()
+            return b.getvalue()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.join(tmp, 'a.db')
+
+            def conn_test():
+                c = sqlite3.connect(base)
+                c.row_factory = sqlite3.Row
+                c.execute('''CREATE TABLE IF NOT EXISTS appareil (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nom TEXT NOT NULL, nom_norm TEXT NOT NULL, marque TEXT, modele TEXT, piece TEXT,
+                    fichier TEXT, source TEXT, nb_pages INTEGER, pages_texte INTEGER, ajoute_le TEXT)''')
+                c.execute('''CREATE TABLE IF NOT EXISTS appareil_passage (id INTEGER PRIMARY KEY
+                    AUTOINCREMENT, appareil_id INTEGER NOT NULL, page INTEGER, contenu TEXT NOT NULL,
+                    embedding TEXT)''')
+                return c
+            E = importlib.import_module('modules.enrichissement')
+            sauve = (AP._conn, AP.DOSSIER, E._embedding_for)
+            mem = sys.modules.get('modules.memory')
+            sauve_embed = getattr(mem, '_embed', None) if mem else None
+            try:
+                AP._conn, AP.DOSSIER = conn_test, os.path.join(tmp, 'appareils')
+                E._embedding_for = lambda texte: None
+                if mem is not None and sauve_embed is not None:
+                    mem._embed = lambda q: None          # force le repli mots-clés
+                four = fabrique([["Notice Four HBA534BS0", "Securite : porte chaude."],
+                                 ["Reglage de l'horloge", "1. Appuyer sur la touche Horloge (fig. 2)."],
+                                 []])
+                r = AP.ajouter('four', four, 'Bosch', 'HBA534BS0', 'cuisine', 'test')
+                assert (r['nb_pages'], r['pages_texte'], r['avertissements']) == (3, 2, [])
+                assert os.path.isfile(AP.chemin_pdf(AP.lister()[0])), 'le PDF d’origine doit être conservé'
+                r2 = AP.ajouter('lave-linge', fabrique([["Lave-linge WAN28", "Voyant cadenas : porte."]]),
+                                'Bosch', 'WAN28281FF', 'buanderie')
+                assert any('n\'apparaît nulle part' in a for a in r2['avertissements']), \
+                    'un manuel sans la référence du modèle doit être signalé'
+                assert [a['nom'] for a in AP.trouver('le four')] == ['four']
+                assert [a['nom'] for a in AP.trouver('WAN-28281 FF')] == ['lave-linge']
+                res = AP.rechercher("comment régler l'heure du four ?", [r['id']])
+                assert res and res[0]['page'] == 2, 'la page du réglage doit venir en tête : %r' % res
+                sous = AP.pages_en_pdf(AP.trouver('four')[0], [2, 3])
+                assert len(AP.extraire_pages(sous)) == 2
+                assert AP.ajouter('Four', four, 'Bosch', 'HBA534BS0')['remplace'], 'même nom = nouvelle notice'
+                assert len(AP.lister()) == 2
+                fich = AP.chemin_pdf(AP.trouver('lave-linge')[0])
+                assert AP.retirer(AP.trouver('lave-linge')[0]['id']) and not os.path.exists(fich)
+                try:
+                    AP.ajouter('x', b'<html>pas un pdf</html>')
+                    assert False, 'un non-PDF doit être refusé'
+                except ValueError:
+                    pass
+            finally:
+                AP._conn, AP.DOSSIER, E._embedding_for = sauve
+                if mem is not None and sauve_embed is not None:
+                    mem._embed = sauve_embed
+
+    # Garde-fou des chemins : exécuté isolément, avec le vrai emplacement de hub.py
+    hub_path = os.path.join(racine, 'core', 'hub.py')
+    hub = open(hub_path, encoding='utf-8').read()
+    src = hub[hub.index('def _chemin_manuel_autorise'):hub.index('async def _outil_appareils')]
+    espace = {'__file__': hub_path}
+    exec(compile(src, 'garde_chemin', 'exec'), espace)
+    garde = espace['_chemin_manuel_autorise']
+    with tempfile.TemporaryDirectory() as tmp:
+        ok_pdf = os.path.join(tmp, 'notice.pdf')
+        open(ok_pdf, 'wb').write(b'%PDF-1.4')
+        assert garde(ok_pdf) == os.path.realpath(ok_pdf)
+        for mauvais in (os.path.join(racine, 'data', 'users.json'),
+                        os.path.join(racine, 'data', 'piege.pdf'),
+                        os.path.join(tmp, 'absent.pdf')):
+            try:
+                garde(mauvais)
+                assert False, 'chemin accepté à tort : %s' % mauvais
+            except ValueError:
+                pass
+
+    corps_exec = hub[hub.index('async def _execute_tool'):]
+    for nom in ('ajouter_appareil', 'interroger_appareils', 'gerer_appareils'):
+        assert '"name": "%s"' % nom in hub and "name == '%s'" % nom in corps_exec
+    assert '• interroger_appareils(' in hub, 'le modèle doit savoir que l’outil existe'
+    gi = open(os.path.join(racine, '.gitignore'), encoding='utf-8').read()
+    assert 'data/appareils/' in gi, 'les PDF archivés partiraient sur le dépôt public'
+    ok("modes d'emploi : PDF conservé, pages citées, recherche par racines, mauvais modèle "
+       "signalé, vision sur les seules pages utiles, chemins gardés")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -6201,6 +6328,7 @@ if __name__ == '__main__':
                test_releve_decisions_ne_devine_rien,
                test_audit_securite_20261018,
                test_volet_institutionnel_cite_et_verifie,
-               test_audit_lot2_promesses_et_accessibilite]:
+               test_audit_lot2_promesses_et_accessibilite,
+               test_modes_emploi_archives_et_interroges]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")

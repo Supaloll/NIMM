@@ -346,3 +346,6 @@ data/.fuse_hidden*
 
 # Rapports du banc d'essai de la regle de retenue (sortie locale, jamais versionnee)
 tests/results/retenue_*.txt
+
+# Modes d'emploi archivés (PDF des appareils de la maison) — jamais publiés
+data/appareils/

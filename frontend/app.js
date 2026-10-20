@@ -14734,6 +14734,7 @@ const LIVE_NOMS_OUTILS = {
     search_sirene:       'le registre des entreprises',
     search_datagouv:     'les données publiques',
     describe_image:      'une image',
+    interroger_appareils: 'tes modes d’emploi',
 };
 
 function _liveNomOutil(nom) {
