@@ -3021,7 +3021,13 @@ def marquer_rappel_emis(rappel_id: int, seuil: str):
     conn.close()
 
 def perimer_rappels_depasses():
-    """Passe en 'perime' tous les rappels dont la date est dépassée."""
+    """Passe en 'perime' les rappels dépassés QUI ONT ÉTÉ ANNONCÉS.
+
+    Un rappel échu sans avoir jamais été annoncé reste actif : il est signalé
+    « en retard » (modale d'ouverture et chat), et ne se périme qu'une fois vu.
+    Auparavant, fermer la modale par la croix puis envoyer un message suffisait
+    à le faire disparaître sans que l'utilisateur l'ait jamais lu (audit 18/10/2026).
+    """
     from datetime import datetime
     now = datetime.now().strftime('%Y-%m-%d')
     conn = get_conn()
@@ -3029,7 +3035,8 @@ def perimer_rappels_depasses():
         """UPDATE rappels SET statut = 'perime'
            WHERE statut = 'actif'
            AND date_echeance IS NOT NULL
-           AND date_echeance < ?""",
+           AND date_echeance < ?
+           AND COALESCE(NULLIF(TRIM(rappels_emis), ''), '[]') <> '[]'""",
         (now,)
     )
     conn.commit()

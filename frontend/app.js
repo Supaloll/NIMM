@@ -36,7 +36,33 @@ if (window.marked) {
 }
 
 // Sécurité (anti-XSS) : échappement HTML + désinfection du Markdown rendu
-function _safeHTML(h){ try { return window.DOMPurify ? DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']}) : h; } catch(e){ return h; } }
+// Désinfection du HTML produit par le modèle. DOMPurify vient d'un CDN : hors
+// connexion (mode local, Ollama) il manque, et l'ancienne version laissait alors
+// TOUT passer. Repli : document inerte (DOMParser n'exécute rien), puis retrait
+// des balises actives, des attributs on* et des liens javascript: (audit 18/10/2026).
+function _safeHTMLRepli(h){
+    const doc = new DOMParser().parseFromString('<body>' + String(h || '') + '</body>', 'text/html');
+    doc.body.querySelectorAll('script,style,iframe,object,embed,link,meta,base,form,svg,math,template').forEach(el => el.remove());
+    doc.body.querySelectorAll('*').forEach(el => {
+        Array.from(el.attributes).forEach(a => {
+            const nom = a.name.toLowerCase();
+            const val = (a.value || '').replace(/[\s\u0000-\u001f]/g, '').toLowerCase();
+            if (nom.startsWith('on') || nom === 'srcdoc' || nom === 'style'
+                || (/^(href|src|xlink:href|action|formaction)$/.test(nom) && /^(javascript|vbscript|data):/.test(val) && !/^data:image\/(png|jpe?g|gif|webp);/.test(val))) {
+                el.removeAttribute(a.name);
+            }
+        });
+    });
+    return doc.body.innerHTML;
+}
+function _safeHTML(h){
+    try {
+        if (window.DOMPurify) return DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']});
+        return _safeHTMLRepli(h);
+    } catch(e) {
+        return escapeHtml(String(h || '').replace(/<[^>]*>/g, ''));
+    }
+}
 
 // Rend cliquables les URLs sans schéma (domaine + chemin) que marked n'auto-lie pas
 // (ex. "support.apple.com/fr-fr/122208"). Conservateur : exige un /chemin pour éviter
@@ -3998,7 +4024,9 @@ async function _triggerStream(content, conversationId, images = null, vibeDocs =
             for (let i = _renderedUpTo; i < limit; i++) {
                 const raw = parts[i].trim();
                 if (!raw) continue;
-                const html = window.marked ? marked.parse(_linkifyBareUrls(raw)) : raw.replace(/\n/g,'<br>');
+                // Désinfection AVANT insertion : le rendu final est filtré, mais une balise piégée
+                // (<img onerror=...>) s'exécuterait dès cet affichage progressif (audit 18/10/2026).
+                const html = _safeHTML(window.marked ? marked.parse(_linkifyBareUrls(raw)) : raw.replace(/\n/g,'<br>'));
                 let span;
                 if (_paraNodes[i]) {
                     span = _paraNodes[i];
@@ -6333,8 +6361,18 @@ function _appliquerTheme(nom) {
         // Sortie du thème Amstrad : on rend sa police à l'utilisateur
         const avant = localStorage.getItem('nimm-font-avant-cpc') || '';
         localStorage.removeItem('nimm-font-avant-cpc');
-        if (avant) _appliquerPolice(avant, _nomPolice(avant));
-        else       delete document.body.style.fontFamily;
+        // Une police choisie PENDANT le thème Amstrad l'emporte sur celle mise
+        // de côté à l'entrée (audit 18/10/2026).
+        const choisie = police && police.indexOf('VT323') === -1 ? police : avant;
+        if (choisie) {
+            _appliquerPolice(choisie, _nomPolice(choisie));
+        } else {
+            // Aucune police personnalisée : on revient à celle du thème. « delete »
+            // sur une propriété de style ne fait rien, et VT323 restait en mémoire,
+            // donc revenait au prochain chargement.
+            document.body.style.fontFamily = '';
+            localStorage.removeItem('nimm-font');
+        }
     }
 }
 
@@ -7236,10 +7274,16 @@ function _majPastilleAgenda(n) {
     const btn = document.getElementById('toggle-agenda');
     if (!btn) return;
     let dot = btn.querySelector('.agenda-pastille');
+    // aria-label écrase le contenu du bouton : la pastille n'était jamais lue.
+    // Le nombre passe donc dans l'étiquette elle-même (audit 18/10/2026).
+    const libelle = n ? 'Agenda, ' + n + (n > 1 ? ' rappels' : ' rappel') + ' à voir' : 'Agenda';
+    btn.setAttribute('aria-label', libelle);
+    btn.setAttribute('title', libelle);
     if (!n) { if (dot) dot.remove(); return; }
     if (!dot) {
         dot = document.createElement('span');
         dot.className = 'agenda-pastille';
+        dot.setAttribute('aria-hidden', 'true');
         btn.appendChild(dot);
     }
     dot.textContent = String(n);
@@ -8341,7 +8385,8 @@ function renderMemory(memories) {
         const isPermanent = m.type_temporal === 'permanent';
         const poidsBar  = isPermanent ? '⭐' : (m.poids >= 2.0 ? '▓▓▓' : m.poids >= 1.0 ? '▓▓░' : '▓░░');
         const poidsText = isPermanent ? 'permanent' : (m.poids >= 2.0 ? 'fort' : m.poids >= 1.0 ? 'moyen' : 'faible');
-        const rowLabel  = `${escapeHtml(sujet)} — ${escapeHtml(m.predicat || '')} — ${escapeHtml(m.valeur || '')}, ${poidsText}`;
+        // Passé à setAttribute : texte brut, aucun échappement (sinon « l&#39;école » est lu tel quel).
+        const rowLabel  = `${sujet} — ${m.predicat || ''} — ${m.valeur || ''}, ${poidsText}`;
         const row = document.createElement('div');
         row.className   = 'memory-row';
         row.dataset.key = m.key;
@@ -8354,10 +8399,21 @@ function renderMemory(memories) {
             <span class="memory-predicat">${escapeHtml(m.predicat || '')}</span>
             <span class="memory-valeur">${escapeHtml(m.valeur || '')}</span>
             <div class="memory-row-actions">
-                <button aria-label="${m.locked ? 'Déverrouiller' : 'Verrouiller'} ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" title="${m.locked ? 'Déverrouiller' : 'Verrouiller'}" onclick="toggleLockMemory('${m.key}')">${m.locked ? '🔒' : '🔓'}</button>
-                <button aria-label="Modifier ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="editMemory('${m.key}', '${escapeAttr(m.valeur)}')">✏️</button>
-                <button aria-label="Supprimer ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" onclick="deleteMemory('${m.key}')">🗑️</button>
+                <button aria-label="${m.locked ? 'Déverrouiller' : 'Verrouiller'} ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" title="${m.locked ? 'Déverrouiller' : 'Verrouiller'}" data-mem-action="lock">${m.locked ? '🔒' : '🔓'}</button>
+                <button aria-label="Modifier ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" data-mem-action="edit">✏️</button>
+                <button aria-label="Supprimer ${escapeHtml(m.predicat || '')} de ${escapeHtml(sujet)}" data-mem-action="delete">🗑️</button>
             </div>`;
+        // Les valeurs passent par la fermeture, jamais par du texte HTML : une
+        // apostrophe (« l'école ») cassait le bouton Modifier, et un guillemet
+        // permettait d'injecter un attribut (audit 18/10/2026).
+        row.querySelectorAll('[data-mem-action]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const action = btn.dataset.memAction;
+                if (action === 'lock')   toggleLockMemory(m.key);
+                if (action === 'edit')   editMemory(m.key, m.valeur || '');
+                if (action === 'delete') deleteMemory(m.key);
+            });
+        });
         return row;
     }
 
@@ -8542,7 +8598,47 @@ function _openModal(overlayOrModal) {
         ? overlayOrModal : overlayOrModal.closest('.modal-overlay') || overlayOrModal;
     overlay.__prevFocus = document.activeElement;
     overlay.classList.remove('hidden');
+    // Le focus ENTRE dans la fenêtre. Sans cela, une fenêtre qui s'ouvre seule
+    // (rappels à l'ouverture du profil) restait muette au lecteur d'écran.
+    // Un appelant qui place lui-même le focus plus tard (setTimeout de 90 à
+    // 120 ms) garde la main : on n'agit que si le focus est resté dehors.
+    setTimeout(() => {
+        if (overlay.classList.contains('hidden') || overlay.contains(document.activeElement)) return;
+        const dlg = overlay.querySelector('[role="dialog"],[role="alertdialog"]') || overlay;
+        if (!dlg.hasAttribute('tabindex')) dlg.setAttribute('tabindex', '-1');
+        dlg.focus();
+    }, 40);
 }
+
+// Piège de focus : tant qu'une fenêtre modale est ouverte, Tab et Maj+Tab
+// tournent à l'intérieur. Sans lui, on sortait dans la page de derrière sans
+// le savoir — la page est masquée à la vue, pas au clavier (audit 18/10/2026).
+const _FOCUSABLES = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),'
+    + 'select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+function _modaleOuverte() {
+    const ouvertes = Array.from(document.querySelectorAll('.modal-overlay:not(.hidden)'))
+        .filter(el => el.getClientRects().length);
+    if (!ouvertes.length) return null;
+    // La plus haute : z-index le plus grand, puis la dernière dans la page
+    return ouvertes.reduce((a, b) =>
+        ((parseInt(getComputedStyle(b).zIndex, 10) || 0) >= (parseInt(getComputedStyle(a).zIndex, 10) || 0)) ? b : a);
+}
+document.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const ov = _modaleOuverte();
+    if (!ov || ov.id === 'pin-modal') return;   // le pavé PIN a son propre piège (_trapTab)
+    const elems = Array.from(ov.querySelectorAll(_FOCUSABLES))
+        .filter(el => el.getClientRects().length && !el.closest('.hidden,[hidden]'));
+    if (!elems.length) { e.preventDefault(); return; }
+    const premier = elems[0], dernier = elems[elems.length - 1];
+    const dedans = ov.contains(document.activeElement);
+    if (!dedans) { e.preventDefault(); (e.shiftKey ? dernier : premier).focus(); return; }
+    if (e.shiftKey && (document.activeElement === premier || !elems.includes(document.activeElement) && document.activeElement.matches('[role="dialog"],[role="alertdialog"]'))) {
+        e.preventDefault(); dernier.focus();
+    } else if (!e.shiftKey && document.activeElement === dernier) {
+        e.preventDefault(); premier.focus();
+    }
+}, true);
 function _closeModal(overlayOrModal) {
     const overlay = overlayOrModal.classList.contains('modal-overlay')
         ? overlayOrModal : overlayOrModal.closest('.modal-overlay') || overlayOrModal;
@@ -8585,13 +8681,16 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 // ══════════════════════════════════════════
 
 function escapeHtml(text) {
-    const d = document.createElement('div');
-    d.textContent = text || '';
-    return d.innerHTML;
+    // innerHTML n'échappe pas les guillemets : utilisé dans un attribut
+    // (aria-label="..."), un « " » cassait l'étiquette lue au lecteur d'écran.
+    return String(text == null ? '' : text)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function escapeAttr(str) {
-    return (str || '').replace(/&/g,'&').replace(/"/g,'"').replace(/'/g,'&#39;');
+    // Les deux premiers remplacements étaient sans effet (& → &, " → ") : réparé.
+    return escapeHtml(str);
 }
 
 // ══════════════════════════════════════════

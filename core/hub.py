@@ -1297,8 +1297,12 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
             _emis  = _json_rappels.loads(_r.get('rappels_emis', '[]') or '[]')
 
             # Déterminer si ce rappel doit être signalé aujourd'hui
-            # (règle commune avec la modale d'ouverture — voir _seuil_rappel)
-            _signal = _seuil_rappel(_delta, _type, _emis)
+            # (règle commune avec la modale d'ouverture — voir _seuil_rappel).
+            # Échu et jamais annoncé : signalé « en retard », une fois.
+            if _delta < 0:
+                _signal = None if _emis else 'retard'
+            else:
+                _signal = _seuil_rappel(_delta, _type, _emis)
 
             if _signal:
                 _rappels_a_signaler.append({
@@ -1329,7 +1333,8 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
             for _rap in _rappels_a_signaler:
                 _j = "aujourd'hui" if _rap['delta'] == 0 else (
                      "demain"      if _rap['delta'] == 1 else
-                     f"dans {_rap['delta']} jours"
+                     (f"EN RETARD de {-_rap['delta']} jour(s), échéance passée sans avoir été annoncée"
+                      if _rap['delta'] < 0 else f"dans {_rap['delta']} jours")
                 )
                 _ton = {
                     'critique':  '⚠️ CRITIQUE',
@@ -1508,6 +1513,17 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '                               Appeler dès que l\'utilisateur demande un relevé de décisions,\n'
         '                               « qui fait quoi » après une réunion, ou le dépouillement d\'un CR.\n'
         '                               Laisser texte vide si le compte rendu est attaché au fil.\n'
+        '• preparer_reunion(titre, documents, contexte) → préparer une réunion à partir des\n'
+        '                               documents reçus : objet, repères, synthèse, points de\n'
+        '                               vigilance, questions à poser. Le document du fil est pris\n'
+        '                               d\'office ; documents = noms dans la base de connaissances.\n'
+        '• rediger_avis(titre, mode, notes, documents) → mode structurer : projet d\'avis selon la\n'
+        '                               trame, à partir du texte examiné et des NOTES de l\'utilisateur\n'
+        '                               (recopie ses notes telles quelles, n\'ajoute AUCUNE position).\n'
+        '                               mode relire : critique de l\'argumentation d\'un brouillon.\n'
+        '• suivre_texte(nom, document, comparer_avec) → nouvelle version d\'un texte réglementaire :\n'
+        '                               ce qui a changé depuis la précédente, article par article.\n'
+        '                               Garder le MÊME nom d\'une version à l\'autre.\n'
         '• demander_precision(question, options) → poser UNE question de clarification\n'
         '                               et s\'arrêter là, au lieu d\'agir sur une demande floue.\n'
         '                               Voir la règle de retenue ci-dessous.\n'
@@ -2519,21 +2535,21 @@ NIMM_TOOLS = [
         "function": {
             "name": "describe_image",
             "description": (
-                "T\xc3\xa9l\xc3\xa9charge une image depuis une URL et retourne une description accessible d\xc3\xa9taill\xc3\xa9e. "
-                "Appeler quand l\'utilisateur donne une URL d\'image, demande de d\xc3\xa9crire une illustration, "
-                "v\xc3\xa9rifier l\'accessibilit\xc3\xa9 d\'une image ou g\xc3\xa9n\xc3\xa9rer un texte alternatif WCAG. "
-                "Retourne une description textuelle pr\xc3\xa9cise utilisable comme attribut alt."
+                "Télécharge une image depuis une URL et retourne une description accessible détaillée. "
+                "Appeler quand l\'utilisateur donne une URL d\'image, demande de décrire une illustration, "
+                "vérifier l\'accessibilité d\'une image ou générer un texte alternatif WCAG. "
+                "Retourne une description textuelle précise utilisable comme attribut alt."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url": {
                         "type": "string",
-                        "description": "URL publique de l\'image \xc3\xa0 d\xc3\xa9crire (jpg, png, webp, gif)."
+                        "description": "URL publique de l\'image à décrire (jpg, png, webp, gif)."
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "Consigne de description (ex: \'texte alternatif WCAG\', \'d\xc3\xa9cris l\'interface\', \'est-ce accessible ?\')."
+                        "description": "Consigne de description (ex: \'texte alternatif WCAG\', \'décris l\'interface\', \'est-ce accessible ?\')."
                     }
                 },
                 "required": ["url"]
@@ -2671,7 +2687,126 @@ RELEVE_DECISIONS_TOOL = {
     }
 }
 
-NIMM_TOOLS = (NIMM_TOOLS + [DEMANDER_PRECISION_TOOL, RELEVE_DECISIONS_TOOL]
+# ── Volet « travail institutionnel » — voir modules/reunion.py, avis.py, suivi_textes.py ──
+# Mêmes règles que le relevé de décisions : rien n'est deviné, tout est cité, et
+# les extraits sont VÉRIFIÉS contre les documents (modules/citations.py).
+PREPARER_REUNION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "preparer_reunion",
+        "description": (
+            "Prépare une réunion à partir des documents reçus (ordre du jour, projet de "
+            "texte, note) : objet de la réunion, repères datés et chiffrés, synthèse, "
+            "points de vigilance et questions à poser. Produit un document à diffuser et "
+            "laisse une note dans le carnet de la conversation. Chaque élément cite "
+            "l'extrait dont il vient, vérifié automatiquement. À appeler quand "
+            "l'utilisateur veut préparer une réunion, une commission, une séance, ou "
+            "savoir quoi dire ou demander à partir de documents reçus."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "titre": {"type": "string",
+                          "description": "Nom de la réunion, tel qu'il apparaîtra en tête du document."},
+                "documents": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": ("Noms de documents de la base de connaissances à prendre en compte, "
+                                    "tels que l'utilisateur les désigne (un titre approchant suffit). "
+                                    "Le document attaché à la conversation est pris automatiquement.")
+                },
+                "texte": {"type": "string",
+                          "description": ("Texte collé ou notes de l'utilisateur, UNIQUEMENT s'ils "
+                                          "ne sont ni attachés au fil ni dans la base.")},
+                "contexte": {"type": "string",
+                             "description": ("Ce que l'utilisateur attend de la réunion ou la "
+                                             "position qu'il y défend, s'il l'a dit. Sert à choisir "
+                                             "les points de vigilance, jamais de source.")}
+            },
+            "required": ["titre"]
+        }
+    }
+}
+
+REDIGER_AVIS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "rediger_avis",
+        "description": (
+            "Aide à rédiger l'avis d'une instance consultative sur un texte réglementaire. "
+            "mode « structurer » : monte un projet d'avis selon la trame (saisine, "
+            "présentation, observations générales, observations article par article, "
+            "demandes de modification, avis) à partir du texte examiné et des NOTES de "
+            "l'utilisateur — les positions viennent uniquement de ses notes, le reste est "
+            "marqué à compléter. mode « relire » : relecture critique de l'ARGUMENTATION "
+            "d'un brouillon d'avis (pas de l'orthographe). Produit un document et une note "
+            "de carnet. À appeler quand l'utilisateur demande de rédiger, structurer, "
+            "préparer, relire ou critiquer un avis."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "titre": {"type": "string", "description": "Objet de l'avis, ex. « projet d'arrêté RPA »."},
+                "mode": {"type": "string", "enum": ["structurer", "relire"],
+                         "description": "structurer un projet à partir des notes, ou relire un brouillon."},
+                "notes": {"type": "string",
+                          "description": ("mode structurer : les notes de position de l'utilisateur, "
+                                          "recopiées telles quelles. mode relire : le brouillon d'avis "
+                                          "s'il a été collé dans la conversation.")},
+                "brouillon_document": {"type": "string",
+                                       "description": ("mode relire : nom du document de la base qui "
+                                                       "contient le brouillon, s'il y est.")},
+                "documents": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": ("Noms de documents de la base de connaissances à prendre en compte, "
+                                    "tels que l'utilisateur les désigne (un titre approchant suffit). "
+                                    "Le document attaché à la conversation est pris automatiquement.")
+                }
+            },
+            "required": ["titre", "mode"]
+        }
+    }
+}
+
+SUIVRE_TEXTE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "suivre_texte",
+        "description": (
+            "Suit un texte réglementaire dans le temps : conserve chaque version sous un "
+            "nom et dit, article par article, ce qui a changé depuis la précédente "
+            "(ajouts, suppressions, mots remplacés), par comparaison automatique exacte, "
+            "puis une portée probable présentée comme une analyse. Peut aussi comparer "
+            "deux versions sans rien conserver (paramètre comparer_avec), ou lister les "
+            "versions conservées (sans texte ni document). À appeler quand l'utilisateur "
+            "reçoit une nouvelle version d'un texte, demande ce qui a changé, ou veut "
+            "comparer deux versions."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nom": {"type": "string",
+                        "description": ("Nom stable du texte suivi, le même d'une version à "
+                                        "l'autre, ex. « arrêté RPA ».")},
+                "document": {"type": "string",
+                             "description": ("Nom du document de la base qui contient la NOUVELLE "
+                                             "version. Sinon : document du fil, ou paramètre texte.")},
+                "texte": {"type": "string",
+                          "description": "La nouvelle version collée, uniquement si elle n'est pas attachée."},
+                "comparer_avec": {"type": "string",
+                                  "description": ("Nom d'un document de la base contenant l'ANCIENNE "
+                                                  "version, pour comparer sans utiliser l'historique.")},
+                "analyser": {"type": "boolean",
+                             "description": "Ajouter la portée probable de chaque changement (oui par défaut)."}
+            },
+            "required": ["nom"]
+        }
+    }
+}
+
+NIMM_TOOLS = (NIMM_TOOLS + [DEMANDER_PRECISION_TOOL, RELEVE_DECISIONS_TOOL,
+                            PREPARER_REUNION_TOOL, REDIGER_AVIS_TOOL, SUIVRE_TEXTE_TOOL]
               + _COANIMM_OPS_TOOLS + _COANIMM_ASYNC_TOOLS)
 
 
@@ -3265,6 +3400,236 @@ def _formater_demande_precision(args: dict) -> str:
     return chr(10).join(lignes)
 
 
+
+# ══════════════════════════════════════════
+# VOLET « TRAVAIL INSTITUTIONNEL » — réunion, avis, suivi de texte
+# ══════════════════════════════════════════
+
+def _livrable_institutionnel(thread_id: str, prefixe: str, titre_doc: str, md: str) -> tuple:
+    """Écrit le document à diffuser (docx à vrais titres) ; rend (nom, url).
+
+    Même mécanique que relever_decisions : file_writer lit le markdown, la route
+    /api/coanimm/files sert le téléchargement.
+    """
+    from modules.coanimm import _workspace_dir
+    from modules.file_writer import write_file as _wf, SUPPORTED_FORMATS
+    import os as _os_li, re as _re_li
+    workdir = _workspace_dir(thread_id)
+    _os_li.makedirs(workdir, exist_ok=True)
+    safe = _re_li.sub(r'[^\w\-]', '_', prefixe + '_' + titre_doc)[:60]
+    chemin = _os_li.path.join(workdir, safe + SUPPORTED_FORMATS.get('docx', '.docx'))
+    vrai = _wf(md, 'docx', chemin, titre_doc, 'fr', '')
+    base = _os_li.path.basename(vrai)
+    return base, '/api/coanimm/files/%s?thread_id=%s' % (base, thread_id)
+
+
+def _note_carnet_si_permise(thread_id: str, note: str) -> bool:
+    """Note de carnet, SAUF en fil fantôme : la case promet « aucune note de carnet »."""
+    if _is_ghost_thread(thread_id):
+        return False
+    try:
+        add_carnet_note(thread_id, count_carnet_notes(thread_id) + 1, note, 0)
+        return True
+    except Exception as _ec:
+        print('[HUB] Note de carnet non écrite : %s' % _ec)
+        return False
+
+
+def _documents_arg(args: dict) -> list:
+    v = args.get('documents') or []
+    if isinstance(v, str):
+        v = [x.strip() for x in v.split(',')]
+    return [str(x).strip() for x in v if str(x).strip()]
+
+
+def _aide_sources() -> str:
+    from modules.citations import documents_disponibles
+    dispo = documents_disponibles()
+    aide = ("Attache le document à la conversation, colle le texte, ou nomme un document "
+            "de la base de connaissances.")
+    if dispo:
+        aide += ' Documents présents dans la base : ' + ' ; '.join(dispo[:15]) + '.'
+    return aide
+
+
+async def _outil_institutionnel(name: str, args: dict, thread_id: str) -> str:
+    from modules.citations import rassembler_sources, trouver_document_base
+    reglages = load_settings(thread_id)
+
+    if name == 'preparer_reunion':
+        from modules import reunion as R
+        titre = (args.get('titre') or 'réunion').strip()
+        sources, avert = rassembler_sources(thread_id, _documents_arg(args), args.get('texte') or '')
+        if not sources:
+            return '[Aucun document pour préparer cette réunion. ' + _aide_sources() + ']'
+        prep, err = await R.preparer(sources, reglages, (args.get('contexte') or '').strip())
+        if err:
+            return '[%s]' % err
+        md = R.rendre_markdown(titre, prep, sources, avert)
+        base, url = _livrable_institutionnel(thread_id, 'reunion', 'Préparation — ' + titre, md)
+        carnet = _note_carnet_si_permise(thread_id, R.rendre_note_carnet(titre, prep))
+        lignes = ['Préparation établie : %d point(s) de vigilance, %d question(s), %d repère(s).'
+                  % (len(prep['vigilance']), len(prep['questions']), len(prep['reperes']))]
+        lignes += ['Avertissement : ' + a for a in avert]
+        non_verif = sum(1 for k in ('reperes', 'synthese', 'vigilance', 'questions')
+                        for e in prep[k] if e.get('citation') and not e.get('verifiee', True))
+        if non_verif:
+            lignes.append('%d extrait(s) non retrouvé(s) dans les documents : signalés dans le '
+                          'document, à vérifier.' % non_verif)
+        lignes += ['Questions proposées :'] + ['- ' + e['question'] for e in prep['questions']]
+        lignes.append('Document : [%s](%s)' % (base, url))
+        if carnet:
+            lignes.append('Une note a été ajoutée au carnet de cette conversation.')
+        print('[HUB] 🗂️ preparer_reunion(%r) → %d source(s)' % (titre, len(sources)))
+        return chr(10).join(lignes)
+
+    if name == 'rediger_avis':
+        from modules import avis as A
+        titre = (args.get('titre') or 'avis').strip()
+        mode = (args.get('mode') or 'structurer').strip().lower()
+        notes = (args.get('notes') or '').strip()
+        if mode == 'relire':
+            brouillon, origine = notes, 'texte collé dans la conversation'
+            inclure_fil = True
+            nom_b = (args.get('brouillon_document') or '').strip()
+            if not brouillon and nom_b:
+                d = trouver_document_base(nom_b) or {}
+                brouillon, origine = (d.get('texte') or '').strip(), d.get('titre') or nom_b
+            if not brouillon:
+                # Sans brouillon désigné, le document du fil EST le brouillon.
+                from core.database import get_thread_document
+                d = get_thread_document(thread_id) or {}
+                brouillon = (d.get('texte') or '').strip()
+                origine = d.get('titre') or 'document de la conversation'
+                inclure_fil = False
+            if not brouillon:
+                return "[Aucun brouillon d'avis à relire. " + _aide_sources() + ']'
+            sources, avert = rassembler_sources(thread_id, _documents_arg(args), '',
+                                                inclure_document_du_fil=inclure_fil)
+            rel, err = await A.relire(sources, brouillon, reglages)
+            if err:
+                return '[%s]' % err
+            md = A.rendre_relecture(titre, rel, sources, brouillon, origine, avert)
+            base, url = _livrable_institutionnel(thread_id, 'relecture', 'Relecture — ' + titre, md)
+            carnet = _note_carnet_si_permise(thread_id, A.note_carnet_relecture(titre, rel))
+            lignes = ["Relecture établie : %d remarque(s) sur l'argumentation." % len(rel['remarques'])]
+            lignes += ['Avertissement : ' + a for a in avert]
+            if not sources:
+                lignes.append("Aucun texte examiné fourni : la relecture n'a pas pu confronter "
+                              "le brouillon au texte réglementaire.")
+            lignes += ['- %s : %s' % (e['nature'], e['remarque']) for e in rel['remarques'][:6]]
+            lignes.append('Document : [%s](%s)' % (base, url))
+            if carnet:
+                lignes.append('Une note a été ajoutée au carnet de cette conversation.')
+            return chr(10).join(lignes)
+
+        sources, avert = rassembler_sources(thread_id, _documents_arg(args), '')
+        if not sources and not notes:
+            return "[Ni texte examiné ni notes pour structurer l'avis. " + _aide_sources() + ']'
+        st, err = await A.structurer(sources, notes, reglages)
+        if err:
+            return '[%s]' % err
+        md = A.rendre_projet(titre, st, sources, notes, avert)
+        base, url = _livrable_institutionnel(thread_id, 'projet_avis', "Projet d'avis — " + titre, md)
+        carnet = _note_carnet_si_permise(thread_id, A.note_carnet_projet(titre, st))
+        sans_appui = sum(1 for k in ('observations_generales', 'observations_articles', 'demandes')
+                         for e in st[k] if not e.get('notes_ok'))
+        lignes = ["Projet d'avis établi : %s." % (st['avis']['sens'] or "sens de l'avis à compléter")]
+        lignes += ['Avertissement : ' + a for a in avert]
+        if not notes:
+            lignes.append("Aucune note fournie : seules la saisine et la présentation sont "
+                          "rédigées, le reste est marqué à compléter.")
+        if sans_appui:
+            lignes.append("%d position(s) non retrouvée(s) dans les notes : signalées dans le "
+                          "corps de l'avis, à vérifier ou à retirer." % sans_appui)
+        lignes.append('Document : [%s](%s)' % (base, url))
+        if carnet:
+            lignes.append('Une note a été ajoutée au carnet de cette conversation.')
+        return chr(10).join(lignes)
+
+    if name == 'suivre_texte':
+        from modules import suivi_textes as S
+        nom = (args.get('nom') or '').strip()
+        if not nom:
+            suivis = S.textes_suivis()
+            if not suivis:
+                return '[Aucun texte suivi pour le moment.]'
+            return 'Textes suivis : ' + ' ; '.join('%s (%d version(s))' % (t['nom'], t['n'])
+                                                   for t in suivis)
+        texte, origine = (args.get('texte') or '').strip(), 'texte collé'
+        nom_doc = (args.get('document') or '').strip()
+        nom_ancien = (args.get('comparer_avec') or '').strip()
+        if not texte and nom_doc:
+            d = trouver_document_base(nom_doc) or {}
+            texte, origine = (d.get('texte') or '').strip(), d.get('titre') or nom_doc
+            if not texte:
+                return '[Document « %s » introuvable dans la base. %s]' % (nom_doc, _aide_sources())
+        if not texte:
+            from core.database import get_thread_document
+            d = get_thread_document(thread_id) or {}
+            texte = (d.get('texte') or '').strip()
+            origine = d.get('titre') or 'document de la conversation'
+        if not texte:
+            vs = S.versions(nom)
+            if not vs:
+                return '[Aucune version conservée pour « %s ». %s]' % (nom, _aide_sources())
+            return 'Versions conservées de « %s » :%s%s' % (nom, chr(10), chr(10).join(
+                '- version %d du %s (%s)' % (v['numero'], S._date(v['enregistre_le']),
+                                              v['source'] or 'source non notée') for v in vs))
+
+        fantome = _is_ghost_thread(thread_id)
+        avert = []
+        if nom_ancien:
+            # Comparaison ponctuelle : rien n'est conservé.
+            d = trouver_document_base(nom_ancien) or {}
+            if not (d.get('texte') or '').strip():
+                return '[Document « %s » introuvable dans la base. %s]' % (nom_ancien, _aide_sources())
+            ancien = d['texte']
+            lib_avant = "l'ancienne version « %s »" % d.get('titre')
+            lib_apres = 'la nouvelle version « %s »' % origine
+        else:
+            der = S.derniere_version(nom)
+            n_av = len(S.versions(nom))
+            identique = bool(der) and der['empreinte'] == S.empreinte(texte)
+            if fantome:
+                avert.append("Fil fantôme : cette version n'a pas été conservée.")
+            elif not identique:
+                S.enregistrer_version(nom, texte, origine)
+            if not der:
+                mode_d, unites = S.decouper(texte)
+                return ("Suivi commencé pour « %s » : %s (%d %s(s)). Il n'y a pas encore de "
+                        "version précédente à comparer ; la prochaine version sera comparée à "
+                        "celle-ci." % (nom, 'version non conservée (fil fantôme)' if fantome
+                                       else 'version 1 conservée', len(unites), mode_d))
+            if identique:
+                return ('Aucun changement : cette version de « %s » est identique à la version '
+                        '%d du %s.' % (nom, n_av, S._date(der['enregistre_le'])))
+            ancien = der['texte']
+            lib_avant = 'la version %d du %s' % (n_av, S._date(der['enregistre_le']))
+            lib_apres = (('la nouvelle version (%s)' % origine) if fantome
+                         else 'la version %d (%s)' % (n_av + 1, origine))
+
+        comp = S.comparer(ancien, texte)
+        analyser = args.get('analyser', True) not in (False, 'false', 'non', 0)
+        if analyser and comp['changements']:
+            e = await S.analyser_portee(comp['changements'], reglages)
+            if e:
+                avert.append(e)
+        md = S.rendre_markdown(nom, comp, lib_avant, lib_apres, avert, analyser)
+        base, url = _livrable_institutionnel(thread_id, 'suivi', 'Suivi — ' + nom, md)
+        carnet = _note_carnet_si_permise(thread_id, S.rendre_note_carnet(nom, comp, lib_apres))
+        lignes = ['%d changement(s) entre %s et %s.' % (len(comp['changements']), lib_avant, lib_apres)]
+        lignes += ['Avertissement : ' + a for a in avert]
+        lignes += ['- %s : %s' % (c['unite'], c['nature']) for c in comp['changements'][:10]]
+        lignes.append('Document : [%s](%s)' % (base, url))
+        if carnet:
+            lignes.append('Une note a été ajoutée au carnet de cette conversation.')
+        print('[HUB] 📜 suivre_texte(%r) → %d changement(s)' % (nom, len(comp['changements'])))
+        return chr(10).join(lignes)
+
+    return '[Outil inconnu : %s]' % name
+
+
 async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     """
     Exécute un outil demandé par le LLM et retourne le résultat en texte.
@@ -3291,6 +3656,13 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                 "attends sa réponse sans utiliser d'autre outil]" + chr(10)
                 + _formater_demande_precision(args))
 
+    if name == 'preparer_reunion' or name == 'rediger_avis' or name == 'suivre_texte':
+        try:
+            return await _outil_institutionnel(name, args, thread_id)
+        except Exception as e:
+            print('[HUB] ⚠️ Erreur %s : %s' % (name, e))
+            return '[Erreur pendant %s : %s]' % (name, e)
+
     if name == 'relever_decisions':
         titre = (args.get('titre') or 'réunion').strip()
         texte = (args.get('texte') or '').strip()
@@ -3309,7 +3681,7 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                         "conversation, ou passe-le dans le paramètre texte.]")
 
             from modules.decisions import (relever, rendre_markdown,
-                                           rendre_note_carnet)
+                                           rendre_note_carnet, non_verifiees)
             _reglages = load_settings(thread_id)
             releves, avert = await relever(texte, _reglages)
             md = rendre_markdown(titre, releves, source, avert)
@@ -3331,10 +3703,8 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
             # Note de carnet : elle ressortira quand l'utilisateur reviendra sur
             # le sujet, sans qu'il ait à retrouver le fichier.
             note = rendre_note_carnet(titre, releves)
-            try:
-                add_carnet_note(thread_id, count_carnet_notes(thread_id) + 1, note, 0)
-            except Exception as _ec:
-                print('[HUB] Note de carnet non écrite : %s' % _ec)
+            # Fil fantôme : la case promet « aucune note de carnet » (audit 18/10/2026).
+            _carnet_ok = _note_carnet_si_permise(thread_id, note)
 
             n_d = sum(1 for r in releves if r['type'] == 'decision')
             n_a = sum(1 for r in releves if r['type'] == 'action')
@@ -3343,6 +3713,10 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                       'd\'information.' % (n_d, n_a, n_i)]
             if avert:
                 lignes.append('Avertissement : ' + avert)
+            _nv = non_verifiees(releves)
+            if _nv:
+                lignes.append('%d extrait(s) non retrouvé(s) dans le compte rendu : '
+                              'signalés dans le document, à vérifier.' % _nv)
             for r in releves:
                 if r['type'] != 'action':
                     continue
@@ -3350,7 +3724,8 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                     r['intitule'], r['responsable'],
                     '' if r['echeance'].startswith('non précis') else ', %s' % r['echeance']))
             lignes.append('Document : [%s](%s)' % (base, url))
-            lignes.append('Une note a été ajoutée au carnet de cette conversation.')
+            if _carnet_ok:
+                lignes.append('Une note a été ajoutée au carnet de cette conversation.')
             print('[HUB] 📋 relever_decisions(%r) → %d relevé(s)' % (titre, len(releves)))
             return chr(10).join(lignes)
         except Exception as e:
@@ -3958,7 +4333,7 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     if name == 'describe_image':
         _di_url    = args.get('url', '').strip()
         _di_prompt = args.get('prompt', '').strip() or (
-            "D\xc3\xa9cris cette image de fa\xc3\xa7on pr\xc3\xa9cise et concise, comme un texte alternatif accessible (attribut alt WCAG), en fran\xc3\xa7ais.")
+            "Décris cette image de façon précise et concise, comme un texte alternatif accessible (attribut alt WCAG), en français.")
         if not _di_url:
             return "[describe_image] URL manquante."
         try:
@@ -3991,7 +4366,7 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
                 _di_pm = _gs_di("pixtral_model", "pixtral-12b-2409")
             _di_desc = await call_vision(_b64_di, _mime_di, _di_prompt, _di_prov,
                                          _di_settings.get("api_keys", {}), vision_model=_di_pm)
-            return _di_desc or "[describe_image] Aucune description retourn\xc3\xa9e."
+            return _di_desc or "[describe_image] Aucune description retournée."
         except Exception as e:
             return f"[Erreur description image : {e}]"
 
@@ -4100,26 +4475,37 @@ def _get_llm_history(thread_id: str, limit: int = 60) -> list:
 
 
 def _add_msg(thread_id: str, role: str, content: str) -> None:
-    """Sauvegarde le message SAUF si le fil est en mode fant\xc3\xb4me (confidentiel).
-    En mode fant\xc3\xb4me, aucune trace n'est persist\xc3\xa9e en base, mais l'echange
+    """Sauvegarde le message SAUF si le fil est en mode fantôme (confidentiel).
+    En mode fantôme, aucune trace n'est persistée en base, mais l'echange
     est conserve en MEMOIRE VIVE (cache de session) pour que l'assistant garde le
     fil de la conversation en cours sans rien ecrire sur disque."""
     if _is_ghost_thread(thread_id):
+        # Décision de Fernando (18/10/2026) : le fantôme l'emporte. Rien n'est
+        # écrit sur disque, pas même la mémoire propre d'un masque de jeu —
+        # la case promet « aucun message, aucune mémoire ».
         _ghost_session_push(thread_id, role, content)
-        _masque_souvenir_push(thread_id, role, content)
         return
     add_message(thread_id, role, content)
+    _masque_souvenir_push(thread_id, role, content)
+
+
+_MASQUE_DERNIERE_QUESTION = {}   # thread_id → dernier message utilisateur (mémoire vive)
 
 
 def _masque_souvenir_push(thread_id: str, role: str, content: str) -> None:
     """Mémoire privée d'un masque de jeu (champ `memoire_du_masque`).
 
-    EXCEPTION ASSUMÉE AU MODE FANTÔME : un fil fantôme n'écrit rien sur disque,
-    sauf ce fragment — et seulement si le masque le déclare. Le fichier vit dans
+    Fils NORMAUX uniquement depuis le 18/10/2026 : l'« exception assumée au mode
+    fantôme » a été retirée à la demande de Fernando — un fil fantôme n'écrit
+    plus rien, ce fragment compris. Le fichier vit dans
     `data/souvenirs_masques/` (ignoré par git) et n'est relu que par ce masque :
     il ne se mêle ni à la table `memory`, ni aux autres masques.
     """
     try:
+        if role == 'user':
+            # Mémorisé en vive pour accompagner la réponse qui suit.
+            _MASQUE_DERNIERE_QUESTION[thread_id] = content or ''
+            return
         if role != 'assistant':
             return
         _t = get_thread(thread_id)
@@ -4129,11 +4515,7 @@ def _masque_souvenir_push(thread_id: str, role: str, content: str) -> None:
         _mask = load_mask(_mid)
         if not _mask.get('memoire_du_masque'):
             return
-        _q = ''
-        for _m in reversed(_ghost_session_messages(thread_id, 6)):
-            if _m.get('role') == 'user':
-                _q = _m.get('content') or ''
-                break
+        _q = _MASQUE_DERNIERE_QUESTION.pop(thread_id, '')
         _rep = re.sub(r'%%[^%]*%%', '', content or '').strip()
         from core.database import add_souvenir_masque as _asm
         _asm(_mid, _q, _rep)

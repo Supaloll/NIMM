@@ -215,7 +215,7 @@ echo  NIMM s'ouvre dans votre navigateur.
 echo  Cette fenetre se ferme seule dans 10 secondes.
 echo.
 timeout /t 10 /nobreak >nul
-powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath 'python' -ArgumentList '-m','uvicorn','main:app','--host','0.0.0.0','--port','8080' -WorkingDirectory '%NIMM_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%NIMM_DIR%\nimm.log' -RedirectStandardError '%NIMM_DIR%\nimm_error.log'"
+powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath 'python' -ArgumentList '-m','uvicorn','main:app','--host','127.0.0.1','--port','8080' -WorkingDirectory '%NIMM_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%NIMM_DIR%\nimm.log' -RedirectStandardError '%NIMM_DIR%\nimm_error.log'"
 timeout /t 6 /nobreak >nul
 start http://localhost:8080
 pause

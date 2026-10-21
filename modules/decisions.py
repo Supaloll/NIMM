@@ -15,6 +15,10 @@ trois garde-fous, qui sont l'essentiel de ce module :
      a l'instruction explicite de ne jamais attribuer par déduction.
   2. Chaque relevé porte la CITATION du passage dont il vient, copiée mot pour
      mot. C'est ce qui rend le document vérifiable sans rouvrir la source.
+     Depuis le 18/10/2026, la citation est VÉRIFIÉE contre le compte rendu
+     (modules/citations.py) : demander « mot pour mot » ne garantit rien, un
+     modèle reformule de bonne foi. Un extrait introuvable n'est pas supprimé —
+     le relevé peut être juste — mais marqué « à vérifier ».
   3. Décisions, actions et simples informations sont distinguées : un compte
      rendu mélange les trois, et on ne les traite pas de la même façon.
 
@@ -35,6 +39,8 @@ gagner.
 import json
 import re
 from datetime import datetime
+
+from modules.citations import MENTION_NON_VERIFIEE, marquer_citations
 
 _MAX_TEXTE = 30000        # au-delà, on prévient plutôt que de tronquer en silence
 
@@ -140,7 +146,15 @@ async def relever(texte: str, settings: dict, contexte: str = '') -> tuple:
         )
     except Exception as e:
         return [], 'Le relevé a échoué : %s' % e
-    return parser_releve(reponse), avertissement
+    releves = parser_releve(reponse)
+    # Contrôle contre le texte réellement dépouillé (tronqué compris).
+    marquer_citations(releves, [texte])
+    return releves, avertissement
+
+
+def non_verifiees(releves: list) -> int:
+    """Nombre de relevés dont l'extrait n'a pas été retrouvé dans le compte rendu."""
+    return sum(1 for r in releves if r.get('citation') and not r.get('verifiee', True))
 
 
 _TITRES = {
@@ -166,7 +180,12 @@ def rendre_markdown(titre: str, releves: list, source: str = '',
     lignes.append('')
     lignes.append("Chaque relevé est suivi de l'extrait dont il provient, pour "
                   "être vérifié sans rouvrir le compte rendu. « Non précisé » "
-                  "signifie que le texte ne le disait pas : rien n'a été deviné.")
+                  "signifie que le texte ne le disait pas : rien n'a été deviné. "
+                  "Les extraits ont été comparés automatiquement au compte rendu.")
+    nv = non_verifiees(releves)
+    if nv:
+        lignes += ['', 'Attention : %d extrait(s) non retrouvé(s) dans le compte rendu, '
+                   'à vérifier avant de diffuser.' % nv]
 
     # Le tableau récapitulatif : l'intitulé en première colonne, car c'est lui
     # qui identifie la ligne — c'est cette colonne que file_writer marque comme
@@ -189,7 +208,10 @@ def rendre_markdown(titre: str, releves: list, source: str = '',
     if avec_citation:
         lignes += ['', '## Extraits justificatifs']
         for r in avec_citation:
-            lignes += ['', '### ' + r['intitule'], '« %s »' % r['citation']]
+            ligne = '« %s »' % r['citation']
+            if not r.get('verifiee', True):
+                ligne += ' — ' + MENTION_NON_VERIFIEE + '.'
+            lignes += ['', '### ' + r['intitule'], ligne]
 
     if not releves:
         lignes += ['', "Aucune décision ni action n'a été relevée dans ce texte."]

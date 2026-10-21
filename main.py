@@ -6150,7 +6150,7 @@ async def mistral_audio_speak(
 async def mistral_audio_analyze(file: UploadFile = File(...), prompt: str = Form(default="")):
     """
     Analyse un fichier audio.
-    Essaie Voxtral (Mistral) en premier si la cl\xc3\xa9 API est disponible,
+    Essaie Voxtral (Mistral) en premier si la clé API est disponible,
     sinon bascule automatiquement sur Whisper local.
     """
     import base64 as _b64, httpx as _httpx, os as _os, tempfile as _tmp, asyncio as _aio, functools as _ft
@@ -6158,7 +6158,7 @@ async def mistral_audio_analyze(file: UploadFile = File(...), prompt: str = Form
     filename = (file.filename or '').lower()
     _AUDIO_EXTS = ('.mp3', '.wav', '.ogg', '.m4a', '.flac', '.webm', '.aac', '.oga', '.opus')
     if not any(filename.endswith(e) for e in _AUDIO_EXTS):
-        raise HTTPException(400, "Format audio non support\xc3\xa9. Utilisez mp3, wav, ogg, m4a, flac, webm, aac ou opus.")
+        raise HTTPException(400, "Format audio non supporté. Utilisez mp3, wav, ogg, m4a, flac, webm, aac ou opus.")
 
     # --- Tentative Voxtral ---
     try:
@@ -6193,9 +6193,9 @@ async def mistral_audio_analyze(file: UploadFile = File(...), prompt: str = Form
                 _res  = _r.json()
                 _text = ((_res.get('choices') or [{}])[0].get('message', {}).get('content') or '').strip()
                 return {"text": _text, "name": file.filename, "model": "voxtral-small-latest"}
-            print(f"[AUDIO] Voxtral \xc3\xa9chec {_r.status_code} \xe2\x80\x94 bascule Whisper")
+            print(f"[AUDIO] Voxtral échec {_r.status_code} — bascule Whisper")
         except Exception as _ve:
-            print(f"[AUDIO] Voxtral exception : {_ve} \xe2\x80\x94 bascule Whisper")
+            print(f"[AUDIO] Voxtral exception : {_ve} — bascule Whisper")
 
     # --- Fallback Whisper local ---
     try:

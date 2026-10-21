@@ -5801,6 +5801,332 @@ def test_maj_ytdlp_prevent_sans_installer():
        "installation sur un clic")
 
 
+def test_audit_securite_20261018():
+    """Audit du 18/10/2026 — quatre failles, verrouillées pour ne pas revenir.
+
+    1. Les lanceurs Windows écoutaient sur 0.0.0.0 : tout le réseau local
+       pilotait l'API sans authentification (le correctif de juin n'avait
+       touché que main.py, puis le lanceur Linux).
+    2. L'affichage progressif insérait le HTML du modèle SANS DOMPurify : seul
+       le rendu final était filtré, trop tard pour un <img onerror>.
+    3. escapeAttr ne faisait rien (& → &, " → ") et escapeHtml n'échappait
+       pas les guillemets : une apostrophe cassait le bouton Modifier de la
+       mémoire, un guillemet cassait les aria-label.
+    4. Un script CoaNIMM pouvait LIRE data/.nimm_api_keyfile et les bases, donc
+       déchiffrer toutes les clés d'API (seules les écritures étaient confinées).
+    """
+    import glob
+    import subprocess
+    import modules.coanimm_safety as S
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # 1. Aucun lanceur n'écoute sur toutes les interfaces
+    for chemin in glob.glob(os.path.join(racine, '*.bat')) + glob.glob(os.path.join(racine, '*.vbs')) \
+            + glob.glob(os.path.join(racine, '*.sh')):
+        texte = open(chemin, encoding='utf-8', errors='replace').read()
+        for motif in ("'--host','0.0.0.0'", '--host 0.0.0.0', 'HOST="0.0.0.0"', "HOST='0.0.0.0'"):
+            assert motif not in texte, f"{os.path.basename(chemin)} écoute sur 0.0.0.0 ({motif})"
+
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    lignes = js.split('\n')
+
+    # 2. Tout rendu Markdown passe par _safeHTML (même ligne ou les deux suivantes)
+    for i, ligne in enumerate(lignes):
+        if 'marked.parse(' in ligne and not ligne.lstrip().startswith('//'):
+            fenetre = '\n'.join(lignes[i:i + 3])
+            assert '_safeHTML(' in fenetre, f"app.js ligne {i + 1} : marked.parse sans _safeHTML"
+    # ... et _safeHTML ne laisse plus tout passer quand DOMPurify manque (hors connexion)
+    assert "DOMPurify.sanitize(h, {ADD_ATTR:['target','rel']}) : h;" not in js, \
+        "_safeHTML renvoie le HTML brut quand DOMPurify est absent"
+    assert 'function _safeHTMLRepli(' in js
+
+    # 3. Échappements réels, et plus aucun onclick construit avec escapeAttr
+    def corps(nom):
+        m = re.search(r'function ' + nom + r'\s*\([^)]*\)\s*\{.*?\n\}', js, re.S)
+        assert m, f"fonction {nom} introuvable"
+        return m.group(0)
+    assert "replace(/&/g,'&')" not in corps('escapeAttr').replace(' ', ''), "escapeAttr sans effet"
+    esc = corps('escapeHtml')
+    for entite in ('&amp;', '&lt;', '&quot;', '&#39;'):
+        assert entite in esc, f"escapeHtml n'échappe pas {entite}"
+    assert not re.search(r'onclick="[^"]*\$\{escapeAttr', js), "onclick construit avec escapeAttr"
+
+    # 4. Le garde-fou interdit la lecture des secrets — exécution RÉELLE
+    with tempfile.TemporaryDirectory() as tmp:
+        data = os.path.join(tmp, 'data')
+        ws = os.path.join(data, 'espace')
+        os.makedirs(ws)
+        for nom in ('.nimm_api_keyfile', 'users.json', 'nimm_test.db', 'mood_prompts.json'):
+            open(os.path.join(data, nom), 'w', encoding='utf-8').write('x')
+        ancien = S._NIMM_DATA_DIR
+        S._NIMM_DATA_DIR = os.path.realpath(data)
+        try:
+            garde = S.build_guard_prologue([])
+        finally:
+            S._NIMM_DATA_DIR = ancien
+        interdits = [
+            f"open({os.path.join(data, '.nimm_api_keyfile')!r}).read()",
+            f"import pathlib; pathlib.Path({os.path.join(data, 'users.json')!r}).read_text()",
+            f"import sqlite3; sqlite3.connect({os.path.join(data, 'nimm_test.db')!r})",
+            "open('../.nimm_api_keyfile').read()",
+        ]
+        permis = [
+            f"open({os.path.join(data, 'mood_prompts.json')!r}).read()",
+            "open('sortie.txt', 'w').write('x')",
+        ]
+        for code in interdits + permis:
+            r = subprocess.run([sys.executable, '-c', garde + '\n' + code], cwd=ws,
+                               capture_output=True, text=True, timeout=60)
+            bloque = 'fichier protege' in r.stderr
+            if code in interdits:
+                assert bloque, f"lecture secrète NON bloquée : {code}"
+            else:
+                assert not bloque and r.returncode == 0, f"usage légitime bloqué : {code} — {r.stderr[-200:]}"
+    ok("audit sécurité 18/10 : écoute locale, rendu filtré, échappements réels, secrets illisibles")
+
+
+def test_volet_institutionnel_cite_et_verifie():
+    """Préparer une réunion, rédiger un avis, suivre un texte : rien n'est deviné, tout est cité.
+
+    Ces trois outils (18/10/2026) complètent le relevé de décisions du 07/09.
+    Leur risque commun : un élément inventé ou une citation reformulée, repris
+    en commission ou signé dans un avis sans que personne n'aille vérifier.
+    D'où ce qui est verrouillé ici :
+      - les extraits sont VÉRIFIÉS contre le texte réel (le relevé se contentait
+        de demander « mot pour mot ») ;
+      - un projet d'avis ne prend jamais position : une position absente des
+        notes est signalée DANS le corps de l'avis, pas seulement en annexe ;
+      - ce qui a changé entre deux versions d'un texte est établi par le CODE ;
+        seule la « portée probable » vient du modèle, et le document le dit ;
+      - en fil fantôme, aucune note de carnet (relevé de décisions compris) ;
+      - les documents Word sont marqués en français dans le TEXTE, pas seulement
+        dans les propriétés — sinon la voix anglaise du lecteur d'écran les lit.
+    """
+    import importlib
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    Ci = importlib.import_module('modules.citations')
+    R = importlib.import_module('modules.reunion')
+    A = importlib.import_module('modules.avis')
+    S = importlib.import_module('modules.suivi_textes')
+
+    # 1. Vérification des citations : tolérante à la typographie, pas à la reformulation
+    t = "L’article 3 prévoit que le registre public d’accessibilité est mis à jour chaque année."
+    assert Ci.citation_verifiee("le registre public d'accessibilité est mis à jour chaque année", t)
+    assert Ci.citation_verifiee("« L'article 3 prévoit […] mis à jour chaque année »", t)
+    assert not Ci.citation_verifiee("le registre est mis à jour tous les deux ans", t)
+    assert not Ci.citation_verifiee("L'article 3", t), 'un extrait trop court ne prouve rien'
+    assert not Ci.citation_verifiee("mis à jour chaque année … L'article 3 prévoit que", t), \
+        "des morceaux dans le désordre ne sont pas une citation"
+
+    # 2. Réunion : une question sur un silence n'est jamais adossée à un faux extrait
+    assert 'n\'invente jamais un extrait' in R.PROMPT_REUNION
+    prep = R.parser_preparation('```json\n{"objet":"x","questions":[{"question":"Qui contrôle ?",'
+                                '"citation":"","silence":true},{"question":""}],"vigilance":[{"point":'
+                                '"Dérogations","citation":"accordées par le préfet sans aucun contrôle"}]}\n```')
+    assert len(prep['questions']) == 1 and prep['questions'][0]['silence']
+    sources = [{'titre': 'Projet', 'texte': 'Les dérogations sont accordées par le préfet.'}]
+    assert R.verifier(prep, sources) == 1, "l'extrait inventé n'a pas été repéré"
+    md = R.rendre_markdown('Commission', prep, sources)
+    assert Ci.MENTION_NON_VERIFIEE in md and 'aucun extrait ne s\'y rapporte' in md
+    for mauvais in ('', 'pas de json', '[1, 2]', None):
+        R.parser_preparation(mauvais)          # ne lève jamais
+
+    # 3. Avis : aucune position hors des notes, et elle saute aux yeux si le modèle en invente une
+    p = A.prompt_structurer()
+    assert "JAMAIS position à la place de l'auteur" in p and 'UNIQUEMENT de ses notes' in p
+    assert 'jamais « exige »' in p
+    texte = "Article 1er\nLe registre est public.\nArticle 2\nIl est mis à jour chaque année.\nArticle 3 bis\nx"
+    notes = "Avis favorable avec réserves. Article 2 : la mise à jour annuelle est insuffisante."
+    st = A.parser_structure('{"observations_generales":[{"observation":"Le texte va dans le bon sens.",'
+                            '"appui_notes":"inventé"}],"observations_articles":[{"article":"2",'
+                            '"observation":"Mise à jour insuffisante.","appui_notes":'
+                            '"la mise à jour annuelle est insuffisante"}],"avis":{"sens":"plutôt oui"}}')
+    assert st['avis']['sens'] == '', 'un sens hors liste doit être écarté, pas « corrigé »'
+    A.verifier_structure(st, [texte], notes)
+    projet = A.rendre_projet('RPA', st, [{'titre': 'T', 'texte': texte}], notes)
+    corps = projet.split('## Annexe')[0]
+    assert 'Le texte va dans le bon sens. ' + A.POSITION_NON_RETROUVEE in corps, \
+        "une position absente des notes n'est pas signalée dans le corps de l'avis"
+    assert 'Mise à jour insuffisante.' + chr(10) in corps
+    assert A.A_COMPLETER in corps, "le sens de l'avis manquant doit rester à compléter"
+    assert A.articles_non_commentes(texte, "l'article 2") == ['1er', '3 bis'], \
+        'le relevé des articles non commentés doit être exact (c\'est un décompte)'
+    trame = A.charger_trame(os.path.join(racine, 'data', 'prompts', 'avis_trame.txt'))
+    assert [x[0] for x in trame] == ['saisine', 'presentation', 'observations_generales',
+                                     'observations_articles', 'demandes', 'avis']
+    assert [x[0] for x in A.charger_trame('/chemin/inexistant')][-1] == 'avis'
+    rel = A.parser_relecture('{"remarques":[{"nature":"inconnue","passage":"absent","remarque":"r"}]}')
+    A.verifier_relecture(rel, notes, [texte])
+    assert rel['remarques'][0]['nature'] == 'argument contestable' and not rel['remarques'][0]['passage_ok']
+    assert "NI l'orthographe" in A.PROMPT_RELIRE
+
+    # 4. Suivi : la comparaison est déterministe, la portée est étiquetée comme analyse
+    v1 = "Vu le code ;\nArticle 1er\nMis à jour chaque année.\nArticle 2\nConsultable sur place.\nArticle 3\nDérogations."
+    v2 = "Vu le code ;\nArticle 1er\nMis à jour tous les deux ans.\nArticle 3\nDérogations.\nArticle 3 bis\nPublié en ligne."
+    c = S.comparer(v1, v2)
+    assert [(x['unite'], x['nature']) for x in c['changements']] == [
+        ('Article 1er', 'modifié'), ('Article 3 bis', 'ajouté'), ('Article 2', 'supprimé')]
+    assert c['changements'][0]['details'] == ['« chaque année. » remplacé par « tous les deux ans. »']
+    assert S.comparer(v1, v1.replace('\n', '\n  '))['changements'] == [], 'des espaces ne sont pas un changement'
+    assert S.empreinte(v1) == S.empreinte(v1 + '   ')
+    c['changements'][0]['portee'] = 'Obligation allégée.'
+    md = S.rendre_markdown('Arrêté', c, 'v1', 'v2')
+    assert 'Portée probable (analyse de NIMM, à vérifier)' in md and 'sans interprétation' in md
+    assert '| Article | Changement |' in md
+    src_s = open(os.path.join(racine, 'modules', 'suivi_textes.py'), encoding='utf-8').read()
+    assert 'call_llm' not in src_s[src_s.index('def comparer'):src_s.index('# ── Portée')], \
+        'aucun modèle ne doit intervenir dans la comparaison'
+
+    # 5. Câblage : déclarés, aiguillés, rangés ; pas de carnet en fil fantôme
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+    corps_exec = hub[hub.index('async def _execute_tool'):]
+    for nom in ('preparer_reunion', 'rediger_avis', 'suivre_texte'):
+        assert '"name": "%s"' % nom in hub and "name == '%s'" % nom in corps_exec
+    g = hub[hub.index('def _note_carnet_si_permise'):]
+    assert g[:g.index('def ', 10)].count('_is_ghost_thread') == 1
+    rd = corps_exec[corps_exec.index("if name == 'relever_decisions':"):]
+    assert '_note_carnet_si_permise(thread_id, note)' in rd[:rd.index("if name == 'search_memory'")], \
+        'le relevé de décisions écrit encore une note de carnet en fil fantôme'
+
+    # 6. Documents Word : français dans le texte, titre annoncé une seule fois
+    fw = importlib.import_module('modules.file_writer')
+    try:
+        import docx  # noqa: F401
+    except ImportError:
+        docx = None
+    if docx is not None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chemin = fw.write_file('# Titre unique' + chr(10) + chr(10) + 'Texte.', 'docx',
+                                   os.path.join(tmp, 'a.docx'), 'Titre unique', 'fr', '')
+            import zipfile
+            z = zipfile.ZipFile(chemin)
+            assert 'w:val="fr-FR"' in z.read('word/styles.xml').decode('utf-8'), \
+                'le texte du document Word est marqué dans une autre langue que le français'
+            assert 'w:val="Title"' not in z.read('word/document.xml').decode('utf-8'), \
+                'le titre est annoncé deux fois (style Titre puis Titre 1)'
+    # 7. Le relevé de décisions vérifie lui aussi ses extraits (ajout du 18/10/2026)
+    Dm = importlib.import_module('modules.decisions')
+    cr = "Il faudra relancer la commission. Marie Dupont rédige la note pour le 12 novembre."
+    rel = Dm.parser_releve('[{"type":"action","intitule":"Relancer","citation":"Il faudra relancer la '
+                           'commission."},{"type":"action","intitule":"Note","citation":'
+                           '"Marie rédigera la note avant le 12"}]')
+    Ci.marquer_citations(rel, [cr])
+    assert [r['verifiee'] for r in rel] == [True, False] and Dm.non_verifiees(rel) == 1
+    md = Dm.rendre_markdown('Commission', rel, 'cr')
+    assert "rien n'a été deviné" in md and '1 extrait(s) non retrouvé(s)' in md
+    assert md.count(Ci.MENTION_NON_VERIFIEE) == 1, "seul l'extrait reformulé doit être signalé"
+    src_d = open(os.path.join(racine, 'modules', 'decisions.py'), encoding='utf-8').read()
+    assert 'marquer_citations(releves, [texte])' in src_d, 'relever() ne vérifie plus les extraits'
+    ok("volet institutionnel : extraits vérifiés (relevé compris), aucune position inventée, "
+       "comparaison exacte, Word en français")
+
+
+def test_audit_lot2_promesses_et_accessibilite():
+    """Audit du 18/10/2026, lot 2 — promesses tenues et accessibilité.
+
+    1. Mode fantôme : décision de Fernando, le fantôme l'emporte. Un masque à
+       mémoire propre n'écrit plus rien dans un fil fantôme ; sa mémoire vit
+       désormais dans les fils normaux (elle n'existait QUE dans les fantômes).
+    2. Un rappel échu jamais annoncé ne se périme plus au premier message : il
+       reste actif, signalé « en retard », et ne se périme qu'une fois vu.
+    3. Une fenêtre qui s'ouvre (seule ou non) reçoit le focus, et Tab y reste.
+    4. Le nombre de rappels du bouton Agenda est LU (aria-label l'écrasait).
+    5. Un repère de focus visible dans tous les thèmes, Amstrad compris.
+    6. Textes envoyés au modèle ou affichés : plus de séquences « \\xc3\\xa9 ».
+    """
+    import sqlite3
+    import glob
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hub = open(os.path.join(racine, 'core', 'hub.py'), encoding='utf-8').read()
+
+    # 1. Fantôme : la branche fantôme de _add_msg n'écrit plus le souvenir de masque
+    add_msg = hub[hub.index('def _add_msg('):hub.index('_MASQUE_DERNIERE_QUESTION = {}')]
+    branche = add_msg[add_msg.index('if _is_ghost_thread(thread_id):'):add_msg.index('add_message(thread_id')]
+    assert '_masque_souvenir_push' not in branche, 'un fil fantôme écrit encore la mémoire du masque'
+    assert '_masque_souvenir_push(thread_id, role, content)' in add_msg[add_msg.index('add_message(thread_id'):], \
+        'la mémoire du masque ne vit plus nulle part : elle doit fonctionner dans les fils normaux'
+    # ... et elle marche vraiment : la question de l'utilisateur accompagne la réponse
+    #     Exécutée isolément (extraite du source) : d'autres scénarios remplacent
+    #     core.database par une doublure, ce qui interdit d'importer core.hub ici.
+    ecrits = []
+    debut = hub.index('_MASQUE_DERNIERE_QUESTION = {}')
+    fin = hub.index(chr(10) + 'async def ', debut)
+    fin = min(fin, hub.index(chr(10) + 'def ', hub.index('def _masque_souvenir_push') + 10))
+    espace = {'re': re, 'get_thread': lambda tid: {'mask_id': 'm1'},
+              'load_mask': lambda mid: {'memoire_du_masque': True}}
+    faux_db = types.ModuleType('core.database')
+    faux_db.add_souvenir_masque = lambda mid, q, r: ecrits.append((mid, q, r))
+    ancien_db = sys.modules.get('core.database')
+    sys.modules['core.database'] = faux_db
+    try:
+        exec(compile(hub[debut:fin], 'souvenir_masque', 'exec'), espace)
+        espace['_masque_souvenir_push']('filX', 'user', 'Te souviens-tu de la forêt ?')
+        espace['_masque_souvenir_push']('filX', 'assistant', 'Oui, la forêt des brumes. %%MEM:x%%')
+    finally:
+        if ancien_db is not None:
+            sys.modules['core.database'] = ancien_db
+        else:
+            sys.modules.pop('core.database', None)
+    assert ecrits == [('m1', 'Te souviens-tu de la forêt ?', 'Oui, la forêt des brumes.')], ecrits
+    idx = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    assert 'aucun message, aucune mémoire, aucune note de carnet ne sera' in idx
+
+    # 2. Rappels : exécution réelle de la règle de péremption sur une base temporaire
+    db_src = open(os.path.join(racine, 'core', 'database.py'), encoding='utf-8').read()
+    f = db_src[db_src.index('def perimer_rappels_depasses'):]
+    sql = re.search(r'"""(UPDATE rappels.*?)"""', f, re.S).group(1)
+    con = sqlite3.connect(':memory:')
+    con.execute("CREATE TABLE rappels (id INTEGER PRIMARY KEY, date_echeance TEXT, statut TEXT, rappels_emis TEXT)")
+    con.executemany("INSERT INTO rappels VALUES (?,?,?,?)", [
+        (1, '2020-01-01', 'actif', '[]'),          # échu, jamais annoncé → reste actif
+        (2, '2020-01-01', 'actif', '["j1"]'),      # échu, annoncé → périmé
+        (3, '2020-01-01', 'actif', None),          # échu, colonne vide → reste actif
+        (4, '2999-01-01', 'actif', '["j1"]'),      # à venir → reste actif
+    ])
+    con.execute(sql, ('2026-10-18',))
+    etat = dict(con.execute('SELECT id, statut FROM rappels'))
+    assert etat == {1: 'actif', 2: 'perime', 3: 'actif', 4: 'actif'}, etat
+    prompt = hub[hub.index('# Rappels / Agenda'):hub.index('# Note de présence temporelle')]
+    assert "_signal = None if _emis else 'retard'" in prompt and 'EN RETARD de' in prompt
+
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    # 3. Focus : il entre dans la fenêtre, et Tab tourne dedans
+    om = js[js.index('function _openModal('):js.index('function _closeModal(')]
+    assert 'dlg.focus()' in om and 'overlay.contains(document.activeElement)' in om
+    assert 'function _modaleOuverte()' in om and "e.key !== 'Tab'" in om, 'piège de focus absent'
+    # 4. Pastille : le nombre passe dans l'étiquette lue
+    p = js[js.index('function _majPastilleAgenda'):]
+    p = p[:p.index('\n}\n')]
+    assert "setAttribute('aria-label', libelle)" in p and "dot.setAttribute('aria-hidden', 'true')" in p
+    # Police : un choix fait pendant le thème Amstrad survit à la sortie
+    th = js[js.index('function _appliquerTheme('):]
+    th = th[:th.index('\n}\n')]
+    assert 'delete document.body.style.fontFamily' not in th and "localStorage.removeItem('nimm-font')" in th
+    # 5. Focus visible et contraste de la pastille
+    css = open(os.path.join(racine, 'frontend', 'styles.css'), encoding='utf-8').read()
+    assert ':focus-visible:not([tabindex="-1"])' in css and 'outline: 2px solid var(--accent) !important' in css
+    pastille = css[css.index('.agenda-pastille {'):]
+    assert 'background: var(--danger)' in pastille[:pastille.index('}')]
+    # Étiquettes : les champs relevés par l'audit ont un nom accessible
+    for motif in ('id="stt-dict-close" aria-label=', 'id="stt-dict-from" placeholder="Whisper dit…" aria-label=',
+                  'id="stt-dict-to" placeholder="Correction…" aria-label=', 'id="coanimm-explore-stdout" readonly aria-label=',
+                  'id="coanimm-cloud-ci-code" readonly aria-label=', 'id="coanimm-cloud-ci-output" readonly aria-label=',
+                  '<label for="new-thread-mask-select"', 'id="memory-edit-input" type="text" aria-labelledby=',
+                  'id="galerie-rename-input" type="text" aria-label='):
+        assert motif in idx, 'nom accessible manquant : ' + motif
+
+    # 6. Plus d'accents écrits en séquences d'échappement dans le code
+    for chemin in [os.path.join(racine, 'main.py')] + glob.glob(os.path.join(racine, 'core', '*.py')) \
+            + glob.glob(os.path.join(racine, 'modules', '*.py')):
+        src = open(chemin, encoding='utf-8').read()
+        assert not re.search(r'\\x[cC][23]\\x[89abAB]', src), \
+            '%s : accents en séquences \\xc3\\x.. (le modèle ou l’utilisateur lit « Ã© »)' % os.path.basename(chemin)
+    archi = open(os.path.join(racine, 'ARCHITECTURE.md'), encoding='utf-8').read()
+    assert not re.search(r'Ã[\x80-\xbf©¨ª«®´ ]|Â[«»° ]', archi), 'mojibake dans ARCHITECTURE.md'
+    ok("audit lot 2 : fantôme sans exception, rappel en retard conservé, focus dans les fenêtres, "
+       "pastille lue, focus visible, accents réparés")
+
+
 if __name__ == '__main__':
     for fn in [test_succes_direct, test_echec_puis_reparation, test_critique_puis_correction,
                test_capacite_manquante, test_arret_sur_erreur, test_wrapper_non_stream,
@@ -5872,6 +6198,9 @@ if __name__ == '__main__':
                test_pas_de_chemin_personnel_dans_le_code,
                test_banc_retenue_coherent,
                test_embeddings_installation_silencieuse,
-               test_releve_decisions_ne_devine_rien]:
+               test_releve_decisions_ne_devine_rien,
+               test_audit_securite_20261018,
+               test_volet_institutionnel_cite_et_verifie,
+               test_audit_lot2_promesses_et_accessibilite]:
         fn()
     print(f"\nTOUS LES TESTS PASSENT ({len(PASSED)} scénarios).")
