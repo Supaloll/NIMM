@@ -1524,6 +1524,15 @@ def build_system_prompt(mask: dict, memory_context: str, carnet_notes: list = No
         '• suivre_texte(nom, document, comparer_avec) → nouvelle version d\'un texte réglementaire :\n'
         '                               ce qui a changé depuis la précédente, article par article.\n'
         '                               Garder le MÊME nom d\'une version à l\'autre.\n'
+        '• interroger_appareils(question, appareil, pages) → question pratique sur un appareil de la\n'
+        '                               maison (réglage, voyant, panne, entretien) : répond d\'après SES\n'
+        '                               modes d\'emploi archivés, pages citées ; décrit les schémas.\n'
+        '                               À préférer à la recherche web pour un appareil archivé.\n'
+        '• ajouter_appareil(nom, marque, modele, piece, televersement, url, chemin) → archiver une\n'
+        '                               notice : PDF joint au trombone (« téléversement tXXXXXX » dans le\n'
+        '                               message), lien, PDF sur l\'ordinateur, ou recherche en ligne.\n'
+        '                               N\'archive QUE si l\'utilisateur le demande. gerer_appareils(action)\n'
+        '                               → lister ou retirer les appareils archivés.\n'
         '• demander_precision(question, options) → poser UNE question de clarification\n'
         '                               et s\'arrêter là, au lieu d\'agir sur une demande floue.\n'
         '                               Voir la règle de retenue ci-dessous.\n'
@@ -2805,8 +2814,89 @@ SUIVRE_TEXTE_TOOL = {
     }
 }
 
+# ── Mes appareils — voir modules/appareils.py ──
+AJOUTER_APPAREIL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ajouter_appareil",
+        "description": (
+            "Archive le mode d'emploi d'un appareil de la maison (four, lave-linge, box, "
+            "chaudière…) pour pouvoir l'interroger ensuite. Le PDF est conservé et découpé par "
+            "page. Source : un PDF joint dans la conversation (référence « téléversement »), un "
+            "lien vers le PDF, le chemin d'un PDF sur l'ordinateur, ou à défaut une recherche en ligne à partir de la marque et de la référence (le PDF "
+            "trouvé n'est accepté que s'il mentionne bien la référence). À appeler quand "
+            "l'utilisateur veut ajouter, ranger, enregistrer ou chercher la notice d'un appareil."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nom": {"type": "string", "description": "Nom usuel de l'appareil, ex. « four », « lave-linge »."},
+                "marque": {"type": "string", "description": "Marque, ex. « Bosch »."},
+                "modele": {"type": "string", "description": "Référence du modèle telle qu'écrite sur l'appareil."},
+                "piece": {"type": "string", "description": "Pièce de la maison, ex. « cuisine »."},
+                "url": {"type": "string", "description": "Lien direct vers le PDF de la notice, si l'utilisateur le donne."},
+                "chemin": {"type": "string", "description": "Chemin d'un fichier PDF sur l'ordinateur, si l'utilisateur le donne."},
+                "televersement": {"type": "string",
+                                  "description": ("PDF joint dans la conversation avec le trombone : la référence "
+                                                  "notée « téléversement tXXXXXX » dans le message, ou « dernier ».")},
+                "rechercher": {"type": "boolean",
+                               "description": "Chercher la notice en ligne quand ni lien ni chemin ne sont donnés (oui par défaut)."}
+            },
+            "required": ["nom"]
+        }
+    }
+}
+
+INTERROGER_APPAREILS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "interroger_appareils",
+        "description": (
+            "Répond à une question pratique sur un appareil de la maison à partir de SES modes "
+            "d'emploi archivés : réglage, programme, voyant, panne, entretien. La réponse cite "
+            "les pages. Peut DÉCRIRE les schémas, figures, voyants et symboles des pages "
+            "concernées (lecture visuelle), ou une page précise par son numéro. À appeler dès "
+            "que l'utilisateur pose une question sur un de ses appareils, ou demande qu'on lui "
+            "décrive un schéma ou une page d'une notice."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "La question, telle que l'utilisateur la pose."},
+                "appareil": {"type": "string",
+                             "description": "L'appareil concerné s'il est nommé (« le four », « Bosch », « cuisine »)."},
+                "pages": {"type": "array", "items": {"type": "integer"},
+                          "description": "Numéros de pages à décrire, si l'utilisateur en demande."},
+                "decrire_schemas": {"type": "boolean",
+                                    "description": "Décrire les schémas des pages trouvées (sinon automatique si la question porte sur une figure, un voyant, un emplacement)."}
+            },
+            "required": ["question"]
+        }
+    }
+}
+
+GERER_APPAREILS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "gerer_appareils",
+        "description": (
+            "Liste les appareils dont le mode d'emploi est archivé, ou en retire un. À appeler "
+            "quand l'utilisateur demande quels modes d'emploi il a, ou veut en supprimer un."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["lister", "retirer"], "description": "lister ou retirer."},
+                "appareil": {"type": "string", "description": "Pour retirer : l'appareil concerné."}
+            },
+            "required": ["action"]
+        }
+    }
+}
+
 NIMM_TOOLS = (NIMM_TOOLS + [DEMANDER_PRECISION_TOOL, RELEVE_DECISIONS_TOOL,
-                            PREPARER_REUNION_TOOL, REDIGER_AVIS_TOOL, SUIVRE_TEXTE_TOOL]
+                            PREPARER_REUNION_TOOL, REDIGER_AVIS_TOOL, SUIVRE_TEXTE_TOOL,
+                            AJOUTER_APPAREIL_TOOL, INTERROGER_APPAREILS_TOOL, GERER_APPAREILS_TOOL]
               + _COANIMM_OPS_TOOLS + _COANIMM_ASYNC_TOOLS)
 
 
@@ -3629,6 +3719,152 @@ async def _outil_institutionnel(name: str, args: dict, thread_id: str) -> str:
 
     return '[Outil inconnu : %s]' % name
 
+# ══════════════════════════════════════════
+# MES APPAREILS — modes d'emploi de la maison (voir modules/appareils.py)
+# ══════════════════════════════════════════
+
+def _chemin_manuel_autorise(chemin: str) -> str:
+    """Chemin absolu d'un PDF fourni par l'utilisateur, ou lève ValueError.
+
+    Garde-fou : uniquement un .pdf, et jamais un fichier du dossier data/ de
+    NIMM (clés, profils, bases) — le modèle choisit ce paramètre, et une
+    injection de consigne pourrait lui souffler un autre chemin.
+    """
+    import os as _os_ap
+    p = _os_ap.path.realpath(_os_ap.path.abspath(_os_ap.path.expanduser((chemin or '').strip().strip('"'))))
+    if not p.lower().endswith('.pdf'):
+        raise ValueError('seul un fichier PDF peut être archivé comme mode d\'emploi')
+    data_nimm = _os_ap.path.realpath(_os_ap.path.join(_os_ap.path.dirname(_os_ap.path.abspath(__file__)), '..', 'data'))
+    if _os_ap.path.normcase(p).startswith(_os_ap.path.normcase(data_nimm) + _os_ap.sep):
+        raise ValueError('ce dossier appartient à NIMM et ne peut pas servir de source')
+    if not _os_ap.path.isfile(p):
+        raise ValueError('fichier introuvable : %s' % chemin)
+    return p
+
+
+async def _outil_appareils(name: str, args: dict, thread_id: str) -> str:
+    import asyncio as _aio_ap
+    from modules import appareils as AP
+
+    if name == 'gerer_appareils':
+        action = (args.get('action') or 'lister').strip().lower()
+        if action == 'retirer':
+            cibles = AP.trouver(args.get('appareil') or '')
+            if len(cibles) != 1:
+                return ('[Précise l\'appareil à retirer : %s]' % (
+                    ' ; '.join(AP.fiche_texte(a) for a in (cibles or AP.lister())) or 'aucun appareil archivé'))
+            AP.retirer(cibles[0]['id'])
+            return 'Mode d\'emploi retiré : %s.' % AP.fiche_texte(cibles[0])
+        tous = AP.lister()
+        if not tous:
+            return ('Aucun mode d\'emploi archivé pour le moment. Pour en ajouter un : donne le nom '
+                    'de l\'appareil, sa marque et sa référence, et un lien ou un fichier PDF — ou '
+                    'demande à NIMM de chercher la notice en ligne.')
+        return ('%d appareil(s) archivé(s) :%s' % (len(tous), chr(10))) + chr(10).join(
+            '- ' + AP.fiche_texte(a) for a in tous)
+
+    if name == 'ajouter_appareil':
+        nom = (args.get('nom') or '').strip()
+        marque = (args.get('marque') or '').strip()
+        modele = (args.get('modele') or '').strip()
+        piece = (args.get('piece') or '').strip()
+        url = (args.get('url') or '').strip()
+        chemin = (args.get('chemin') or '').strip()
+        televersement = (args.get('televersement') or '').strip()
+        journal, octets, source = [], None, ''
+        loop = _aio_ap.get_running_loop()
+        if televersement:
+            joint = AP.reprendre_televersement(televersement)
+            if not joint:
+                return ('[Le PDF joint n\'est plus disponible : NIMM ne garde un fichier joint '
+                        'que deux heures, en mémoire, et l\'oublie au redémarrage. Joins-le de '
+                        'nouveau avec le trombone.]')
+            source, octets = 'fichier joint : %s' % joint[0], joint[1]
+        elif chemin:
+            try:
+                p = _chemin_manuel_autorise(chemin)
+            except ValueError as e:
+                return '[Mode d\'emploi non archivé : %s.]' % e
+            with open(p, 'rb') as fh:
+                octets, source = fh.read(), p
+        elif url:
+            octets, raison = await loop.run_in_executor(None, AP.telecharger_pdf, url)
+            if octets is None:
+                return ('[Téléchargement impossible : %s. Télécharge le PDF toi-même, puis donne '
+                        'son chemin sur ton ordinateur.]' % raison)
+            source = url
+        elif args.get('rechercher', True) not in (False, 'false', 'non', 0):
+            octets, source, journal = await AP.chercher_en_ligne(marque, modele, nom)
+            if octets is None:
+                essais = (chr(10) + chr(10).join('- ' + j for j in journal[:8])) if journal else ''
+                return ('[Notice introuvable automatiquement pour %s %s. Beaucoup de sites de '
+                        'fabricants bloquent le téléchargement : récupère le PDF (site du fabricant, '
+                        'rubrique « notices » ou « manuels ») puis donne son lien ou son chemin.%s]'
+                        % (marque, modele, essais))
+        else:
+            return '[Indique un lien, un chemin de fichier PDF, ou demande une recherche en ligne.]'
+        try:
+            r = await loop.run_in_executor(None, lambda: AP.ajouter(nom, octets, marque, modele, piece, source))
+        except ValueError as e:
+            return '[Mode d\'emploi non archivé : %s.]' % e
+        lignes = ['Mode d\'emploi archivé : %s — %d page(s), dont %d avec du texte%s.' % (
+            r['nom'], r['nb_pages'], r['pages_texte'], ' (il remplace la notice précédente)' if r['remplace'] else '')]
+        if source.startswith('http'):
+            lignes.append('Source : ' + source)
+        lignes += ['Avertissement : ' + a for a in r['avertissements']]
+        lignes.append('Tu peux maintenant poser une question sur cet appareil, ou demander qu\'on '
+                      'te décrive un schéma ou une page.')
+        print('[HUB] 📘 ajouter_appareil(%r) → %d page(s)' % (r['nom'], r['nb_pages']))
+        return chr(10).join(lignes)
+
+    if name == 'interroger_appareils':
+        question = (args.get('question') or '').strip()
+        designation = (args.get('appareil') or '').strip()
+        pages = [int(p) for p in (args.get('pages') or []) if str(p).strip().isdigit()]
+        tous = AP.lister()
+        if not tous:
+            return '[Aucun mode d\'emploi archivé : commence par en ajouter un (ajouter_appareil).]'
+        cibles = AP.trouver(designation) if designation else tous
+        if designation and not cibles:
+            return ('[Aucun appareil ne correspond à « %s ». Appareils archivés : %s]'
+                    % (designation, ' ; '.join(AP.fiche_texte(a) for a in tous)))
+        ids = [a['id'] for a in cibles]
+        passages = AP.rechercher(question, ids) if question else []
+        visuel = bool(pages) or bool(args.get('decrire_schemas')) or AP.demande_visuelle(question)
+        lignes = []
+        reglages = load_settings(thread_id)
+        if passages:
+            lignes.append(await AP.repondre(question, passages, reglages))
+        elif question and not pages:
+            lignes.append('Je n\'ai rien trouvé à ce sujet dans %s.' % (
+                'le mode d\'emploi de ' + cibles[0]['nom'] if len(cibles) == 1 else 'les modes d\'emploi archivés'))
+        if visuel:
+            if pages and len(cibles) != 1:
+                return '[Pour décrire une page, précise l\'appareil : %s]' % ' ; '.join(a['nom'] for a in cibles)
+            app_vis = cibles[0] if pages or not passages else next(
+                a for a in cibles if a['id'] == passages[0]['appareil_id'])
+            pp = AP.pages_a_decrire([p for p in passages if p['appareil_id'] == app_vis['id']], pages)
+            if pp:
+                pdf_pages = await _aio_ap.get_running_loop().run_in_executor(
+                    None, AP.pages_en_pdf, app_vis, pp)
+                desc = await AP.decrire_pages(pdf_pages, question or 'décris ces pages',
+                                              reglages.get('api_keys', {}), pp)
+                lignes.append('Description visuelle %s %s de %s (lecture par le modèle de vision, '
+                              'à vérifier) :%s%s' % (
+                                  'de la page' if len(pp) == 1 else 'des pages',
+                                  ', '.join(str(p) for p in pp), app_vis['nom'], chr(10), desc))
+        if passages:
+            vues = []
+            for p in passages:
+                lab = '%s p. %s' % (p['nom'], p['page'])
+                if lab not in vues:
+                    vues.append(lab)
+            lignes.append('Pages consultées : ' + ', '.join(vues) + '.')
+        print('[HUB] 📘 interroger_appareils(%r) → %d passage(s), visuel=%s' % (question[:40], len(passages), visuel))
+        return (chr(10) * 2).join(lignes) or '[Aucune réponse.]'
+
+    return '[Outil inconnu : %s]' % name
+
 
 async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
     """
@@ -3655,6 +3891,13 @@ async def _execute_tool(name: str, args: dict, thread_id: str = None) -> str:
         return ("[Question à poser telle quelle à l'utilisateur, puis arrête-toi et "
                 "attends sa réponse sans utiliser d'autre outil]" + chr(10)
                 + _formater_demande_precision(args))
+
+    if name == 'ajouter_appareil' or name == 'interroger_appareils' or name == 'gerer_appareils':
+        try:
+            return await _outil_appareils(name, args, thread_id)
+        except Exception as e:
+            print('[HUB] ⚠️ Erreur %s : %s' % (name, e))
+            return '[Erreur pendant %s : %s]' % (name, e)
 
     if name == 'preparer_reunion' or name == 'rediger_avis' or name == 'suivre_texte':
         try:
