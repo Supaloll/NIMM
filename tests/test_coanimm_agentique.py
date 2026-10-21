@@ -5999,11 +5999,11 @@ def test_volet_institutionnel_cite_et_verifie():
             chemin = fw.write_file('# Titre unique' + chr(10) + chr(10) + 'Texte.', 'docx',
                                    os.path.join(tmp, 'a.docx'), 'Titre unique', 'fr', '')
             import zipfile
-            z = zipfile.ZipFile(chemin)
-            assert 'w:val="fr-FR"' in z.read('word/styles.xml').decode('utf-8'), \
-                'le texte du document Word est marqué dans une autre langue que le français'
-            assert 'w:val="Title"' not in z.read('word/document.xml').decode('utf-8'), \
-                'le titre est annoncé deux fois (style Titre puis Titre 1)'
+            with zipfile.ZipFile(chemin) as z:
+                assert 'w:val="fr-FR"' in z.read('word/styles.xml').decode('utf-8'), \
+                    'le texte du document Word est marqué dans une autre langue que le français'
+                assert 'w:val="Title"' not in z.read('word/document.xml').decode('utf-8'), \
+                    'le titre est annoncé deux fois (style Titre puis Titre 1)'
     # 7. Le relevé de décisions vérifie lui aussi ses extraits (ajout du 18/10/2026)
     Dm = importlib.import_module('modules.decisions')
     cr = "Il faudra relancer la commission. Marie Dupont rédige la note pour le 12 novembre."
