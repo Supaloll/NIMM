@@ -14201,15 +14201,18 @@ init();
     var _stVideoTimer = null, _stVideoDebut = 0;
     var _ST_INTERVALLE_MS = 30000;
     var _stImageRef = null; // {b64, mime} — image de référence optionnelle du Studio
+    var _stImgEnCours = false;   // une génération est en route (ne pas effacer l'aperçu)
+    var _stDernierPrompt = '';   // dernière demande, pour « Refaire autrement »
 
     // Lit le fichier choisi, affiche une miniature + bouton de retrait.
     document.getElementById('studio-image-ref')?.addEventListener('change', function (e) {
         var file = e.target.files && e.target.files[0];
         var preview = document.getElementById('studio-image-ref-preview');
-        if (!file) { _stImageRef = null; if (preview) preview.innerHTML = ''; return; }
+        if (!file) { _stImageRef = null; if (preview) preview.innerHTML = ''; _stImgResume(); return; }
         var reader = new FileReader();
         reader.onload = function () {
             _stImageRef = { b64: reader.result, mime: file.type || 'image/png' };
+            _stImgResume();
             if (preview) {
                 preview.innerHTML = '';
                 var vign = document.createElement('img');
@@ -14224,6 +14227,7 @@ init();
                     _stImageRef = null;
                     document.getElementById('studio-image-ref').value = '';
                     preview.innerHTML = '';
+                    _stImgResume();
                 });
                 preview.appendChild(vign);
                 preview.appendChild(retirer);
@@ -14260,6 +14264,29 @@ init();
         var aide = document.getElementById('studio-image-aide');
         if (aide) aide.textContent = m.description || '';
         _stRemplir('studio-image-taille', m.tailles || ['1K']);
+        _stImgResume();
+    }
+
+    // Résumé en une ligne des réglages, dans le titre du bloc replié : on sait
+    // ce qui est choisi (modèle, format, résolution, image de référence,
+    // description) sans avoir à l'ouvrir. Le titre est lu par le lecteur
+    // d'écran à la prise de focus.
+    function _stImgResume() {
+        var el = document.getElementById('studio-image-reglages-resume');
+        if (!el) return;
+        function _txt(id) {
+            var s = document.getElementById(id);
+            var o = s && s.options && s.options[s.selectedIndex];
+            return o ? o.textContent.split(' — ')[0].trim() : '';
+        }
+        var morceaux = [_txt('studio-image-modele'), _txt('studio-image-ratio'),
+                        _txt('studio-image-taille')].filter(Boolean);
+        if (_stImageRef) morceaux.push('avec image de référence');
+        var dec = document.getElementById('studio-image-decrire');
+        if (dec && !dec.checked) morceaux.push('sans description');
+        el.textContent = '⚙️ Réglages : '
+            + (morceaux.length ? morceaux.join(' · ') : 'modèle, format, résolution')
+            + ' — cliquer pour modifier';
     }
 
     async function _stChargerImage() {
@@ -14277,12 +14304,16 @@ init();
     }
 
     document.getElementById('studio-image-modele')?.addEventListener('change', _stImgMajTailles);
+    ['studio-image-ratio', 'studio-image-taille', 'studio-image-decrire'].forEach(function (id) {
+        document.getElementById(id)?.addEventListener('change', _stImgResume);
+    });
 
     document.getElementById('studio-image-btn')?.addEventListener('click', async function () {
         var prompt = (document.getElementById('studio-image-prompt')?.value || '').trim();
         if (!prompt) { _stImgStatus('Décris d\'abord l\'image que tu veux.'); return; }
         var btn = this;
         btn.disabled = true;
+        _stImgEnCours = true;
         _stImgStatus('Génération en cours…');
         try {
             var r = await fetch('/api/imagerie/generer', {
@@ -14310,6 +14341,15 @@ init();
                 (d.images || []).forEach(function (im) {
                     var bloc = document.createElement('div');
                     bloc.style.cssText = 'margin-top:8px;border:1px solid var(--border);border-radius:6px;padding:8px 10px;';
+                    // Titre + rappel de la demande : on sait que c'est le RÉSULTAT,
+                    // et de quelle demande il vient (le champ, lui, est vidé).
+                    var tit = document.createElement('h4');
+                    tit.textContent = 'Image créée';
+                    tit.style.cssText = 'margin:0 0 4px;font-size:0.95rem;';
+                    var leg = document.createElement('p');
+                    leg.textContent = 'Ta demande : ' + prompt;
+                    leg.style.cssText = 'font-size:0.8rem;color:var(--text-muted);margin:0 0 6px;';
+                    bloc.appendChild(tit); bloc.appendChild(leg);
                     var vign = document.createElement('img');
                     vign.src = im.url;
                     // L'alt EST le contenu ici : sans description, on ne ment pas
@@ -14318,17 +14358,26 @@ init();
                     vign.style.cssText = 'max-width:100%;height:auto;border-radius:4px;';
                     bloc.appendChild(vign);
 
-                    var lab = document.createElement('label');
-                    var idz = 'studio-alt-' + (im.fichier || '').replace(/[^a-z0-9]/gi, '');
-                    lab.setAttribute('for', idz);
-                    lab.textContent = 'Description de l\'image (texte alternatif)';
-                    lab.style.cssText = 'display:block;font-size:0.8rem;margin-top:8px;';
-                    var zone = document.createElement('textarea');
-                    zone.id = idz; zone.rows = 4; zone.readOnly = true;
-                    zone.value = im.alt || '(aucune description — la case était décochée, '
-                        + 'ou le modèle de vision n\'a pas répondu)';
-                    zone.style.cssText = 'width:100%;box-sizing:border-box;font-size:0.82rem;margin-top:4px;';
-                    bloc.appendChild(lab); bloc.appendChild(zone);
+                    // La description est DÉJÀ portée par la vignette (alt). Cette copie en
+                    // texte brut sert à la relire ligne à ligne, au braille, et à la copier :
+                    // elle est repliée pour ne pas doubler ce qu'on voit, et elle n'existe
+                    // pas quand il n'y a rien à dire (case décochée : le résumé des réglages
+                    // l'annonce déjà).
+                    if (im.alt) {
+                        var repli = document.createElement('details');
+                        repli.style.cssText = 'margin-top:8px;';
+                        var titreRepli = document.createElement('summary');
+                        titreRepli.textContent = 'Description de l\'image (copiable)';
+                        titreRepli.style.cssText = 'cursor:pointer;font-size:0.82rem;color:var(--text-muted);';
+                        var idz = 'studio-alt-' + (im.fichier || '').replace(/[^a-z0-9]/gi, '');
+                        var zone = document.createElement('textarea');
+                        zone.id = idz; zone.rows = 4; zone.readOnly = true;
+                        zone.setAttribute('aria-label', 'Description de l\'image (texte alternatif)');
+                        zone.value = im.alt;
+                        zone.style.cssText = 'width:100%;box-sizing:border-box;font-size:0.82rem;margin-top:4px;';
+                        repli.appendChild(titreRepli); repli.appendChild(zone);
+                        bloc.appendChild(repli);
+                    }
 
                     var det = document.createElement('p');
                     det.style.cssText = 'font-size:0.78rem;color:var(--text-muted);margin:6px 0 0;';
@@ -14340,8 +14389,32 @@ init();
                     dl.href = im.url; dl.download = im.fichier || 'image.png';
                     dl.className = 'btn-secondary';
                     dl.textContent = 'Télécharger';
-                    dl.style.cssText = 'display:inline-block;margin-top:8px;';
-                    bloc.appendChild(dl);
+                    dl.style.cssText = 'display:inline-block;';
+                    // Que faire ensuite ? Trois actions claires, au même endroit.
+                    var acts = document.createElement('div');
+                    acts.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
+                    function _bouton(texte, cible) {
+                        var b = document.createElement('button');
+                        b.type = 'button'; b.className = 'btn-secondary';
+                        b.textContent = texte;
+                        b.addEventListener('click', cible);
+                        return b;
+                    }
+                    acts.appendChild(dl);
+                    acts.appendChild(_bouton('✏️ Retoucher cette image', function () {
+                        if (typeof window._retoucherCetteImage === 'function') {
+                            window._retoucherCetteImage(im.url, im.alt || '');
+                        }
+                    }));
+                    acts.appendChild(_bouton('🔁 Refaire autrement', function () {
+                        var c = document.getElementById('studio-image-prompt');
+                        if (c) { c.value = _stDernierPrompt; c.focus(); }
+                        _stImgStatus('Ta demande précédente est remise dans le champ : modifie-la, puis « Générer l\'image ».');
+                    }));
+                    acts.appendChild(_bouton('➕ Nouvelle image', function () {
+                        _stImgNouvelle();
+                    }));
+                    bloc.appendChild(acts);
                     out.appendChild(bloc);
                 });
             }
@@ -14349,24 +14422,50 @@ init();
             // C'est le sens de l'entrée « Créer une image » du menu « + », et
             // c'est ce qui manquait : le résultat restait enfermé dans ce
             // panneau (voir _publierImageDansLeFil).
-            var _publiees = 0;
             var _liste = d.images || [];
             for (var j = 0; j < _liste.length; j++) {
                 try {
-                    if (await _publierImageDansLeFil(_liste[j])) _publiees++;
+                    await _publierImageDansLeFil(_liste[j]);
                 } catch (e) { console.warn('[NIMM] Publication dans le fil échouée :', e); }
             }
 
-            var avecAlt = _liste.filter(function (i) { return i.alt; }).length;
-            _stImgStatus('Image prête en ' + d.secondes + ' secondes'
-                + (avecAlt ? ', avec sa description ci-dessous.' : '.')
-                + (_publiees
-                    ? ' Elle est affichée dans la conversation en cours (ferme'
-                      + ' cette fenêtre pour la voir), et rangée dans la galerie.'
-                    : ' Elle est rangée dans la galerie.'));
+            // La demande part dans le titre du résultat : le champ est vidé, pour
+            // qu'on ne croie pas qu'un nouveau clic retouche l'image précédente.
+            _stDernierPrompt = prompt;
+            var _champ = document.getElementById('studio-image-prompt');
+            if (_champ) _champ.value = '';
+
+            // Une phrase, pas un mode d'emploi : c'est la zone d'annonce du lecteur
+            // d'écran, la seule à dire qu'une image vient d'apparaître.
+            _stImgStatus('Image prête en ' + d.secondes + ' secondes.');
         } catch (e) { _stImgStatus('Erreur : ' + e.message); }
-        finally { btn.disabled = false; }
+        finally { btn.disabled = false; _stImgEnCours = false; }
     });
+
+    // Repart de zéro : champ, résultat, message et image de référence vidés.
+    function _stImgNouvelle() {
+        var c = document.getElementById('studio-image-prompt');
+        if (c) c.value = '';
+        var out = document.getElementById('studio-image-out');
+        if (out) out.innerHTML = '';
+        _stImageRef = null;
+        var ref = document.getElementById('studio-image-ref');
+        if (ref) ref.value = '';
+        var pv = document.getElementById('studio-image-ref-preview');
+        if (pv) pv.innerHTML = '';
+        _stImgResume();
+        _stImgStatus('Prêt pour une nouvelle image : décris-la dans le champ.');
+        if (c) c.focus();
+    }
+
+    // À l'ouverture du panneau : on n'affiche plus l'image de la fois d'avant
+    // (elle est rangée dans la galerie). Pas pendant une génération en cours.
+    function _stImgRaz() {
+        if (_stImgEnCours) return;
+        var out = document.getElementById('studio-image-out');
+        if (out) out.innerHTML = '';
+        _stImgStatus('');
+    }
 
     // ── Vidéo ───────────────────────────────────────────────────────────────
     function _stVidMajResolutions() {
@@ -14557,6 +14656,7 @@ init();
         var _p = document.getElementById('galerie-modal');
         if (_p) _p.classList.remove('hidden');
         if (typeof _galerieLoad === 'function') _galerieLoad();
+        _stImgRaz();
         _stChargerImage();
         _stChargerVideo();
         _stChargerBiblioVideo();
@@ -15444,6 +15544,7 @@ document.addEventListener('keydown', (e) => {
                 return;
             }
             _retoucheResultat = { b64: d.image, mime: d.mime || 'image/png' };
+            _retoucheDepartVider();   // le départ est désormais le résultat (bouton « Repartir de ce résultat »)
             _retoucheCompteRendu(d);
             _retoucheEtat(d.voie === 'local'
                 ? 'Fait, au pixel près. Le compte rendu est ci-dessous.'
@@ -15479,6 +15580,61 @@ document.addEventListener('keydown', (e) => {
         }
     }
 
+    function _retoucheDepartVider() {
+        const dep = $('studio-retouche-depart');
+        if (dep) dep.innerHTML = '';
+    }
+
+    // Appelée par « Retoucher cette image » (résultat d'une création) : l'image
+    // créée devient le point de départ de la retouche, sans la télécharger ni
+    // la rechoisir. Elle prend la place du « résultat précédent » (voir
+    // _retoucheAppliquer : sans fichier choisi, on part de _retoucheResultat).
+    window._retoucherCetteImage = async function (url, alt) {
+        try {
+            const rep = await fetch(url);
+            if (!rep.ok) throw new Error('image introuvable');
+            const blob = await rep.blob();
+            const b64 = await new Promise((ok, ko) => {
+                const lecteur = new FileReader();
+                lecteur.onload = () => ok(String(lecteur.result).split(',')[1] || '');
+                lecteur.onerror = () => ko(lecteur.error);
+                lecteur.readAsDataURL(blob);
+            });
+            _retoucheResultat = { b64: b64, mime: blob.type || 'image/png' };
+            const champ = $('studio-retouche-fichier');
+            if (champ) champ.value = '';
+
+            const dep = $('studio-retouche-depart');
+            if (dep) {
+                dep.innerHTML = '';
+                const p = document.createElement('p');
+                p.textContent = 'Image de départ : celle que tu viens de créer.';
+                p.style.cssText = 'font-size:0.85rem;font-weight:600;margin:0 0 4px;';
+                const vign = document.createElement('img');
+                vign.src = url;
+                vign.alt = alt || 'Image créée, point de départ de la retouche';
+                vign.style.cssText = 'max-width:120px;max-height:120px;border-radius:6px;display:block;margin-bottom:4px;';
+                const retirer = document.createElement('button');
+                retirer.type = 'button';
+                retirer.textContent = '✕ Retirer';
+                retirer.style.cssText = 'font-size:0.78rem;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;padding:2px 8px;cursor:pointer;';
+                retirer.addEventListener('click', () => {
+                    _retoucheResultat = null;
+                    _retoucheDepartVider();
+                    _retoucheEtat('Image de départ retirée : choisis une photo.');
+                });
+                dep.appendChild(p); dep.appendChild(vign); dep.appendChild(retirer);
+            }
+            const det = $('studio-retouche-details');
+            if (det) { det.open = true; det.scrollIntoView({ block: 'start' }); }
+            _retoucheEtat('L’image que tu viens de créer est prête à être retouchée. '
+                        + 'Dis ce que tu veux changer, puis « Appliquer ».');
+            $('studio-retouche-consigne')?.focus();
+        } catch (e) {
+            _retoucheEtat('Impossible de reprendre cette image : ' + e.message);
+        }
+    };
+
     function _retoucheCabler() {
         const det = $('studio-retouche-details');
         if (!det) return;
@@ -15503,6 +15659,7 @@ document.addEventListener('keydown', (e) => {
             // Une nouvelle image repart de zéro : garder l'ancien résultat en
             // réserve laisserait un doute sur ce qui va être retouché.
             _retoucheResultat = null;
+            _retoucheDepartVider();
             const rep = $('studio-retouche-reprendre');
             if (rep) rep.hidden = true;
             _retoucheEtat('');

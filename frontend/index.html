@@ -20,7 +20,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500;600&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20260924-description-image">
+<link rel="stylesheet" href="/static/styles.css?v=20261116-studio-image">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -2312,17 +2312,21 @@ Analyse les sentiments de : ..."
              Quatre portes menaient aux images ; il n'en reste qu'une. -->
         <h4 style="margin:18px 0 8px;font-size:0.95rem;">Produire une image ou une vidéo</h4>
 <details id="studio-image-details" open style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
-            <summary style="font-weight:600;cursor:pointer;">🖼️ Image — format, résolution, modèle</summary>
+            <summary style="font-weight:600;cursor:pointer;">🖼️ Créer une image</summary>
             <p id="studio-image-note" style="font-size:0.8rem;color:var(--text-muted);margin:6px 0;"></p>
             <div class="setting-item">
-                <label for="studio-image-prompt">Décris l'image</label>
-                <textarea id="studio-image-prompt" rows="3"
+                <label for="studio-image-prompt" style="font-size:1rem;font-weight:600;">Décris l'image que tu veux</label>
+                <textarea id="studio-image-prompt" rows="4"
                     placeholder="Une bibliothèque ancienne baignée de lumière rasante, plans larges."
                     aria-label="Description de l'image à générer"
-                    style="width:100%;box-sizing:border-box;"></textarea>
+                    style="width:100%;box-sizing:border-box;font-size:1rem;"></textarea>
             </div>
+            <!-- Les réglages se touchent rarement : repliés, avec un résumé en une ligne
+                 (mis à jour par _stImgResume) pour savoir ce qui est choisi sans les ouvrir. -->
+            <details style="margin:8px 0;">
+                <summary id="studio-image-reglages-resume" style="cursor:pointer;font-size:0.85rem;color:var(--text-muted);">⚙️ Réglages : modèle, format, résolution — cliquer pour modifier</summary>
             <div class="setting-item">
-                <label for="studio-image-ref">Image de référence (optionnel)</label>
+                <label for="studio-image-ref">Image de référence (facultative — laisse vide pour créer de zéro)</label>
                 <input type="file" id="studio-image-ref" accept="image/*"
                     aria-label="Ajouter une image de référence pour guider la génération"
                     style="width:100%;box-sizing:border-box;">
@@ -2348,6 +2352,7 @@ Analyse les sentiments de : ..."
                     Décrire l'image après génération (texte alternatif accessible)
                 </label>
             </div>
+            </details>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
                 <button id="studio-image-btn" class="btn-primary" aria-label="Générer l'image">Générer l'image</button>
             </div>
@@ -2355,44 +2360,10 @@ Analyse les sentiments de : ..."
             <div id="studio-image-out" role="region" aria-label="Image générée" style="margin-top:8px;"></div>
         </details>
 
-        <!-- ── VIDÉO ── -->
-        <details id="studio-video-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-top:10px;">
-            <summary style="font-weight:600;cursor:pointer;">🎥 Vidéo — Veo</summary>
-            <p id="studio-video-note" style="font-size:0.8rem;color:var(--text-muted);margin:6px 0;"></p>
-            <div class="setting-item">
-                <label for="studio-video-prompt">Décris la vidéo</label>
-                <textarea id="studio-video-prompt" rows="3"
-                    placeholder="Plan aérien d'une côte rocheuse au lever du jour, les vagues éclatent sur les rochers."
-                    aria-label="Description de la vidéo à générer"
-                    style="width:100%;box-sizing:border-box;"></textarea>
-            </div>
-            <div class="setting-item">
-                <label for="studio-video-modele">Modèle</label>
-                <select id="studio-video-modele" aria-label="Modèle de génération vidéo" style="width:100%;box-sizing:border-box;"></select>
-                <div id="studio-video-aide" style="font-size:0.78rem;color:var(--text-muted);margin-top:4px;"></div>
-            </div>
-            <div class="setting-item">
-                <label for="studio-video-ratio">Format</label>
-                <select id="studio-video-ratio" aria-label="Format de la vidéo" style="width:100%;box-sizing:border-box;"></select>
-            </div>
-            <div class="setting-item">
-                <label for="studio-video-duree">Durée (secondes)</label>
-                <select id="studio-video-duree" aria-label="Durée de la vidéo" style="width:8rem;"></select>
-            </div>
-            <div class="setting-item">
-                <label for="studio-video-resolution">Résolution</label>
-                <select id="studio-video-resolution" aria-label="Résolution de la vidéo" style="width:8rem;"></select>
-            </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-                <button id="studio-video-btn" class="btn-primary" aria-label="Lancer la génération vidéo">Lancer la vidéo</button>
-                <button id="studio-video-refresh" class="btn-secondary" aria-label="Rafraîchir la bibliothèque vidéo">Rafraîchir la bibliothèque</button>
-            </div>
-            <div id="studio-video-status" role="status" aria-live="polite" style="font-size:0.85rem;margin-top:10px;min-height:1.2em;"></div>
-            <div id="studio-video-biblio" role="region" aria-label="Bibliothèque vidéo" style="margin-top:8px;max-height:40vh;overflow-y:auto;"></div>
-        </details>
         <!-- ── MANIPULER UNE IMAGE ──
-             Troisième volet du studio, à côté de « créer une image » et
-             « créer une vidéo ». Celui-ci part d'une image EXISTANTE.
+             Second volet du studio, juste après « créer une image » ; la vidéo
+             vient ensuite, parce que la retouche suit la création et que la
+             vidéo est l'usage rare. Celui-ci part d'une image EXISTANTE.
              L'ordre des champs suit l'ordre du travail : je choisis ma photo,
              je dis ce que je veux, NIMM m'annonce comment il va s'y prendre,
              je lance. -->
@@ -2408,6 +2379,8 @@ Analyse les sentiments de : ..."
             <p id="studio-retouche-fichier-aide" style="font-size:0.75rem;color:var(--text-muted);margin:0 0 10px;">
                 Une photo de ton ordinateur. 25 Mo au maximum.
             </p>
+            <!-- Rempli par « Retoucher cette image » (résultat d'une création) : dit d'où part la retouche. -->
+            <div id="studio-retouche-depart" style="margin:0 0 10px;"></div>
 
             <label for="studio-retouche-consigne" style="font-size:0.85rem;">Ce que tu veux changer</label>
             <textarea id="studio-retouche-consigne" rows="3"
@@ -2458,6 +2431,42 @@ Analyse les sentiments de : ..."
                              font-size:0.88rem;line-height:1.5;"></textarea>
 
             <div id="studio-retouche-out" role="region" aria-label="Image obtenue" style="margin-top:8px;"></div>
+        </details>
+
+        <!-- ── VIDÉO ── -->
+        <details id="studio-video-details" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-top:10px;">
+            <summary style="font-weight:600;cursor:pointer;">🎥 Vidéo — Veo</summary>
+            <p id="studio-video-note" style="font-size:0.8rem;color:var(--text-muted);margin:6px 0;"></p>
+            <div class="setting-item">
+                <label for="studio-video-prompt">Décris la vidéo</label>
+                <textarea id="studio-video-prompt" rows="3"
+                    placeholder="Plan aérien d'une côte rocheuse au lever du jour, les vagues éclatent sur les rochers."
+                    aria-label="Description de la vidéo à générer"
+                    style="width:100%;box-sizing:border-box;"></textarea>
+            </div>
+            <div class="setting-item">
+                <label for="studio-video-modele">Modèle</label>
+                <select id="studio-video-modele" aria-label="Modèle de génération vidéo" style="width:100%;box-sizing:border-box;"></select>
+                <div id="studio-video-aide" style="font-size:0.78rem;color:var(--text-muted);margin-top:4px;"></div>
+            </div>
+            <div class="setting-item">
+                <label for="studio-video-ratio">Format</label>
+                <select id="studio-video-ratio" aria-label="Format de la vidéo" style="width:100%;box-sizing:border-box;"></select>
+            </div>
+            <div class="setting-item">
+                <label for="studio-video-duree">Durée (secondes)</label>
+                <select id="studio-video-duree" aria-label="Durée de la vidéo" style="width:8rem;"></select>
+            </div>
+            <div class="setting-item">
+                <label for="studio-video-resolution">Résolution</label>
+                <select id="studio-video-resolution" aria-label="Résolution de la vidéo" style="width:8rem;"></select>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <button id="studio-video-btn" class="btn-primary" aria-label="Lancer la génération vidéo">Lancer la vidéo</button>
+                <button id="studio-video-refresh" class="btn-secondary" aria-label="Rafraîchir la bibliothèque vidéo">Rafraîchir la bibliothèque</button>
+            </div>
+            <div id="studio-video-status" role="status" aria-live="polite" style="font-size:0.85rem;margin-top:10px;min-height:1.2em;"></div>
+            <div id="studio-video-biblio" role="region" aria-label="Bibliothèque vidéo" style="margin-top:8px;max-height:40vh;overflow-y:auto;"></div>
         </details>
 
     </div>
@@ -2561,7 +2570,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20260925-maj-ytdlp"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20261116-studio-image"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>
