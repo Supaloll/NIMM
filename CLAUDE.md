@@ -8,6 +8,7 @@
 - Le dépôt GitHub est la seule source du code. Ne te fie pas aux fichiers d'un projet téléversé dans la conversation : ils sont périmés.
 - Laurent ne code pas : on parle en langage naturel ; tu produis des blocs FIND/REPLACE que Cline applique.
 - Tu ne peux pas pousser : Laurent pousse lui-même avec GitHub Desktop.
+- Avant de proposer quoi que ce soit, annonce en une phrase ce que tu lis : la date de version en tête de ce fichier et la dernière ligne du Changelog d'ARCHITECTURE.md. Si ce n'est pas la session en cours, arrête-toi et signale-le.
 
 ## Où lire le code
 
