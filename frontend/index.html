@@ -20,7 +20,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500;600&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20261121-live-anti-echo">
+<link rel="stylesheet" href="/static/styles.css?v=20261121-live-visage-css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -1189,15 +1189,19 @@ Analyse les sentiments de : ..."
         </div>
 
         <div class="setting-group">
-            <label for="live-set-visage"
-                   style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.9rem;">
-                <input type="checkbox" id="live-set-visage" checked
-                       style="margin-top:3px;flex:none;">
-                <span>🙂 Afficher le visage pendant la conversation</span>
-            </label>
-            <p style="font-size:0.78rem;color:var(--text-muted);margin:6px 0 0 26px;">
-                Un visage de pixels, purement décoratif. Il ne remplace jamais
-                l'état écrit ni la transcription, qui restent lisibles et copiables.
+            <label for="live-set-visage">🙂 Visage pendant la conversation</label>
+            <select id="live-set-visage" class="routing-select"
+                    aria-describedby="live-set-visage-aide"
+                    style="width:100%;margin-top:6px;">
+                <option value="pixel">Pixel — une tête à visière, en pixels</option>
+                <option value="hexa">Hexa — la même tête, en chiffres qui défilent</option>
+                <option value="non">Aucun visage</option>
+            </select>
+            <p id="live-set-visage-aide"
+               style="font-size:0.78rem;color:var(--text-muted);margin:6px 0 0;">
+                Purement décoratif : il ne remplace jamais l'état écrit ni la
+                transcription, qui restent lisibles et copiables. Réglage propre
+                à <strong>cet appareil</strong>.
             </p>
         </div>
 
@@ -2085,7 +2089,7 @@ Analyse les sentiments de : ..."
     <div class="modal-box live-box" role="dialog" aria-modal="true" aria-labelledby="live-panel-title">
 
         <div class="live-tete">
-            <canvas id="live-visage" class="live-visage" width="256" height="256"
+            <canvas id="live-visage" class="live-visage" width="512" height="512"
                     aria-hidden="true"></canvas>
             <div class="live-tete-texte">
                 <h3 id="live-panel-title" style="margin:0 0 6px;">🎙️ Conversation Live</h3>
@@ -2625,7 +2629,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20261121-live-anti-echo"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20261121-live-visage-hexa"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

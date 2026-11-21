@@ -4033,6 +4033,56 @@ def test_live_anti_echo():
     ok("anti-echo : VAD prudente, micro muet pendant que NIMM parle")
 
 
+def test_live_visage():
+    """Le visage du Live : deux styles, une bouche qui suit la VRAIE voix.
+
+    Trois garde-fous, chacun contre une régression silencieuse :
+    - le visage reste décoratif (aria-hidden) quel que soit le style ;
+    - la bouche lit le volume là où il existe déjà (l'analyseur de
+      l'anti-écho en Gemini), et en mode chaîne n'utilise JAMAIS
+      mozCaptureStream, qui coupe le son des haut-parleurs sous Firefox ;
+    - l'ancien réglage « oui » (case à cocher) reste compris : personne ne
+      perd son visage à la mise à jour.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    css = open(os.path.join(racine, 'frontend', 'styles.css'), encoding='utf-8').read()
+
+    # (1) Le réglage est une liste étiquetée, avec ses trois choix.
+    assert 'for="live-set-visage"' in html, 'le choix du visage doit avoir une étiquette'
+    seg = html[html.index('id="live-set-visage"'):][:900]
+    assert '<select' in html[html.index('id="live-set-visage"') - 60:html.index('id="live-set-visage"')]
+    for valeur in ('pixel', 'hexa', 'non'):
+        assert 'value="%s"' % valeur in seg, 'style de visage manquant : %s' % valeur
+
+    # (2) Toujours décoratif, et dessiné en 512 pour rester net en caractères.
+    canvas = html[html.index('id="live-visage"'):][:200]
+    assert 'aria-hidden="true"' in canvas
+    assert 'width="512"' in canvas and 'height="512"' in canvas
+
+    # (3) L'ancien « oui » devient Pixel ; « non » reste non.
+    style = js[js.index('function _liveVisageStyle'):][:600]
+    assert "LIVE_VISAGE_STYLES.includes(v) ? v : 'pixel'" in style
+    assert "if (v === 'non') return 'non';" in style
+
+    # (4) La bouche suit la voix : l'analyseur de l'anti-écho en Gemini, la
+    #     voix TTS captée en mode chaîne — sans jamais couper le son.
+    volume = js[js.index('function _liveVisageVolume'):][:500]
+    assert '_liveSortieAnalyse' in volume and '_liveVisageAnalyseTTS' in volume
+    assert '_liveVisageCapterTTS(_liveAudioTTS);' in js
+    assert 'mozCaptureStream(' not in js, \
+        'mozCaptureStream retire le son des haut-parleurs sous Firefox : interdit'
+
+    # (5) Le thème est lu sous son VRAI nom (dataset.theme vaut light ou cpc).
+    assert "document.documentElement.dataset.theme === 'cpc'" in js
+
+    # (6) L'à-coup est voulu, et l'Hexa n'est pas crénelé une fois réduit.
+    assert 'LIVE_VISAGE_PAS' in js and '_liveVisageAccu >= LIVE_VISAGE_PAS' in js
+    assert '.live-visage.style-hexa { image-rendering: auto; }' in css
+    ok("visage Live : Pixel et Hexa, bouche sur la vraie voix, ancien réglage compris")
+
+
 def test_retouche_aiguillage():
     """Découper ou redessiner : ce n'est pas le même travail, ni la même confiance.
 
@@ -6406,7 +6456,7 @@ if __name__ == '__main__':
                test_live_confidentialite, test_live_contrat_interface_serveur,
                test_masque_illisible_ne_bloque_pas, test_tout_est_utf8,
                test_outils_tous_atteignables, test_outils_en_live,
-               test_outils_en_live_cables, test_live_anti_echo,
+               test_outils_en_live_cables, test_live_anti_echo, test_live_visage,
                test_retouche_aiguillage, test_retouche_operations_locales,
                test_retouche_cablee_et_honnete,
                test_focus_suit_l_ouverture,

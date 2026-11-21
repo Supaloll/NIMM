@@ -3570,8 +3570,8 @@ body {
 
 .live-visage {
     flex: none;
-    width: 176px;
-    height: 176px;
+    width: 200px;
+    height: 200px;
     image-rendering: pixelated;
     background: radial-gradient(circle at 50% 42%,
                 rgba(127, 216, 176, 0.10), transparent 68%),
@@ -3589,6 +3589,10 @@ body {
 .live-visage.etat-erreur     { border-color: var(--danger); }
 .live-visage.etat-sourd      { border-color: var(--text-muted); }
 
+/* Hexa : des caractères, pas des pixels. Le lissage les garde lisibles une
+   fois le canvas réduit ; l'agrandissement « pixelated » les rendrait crénelés. */
+.live-visage.style-hexa { image-rendering: auto; }
+
 [data-theme="cpc"] .live-visage {
     background: #000000;
     border-color: #ffff00;
@@ -3604,9 +3608,11 @@ body {
         flex-direction: column;
         text-align: center;
     }
+    /* Sur téléphone, le visage passe au-dessus du texte : il a la place
+       d'être grand, et le style Hexa redevient lisible. */
     .live-visage {
-        width: 132px;
-        height: 132px;
+        width: min(64vw, 240px);
+        height: min(64vw, 240px);
     }
 }
 

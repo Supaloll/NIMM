@@ -14883,37 +14883,111 @@ function _liveFiltrerMicro(f32) {
 // exprime est aussi écrit dans #live-etat, qui est annoncé. Qui n'a pas envie
 // de le voir le coupe dans ⚙️ Paramètres → Conversation Live.
 //
-// CE QUE CE LOT NE FAIT PAS ENCORE
-// La bouche s'anime au rythme de la parole, mais pas encore sur le VOLUME réel
-// du son : c'est le lot suivant (lip-synch par analyse de la sortie audio). Le
-// visage ne prétend donc pas synchroniser les lèvres.
+// DEUX STYLES, UNE SEULE TÊTE
+// « Pixel » : une tête mi-esprit mi-machine — ailettes, visière à balayage,
+// modules audio sur les côtés, voyant frontal, bouche-égaliseur. L'ombrage
+// est TRAMÉ (matrice de Bayer 4x4) sur quatre tons, le contour est clair du
+// côté de la lumière et sombre de l'autre : c'est ce qui sort la tête de
+// l'aspect « pâte à modeler ».
+// « Hexa » : la MÊME tête, convertie en chiffres hexadécimaux qui changent
+// sans arrêt ; seule la couleur dessine le volume. Les deux styles lisent la
+// même grille de base, calculée une seule fois.
+//
+// LA BOUCHE SUIT LA VRAIE VOIX
+// Gemini Live : la voix passe déjà par l'analyseur de l'anti-écho
+// (_liveSortieAnalyse) ; on lit son volume, rien de plus. Mode chaîne : la
+// voix TTS est captée à part (captureStream) là où le navigateur sait le
+// faire SANS couper le son — Chrome, Edge. Firefox n'a que mozCaptureStream,
+// qui retire le son des haut-parleurs : on ne l'utilise pas. Là où la
+// capture manque, la bouche garde un rythme simulé — c'est un décor, pas une
+// promesse.
+//
+// L'À-COUP EST VOULU
+// Une image toutes les 90 ms (environ 11 par seconde), pas 60 : c'est ce qui
+// donne l'allure rétro, et le téléphone économise sa batterie.
+//
+// LES THÈMES
+// La tête porte ses propres couleurs, lisibles sur fond sombre comme clair.
+// Le thème Amstrad a la sienne : quatre encres, comme le vrai CPC en mode 1,
+// et en Hexa la police VT323, « Ready » en en-tête et le préfixe & du BASIC.
 
-const LIVE_VISAGE_GRILLE   = 32;   // cellules de la grille logique
-const LIVE_VISAGE_CELLULE  = 8;    // pixels par cellule (32 x 8 = 256)
+const LIVE_VISAGE_GRILLE  = 32;   // cellules de la grille logique
+const LIVE_VISAGE_CELLULE = 16;   // pixels par cellule (32 x 16 = 512) : net en pixels comme en caractères
+const LIVE_VISAGE_PAS     = 90;   // ms entre deux images : l'à-coup rétro
+const LIVE_VISAGE_STYLES  = ['pixel', 'hexa'];
+
+const _LIVE_BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+const _LIVE_HEX = '0123456789ABCDEF';
+const _LIVE_PROFIL_BOUCHE = [0.4, 0.7, 1, 0.9, 1, 0.8, 0.6, 0.35];   // les 8 barres
 
 const _LIVE_PALETTES = {
-    sombre: { contour: '#245a45', peau: '#7fd8b0', clair: '#a9efcc',
-              creux: '#3f8f6b', trait: '#0d1a15' },
-    clair:  { contour: '#2f6d52', peau: '#4e9e78', clair: '#79c9a0',
-              creux: '#2f6d52', trait: '#f5f0eb' },
-    cpc:    { contour: '#ffff00', peau: '#ffff00', clair: '#ffff00',
-              creux: '#a8a800', trait: '#000000' },
+    standard: {
+        tons: ['#34434a', '#56696f', '#869ca3', '#c6d6da'],
+        contourLumiere: '#5a6c73', contourOmbre: '#0f1518',
+        visiere: ['#0c1a19', '#071111'],          // ligne paire, ligne impaire
+        biseauOmbre: '#192125', biseauLumiere: '#a9bcc2',
+        panneau: '#263136', grille: '#192125', socle: '#0f1518',
+        phosphore: ['#9affdc', '#4fd6a8'], phosphoreTerne: '#2f8f70',
+        temoinEteint: '#1f4a3e',
+        ambre: ['#ffb347', '#8a5a1e'], rouge: '#ff5a4a',
+        ombre: 'rgba(0, 0, 0, 0.35)',
+        hexa: { fond: '#0d0b08', tons: ['#7a4a14', '#b8701c', '#f0a030', '#ffd890'],
+                contour: '#5a3a12', vif: '#fff2d6', terne: '#6a4616',
+                cyan: '#8fe8ff', rouge: '#ff6b5a',
+                police: 'Consolas, Menlo, "DejaVu Sans Mono", monospace',
+                prefixe: '0x', entete: '0x4E494D4D :: flux vocal' },
+    },
+    // Amstrad CPC, mode 1 : quatre encres à l'écran, pas une de plus — noir,
+    // bleu, jaune, cyan. Le tramage fait le reste, comme en 1984.
+    cpc: {
+        tons: ['#000080', '#000080', '#ffff00', '#ffff00'],
+        contourLumiere: '#ffff00', contourOmbre: '#000080',
+        visiere: ['#000000', '#000000'],
+        biseauOmbre: '#000000', biseauLumiere: '#ffff00',
+        panneau: '#000080', grille: '#000000', socle: '#000000',
+        phosphore: ['#00ffff', '#00ffff'], phosphoreTerne: '#000080',
+        temoinEteint: '#000080',
+        ambre: ['#ffff00', '#000080'], rouge: '#ffff00',
+        ombre: 'rgba(0, 0, 0, 0)',
+        hexa: { fond: '#000000', tons: ['#808000', '#808000', '#ffff00', '#ffff80'],
+                contour: '#000080', vif: '#ffffff', terne: '#808000',
+                cyan: '#00ffff', rouge: '#ff8080',
+                police: '"VT323", monospace',
+                prefixe: '&', entete: 'Ready' },
+    },
 };
 
-let _liveVisageCtx           = null;
-let _liveVisageEtat          = 'veille';
-let _liveVisageAnim          = 0;
-let _liveVisageActif         = false;
-let _liveVisageDernier       = 0;
-let _liveVisageTemps         = 0;
-let _liveVisageCligne        = 0;
-let _liveVisageProchainOeil  = 2200;
-let _liveVisageBouche        = 0;
-let _liveVisageProchainBouche = 0;
+let _liveVisageCtx            = null;
+let _liveVisageEtat           = 'veille';
+let _liveVisageAnim           = 0;
+let _liveVisageActif          = false;
+let _liveVisageDernier        = 0;
+let _liveVisageAccu           = 0;
+let _liveVisageTemps          = 0;
+let _liveVisageImage          = 0;
+let _liveVisageCligne         = 0;
+let _liveVisageProchainOeil   = 2200;
+let _liveVisageRegard         = 0;     // -1, 0, 1 : les yeux glissent d'un pixel
+let _liveVisageProchainRegard = 1500;
+let _liveVisageOuverture      = 0;     // 0 à 1 : la voix, lissée
+let _liveVisageBarres         = [0, 0, 0, 0, 0, 0, 0, 0];
+let _liveVisageAnalyseTTS     = null;  // mode chaîne : la voix TTS captée
+let _liveVisageBase           = null;  // la grille de base, calculée une fois
+let _liveVisageHexa = Array.from({ length: 32 * 16 },
+                                 () => _LIVE_HEX[Math.floor(Math.random() * 16)]);
+
+/** Le style choisi sur CET appareil : 'pixel', 'hexa' ou 'non'. */
+function _liveVisageStyle() {
+    try {
+        const v = localStorage.getItem('nimm-live-visage');
+        if (v === 'non') return 'non';
+        // « oui », l'ancienne case à cocher, devient le style Pixel.
+        return LIVE_VISAGE_STYLES.includes(v) ? v : 'pixel';
+    } catch (e) { return 'pixel'; }
+}
 
 function _liveVisageVisible() {
-    try { return localStorage.getItem('nimm-live-visage') !== 'non'; }
-    catch (e) { return true; }
+    return _liveVisageStyle() !== 'non';
 }
 
 function _liveMouvementReduit() {
@@ -14921,20 +14995,32 @@ function _liveMouvementReduit() {
     catch (e) { return false; }
 }
 
+/** Thème sombre (pas d'attribut), clair ('light') ou Amstrad ('cpc'). */
+function _liveVisagePalette() {
+    return document.documentElement.dataset.theme === 'cpc'
+        ? _LIVE_PALETTES.cpc : _LIVE_PALETTES.standard;
+}
+
 function _liveVisageDemarrer(etat) {
     const cv = document.getElementById('live-visage');
     if (!cv) return;
+    const taille = LIVE_VISAGE_GRILLE * LIVE_VISAGE_CELLULE;
+    if (cv.width !== taille) { cv.width = taille; cv.height = taille; }
     if (!_liveVisageCtx) {
         try { _liveVisageCtx = cv.getContext('2d'); } catch (e) { _liveVisageCtx = null; }
     }
     if (_liveVisageAnim) { cancelAnimationFrame(_liveVisageAnim); _liveVisageAnim = 0; }
     _liveVisageActif = true;
     _liveVisageDernier = 0;
+    _liveVisageAccu = 0;
     _liveVisageTemps = 0;
+    _liveVisageImage = 0;
     _liveVisageCligne = 0;
     _liveVisageProchainOeil = 1800;
-    _liveVisageBouche = 0;
-    _liveVisageProchainBouche = 0;
+    _liveVisageRegard = 0;
+    _liveVisageProchainRegard = 1500;
+    _liveVisageOuverture = 0;
+    _liveVisageBarres = [0, 0, 0, 0, 0, 0, 0, 0];
     _liveVisage(etat || 'veille');
     // _liveVisage lance la boucle si elle doit tourner (visage visible et
     // animations autorisées) ; sinon on dessine une seule image figée.
@@ -14943,19 +15029,20 @@ function _liveVisageDemarrer(etat) {
 
 function _liveVisageArreter() {
     _liveVisageActif = false;
+    _liveVisageAnalyseTTS = null;
     if (_liveVisageAnim) { cancelAnimationFrame(_liveVisageAnim); _liveVisageAnim = 0; }
 }
 
 function _liveVisage(etat) {
     etat = etat || 'veille';
-    // L'événement « audio » arrive plusieurs fois par seconde : on ne touche au
-    // DOM que si l'état change vraiment.
-    const change = etat !== _liveVisageEtat;
     _liveVisageEtat = etat;
     const cv = document.getElementById('live-visage');
     if (cv) {
         cv.hidden = !_liveVisageVisible();
-        if (change) cv.className = 'live-visage etat-' + etat;
+        // L'événement « audio » arrive plusieurs fois par seconde : on ne
+        // touche au DOM que si la classe change vraiment (état ou style).
+        const classe = 'live-visage etat-' + etat + ' style-' + _liveVisageStyle();
+        if (cv.className !== classe) cv.className = classe;
     }
     if (!_liveVisageActif) return;
     if (_liveMouvementReduit()) {
@@ -14971,15 +15058,30 @@ function _liveVisage(etat) {
 
 function _liveVisageAnimer(ts) {
     if (!_liveVisageActif) return;
-    const dt = _liveVisageDernier ? Math.min(120, ts - _liveVisageDernier) : 16;
+    const dt = _liveVisageDernier ? Math.min(250, ts - _liveVisageDernier) : 16;
     _liveVisageDernier = ts;
+    _liveVisageAccu += dt;
+    if (_liveVisageAccu >= LIVE_VISAGE_PAS) {
+        const pas = _liveVisageAccu;
+        _liveVisageAccu = 0;
+        _liveVisageAvancer(pas);
+        _liveVisageDessiner();
+    }
+    _liveVisageAnim = requestAnimationFrame(_liveVisageAnimer);
+}
+
+/** Fait avancer le visage d'une image : yeux, regard, bouche, chiffres. */
+function _liveVisageAvancer(dt) {
     _liveVisageTemps += dt;
+    _liveVisageImage++;
+    const etat = _liveVisageEtat;
 
     // Clignement : seulement au repos ou à l'écoute. Un visage qui cligne
     // pendant qu'il parle a l'air de cligner des yeux sans raison.
-    if (_liveVisageEtat === 'veille' || _liveVisageEtat === 'ecoute') {
+    // 240 ms : une image fermée, une image mi-close, puis rouvert.
+    if (etat === 'veille' || etat === 'ecoute') {
         if (_liveVisageTemps > _liveVisageProchainOeil) {
-            _liveVisageCligne = 150;
+            _liveVisageCligne = 240;
             _liveVisageProchainOeil = _liveVisageTemps + 2200 + Math.random() * 3600;
         }
         if (_liveVisageCligne > 0) _liveVisageCligne -= dt;
@@ -14987,19 +15089,178 @@ function _liveVisageAnimer(ts) {
         _liveVisageCligne = 0;
     }
 
-    // Bouche : tant que NIMM parle, une forme change toutes les 90 à 180 ms.
-    // Provisoire — le lot 2 la synchronisera sur le volume réel du son.
-    if (_liveVisageEtat === 'parle') {
-        if (_liveVisageTemps > _liveVisageProchainBouche) {
-            _liveVisageBouche = Math.random() < 0.15 ? 0 : 1 + Math.floor(Math.random() * 4);
-            _liveVisageProchainBouche = _liveVisageTemps + 90 + Math.random() * 90;
+    // Le regard glisse d'un pixel de temps en temps ; en parlant, il revient
+    // plus souvent au centre — on regarde son interlocuteur.
+    if (etat === 'veille' || etat === 'ecoute' || etat === 'parle') {
+        if (_liveVisageTemps > _liveVisageProchainRegard) {
+            const r = Math.random();
+            _liveVisageRegard = etat === 'parle'
+                ? (r < 0.7 ? 0 : r < 0.85 ? -1 : 1)
+                : (r < 0.4 ? 0 : r < 0.7 ? -1 : 1);
+            _liveVisageProchainRegard = _liveVisageTemps + 1000 + Math.random() * 2500;
         }
     } else {
-        _liveVisageBouche = 0;
+        _liveVisageRegard = 0;
     }
 
-    _liveVisageDessiner();
-    _liveVisageAnim = requestAnimationFrame(_liveVisageAnimer);
+    // La bouche : le volume réel quand on l'a, un rythme simulé sinon.
+    if (etat === 'parle') {
+        const vol = _liveVisageVolume();
+        if (vol >= 0) {
+            // Attaque franche, relâchement plus doux : une bouche qui claque
+            // fermée entre deux syllabes a l'air de bégayer.
+            _liveVisageOuverture = vol > _liveVisageOuverture
+                ? vol : _liveVisageOuverture * 0.5 + vol * 0.5;
+        } else if (Math.random() < 0.6) {
+            _liveVisageOuverture = Math.random() < 0.15 ? 0 : 0.25 + Math.random() * 0.75;
+        }
+    } else {
+        _liveVisageOuverture = 0;
+    }
+    const a = _liveVisageOuverture;
+    _liveVisageBarres = _LIVE_PROFIL_BOUCHE.map((p, i) => {
+        const h = Math.round(Math.max(0, Math.min(2, a * p * 2.3 + (Math.random() - 0.5) * 0.8 * a)));
+        return (i === 0 || i === 7) ? Math.min(h, 1) : h;
+    });
+
+    // Hexa : une partie des chiffres change à chaque image, beaucoup plus
+    // pendant la connexion.
+    const taux = etat === 'connexion' ? 0.5 : 0.15;
+    for (let i = 0; i < _liveVisageHexa.length; i++) {
+        if (Math.random() < taux) _liveVisageHexa[i] = _LIVE_HEX[Math.floor(Math.random() * 16)];
+    }
+}
+
+/** Volume d'un analyseur (RMS). */
+function _liveVisageNiveau(analyseur) {
+    const buf = new Uint8Array(analyseur.fftSize);
+    analyseur.getByteTimeDomainData(buf);
+    let somme = 0;
+    for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        somme += v * v;
+    }
+    return Math.sqrt(somme / buf.length);
+}
+
+/** Ouverture de la bouche selon la voix, de 0 à 1 ; -1 si on ne l'entend pas. */
+function _liveVisageVolume() {
+    const an = _liveMoteur === 'gemini' ? _liveSortieAnalyse : _liveVisageAnalyseTTS;
+    if (!an) return -1;
+    let niveau;
+    try { niveau = _liveVisageNiveau(an); } catch (e) { return -1; }
+    return Math.max(0, Math.min(1, (niveau - 0.008) * 7));
+}
+
+/**
+ * Mode chaîne : branche un analyseur sur la voix TTS, sans toucher au son.
+ * Le flux capturé n'a de piste audio qu'une fois la lecture lancée, d'où
+ * l'attente de « playing ». L'analyseur n'est relié à rien d'autre : il
+ * écoute, il ne joue pas, et il ne passe jamais par le micro.
+ */
+function _liveVisageCapterTTS(audio) {
+    _liveVisageAnalyseTTS = null;
+    const ctx = _liveMicCtx;
+    if (!audio || !ctx || typeof audio.captureStream !== 'function') return;
+    audio.addEventListener('playing', () => {
+        try {
+            const an = ctx.createAnalyser();
+            an.fftSize = 256;
+            ctx.createMediaStreamSource(audio.captureStream()).connect(an);
+            _liveVisageAnalyseTTS = an;
+        } catch (e) { _liveVisageAnalyseTTS = null; }
+    }, { once: true });
+}
+
+/**
+ * La grille de base : ce que vaut chaque cellule de la tête, sans couleur.
+ * Un nombre de 0 à 3 = un ton d'ombrage ; une lettre = une pièce (contour,
+ * visière, fente de la bouche, biseau, panneau, socle du voyant, grille).
+ */
+function _liveVisageConstruire() {
+    if (_liveVisageBase) return _liveVisageBase;
+    const N = LIVE_VISAGE_GRILLE;
+    const CX = 16, CY = 16, RX = 10.5, RY = 12;
+    const tete = (px, py) => {
+        const dy = (py - CY) / RY;
+        const rx = RX * (dy > 0 ? 1 - 0.38 * Math.pow(dy, 1.5) : 1);   // menton
+        const dx = (px - CX) / rx;
+        return Math.pow(Math.abs(dx), 3) + Math.pow(Math.abs(dy), 3) <= 1;
+    };
+    const ailette = (px, py) => {
+        for (const s of [-1, 1]) {
+            const ex = CX + s * (9.5 - (py - 2) * 0.35);
+            if (py >= 2 && py <= 9 && Math.abs(px - ex) <= (py - 2) * 0.42) return true;
+        }
+        return false;
+    };
+    const module = (x, y) => (x >= 3 && x <= 5 || x >= 26 && x <= 28) && y >= 14 && y <= 20
+        && !((x === 3 || x === 28) && (y === 14 || y === 20));
+    const dedans = (x, y) => x >= 0 && y >= 0 && x < N && y < N
+        && (tete(x + .5, y + .5) || ailette(x + .5, y + .5) || module(x, y));
+    const visiere = (x, y) => {
+        if (y < 12 || y > 17) return false;
+        const a = y <= 15 ? 8 : y === 16 ? 9 : 10;
+        return x >= a && x <= 31 - a;
+    };
+    const fente = (x, y) => {
+        if (y < 20 || y > 24) return false;
+        const a = (y === 20 || y === 24) ? 13 : 12;
+        return x >= a && x <= 31 - a;
+    };
+    const creux = (x, y) => visiere(x, y) || fente(x, y);
+    const panneaux = new Set(['8,19', '9,19', '9,20', '23,19', '22,19', '22,20']);
+    // Ombrage : une sphère éclairée d'en haut à gauche, tramée sur 4 tons.
+    const ton = (x, y) => {
+        const dx = (x + .5 - CX) / RX, dy = (y + .5 - CY) / RY;
+        const nz = Math.sqrt(1 - Math.min(dx * dx + dy * dy, 1));
+        const v = Math.max(0, Math.min(1, (-0.5 * dx - 0.55 * dy + 0.67 * nz + 0.35) / 1.25));
+        const trame = _LIVE_BAYER[y & 3][x & 3] / 16 - 0.5;
+        return Math.max(0, Math.min(3, Math.floor(v * 3.6 + trame * 0.95 + 0.1)));
+    };
+
+    const base = new Array(N * N).fill(null);
+    for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+            if (!dedans(x, y)) continue;
+            let k;
+            if (!dedans(x, y - 1) || !dedans(x - 1, y))      k = 'cl';   // contour, côté lumière
+            else if (!dedans(x, y + 1) || !dedans(x + 1, y)) k = 'co';   // contour, côté ombre
+            else if (visiere(x, y))                          k = 'v';
+            else if (fente(x, y))                            k = 'f';
+            else if (creux(x, y + 1) || creux(x + 1, y))     k = 'bo';   // biseau dans l'ombre
+            else if (creux(x, y - 1) || creux(x - 1, y))     k = 'bl';   // biseau dans la lumière
+            else if (panneaux.has(x + ',' + y))              k = 'p';
+            else if (y === 9 && x >= 14 && x <= 17)          k = 's';    // socle du voyant
+            else if (module(x, y) && !tete(x + .5, y + .5)) {
+                if ((x === 4 || x === 27) && y % 2 === 0) k = 'g';
+                else {
+                    const b = _LIVE_BAYER[y & 3][x & 3];
+                    k = Math.max(0, Math.min(3,
+                        (y === 15 ? 2 : y === 19 ? 0 : 1) + (b > 12 ? 1 : 0) - (b < 2 ? 1 : 0)));
+                }
+            }
+            else k = ton(x, y);
+            base[y * N + x] = k;
+        }
+    }
+    _liveVisageBase = base;
+    return base;
+}
+
+function _liveVisageCouleur(k, y, pal) {
+    if (typeof k === 'number') return pal.tons[k];
+    switch (k) {
+        case 'cl': return pal.contourLumiere;
+        case 'co': return pal.contourOmbre;
+        case 'v': case 'f': return pal.visiere[y & 1];
+        case 'bo': return pal.biseauOmbre;
+        case 'bl': return pal.biseauLumiere;
+        case 'p':  return pal.panneau;
+        case 's':  return pal.socle;
+        case 'g':  return pal.grille;
+    }
+    return null;
 }
 
 function _liveVisageDessiner() {
@@ -15009,68 +15270,186 @@ function _liveVisageDessiner() {
         try { _liveVisageCtx = cv.getContext('2d'); } catch (e) { return; }
     }
     const ctx = _liveVisageCtx;
-    const P = LIVE_VISAGE_CELLULE, N = LIVE_VISAGE_GRILLE;
-    const theme = document.documentElement.getAttribute('data-theme') || 'sombre';
-    const pal = _LIVE_PALETTES[theme] || _LIVE_PALETTES.sombre;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const pal = _liveVisagePalette();
+    if (_liveVisageStyle() === 'hexa') _liveVisageDessinerHexa(ctx, pal);
+    else _liveVisageDessinerPixel(ctx, pal);
+}
 
-    ctx.clearRect(0, 0, N * P, N * P);
-    const px = (x, y, c) => { ctx.fillStyle = c; ctx.fillRect(x * P, y * P, P, P); };
-    const rect = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(x * P, y * P, w * P, h * P); };
+function _liveVisageDessinerPixel(ctx, pal) {
+    const N = LIVE_VISAGE_GRILLE, P = LIVE_VISAGE_CELLULE;
+    const base = _liveVisageConstruire();
+    const etat = _liveVisageEtat;
+    const px = (x, y, c) => {
+        if (c && x >= 0 && y >= 0 && x < N && y < N) { ctx.fillStyle = c; ctx.fillRect(x * P, y * P, P, P); }
+    };
+    // La respiration : la tête monte d'un pixel, puis redescend.
+    const o = (etat !== 'fini' && etat !== 'erreur'
+               && Math.floor(_liveVisageTemps / 900) % 2) ? -1 : 0;
+    const lent = Math.floor(_liveVisageTemps / 450) % 2;
+    const vite = Math.floor(_liveVisageTemps / 180) % 2;
+    const ph = y => pal.phosphore[y & 1];   // lignes de balayage : une sur deux plus terne
 
-    // La tête : un carré aux coins coupés en escalier, à la manière du pixel
-    // art. Ni cheveux, ni barbe, ni accessoire : ni homme ni femme.
-    const HAUT = 4, BAS = 27, GAUCHE = 6, DROITE = 25;
-    const COINS = [3, 2, 1, 1];   // retrait de chaque côté, ligne par ligne
-    for (let y = HAUT; y <= BAS; y++) {
-        const retrait = COINS[Math.min(y - HAUT, BAS - y)] || 0;
-        const x0 = GAUCHE + retrait, x1 = DROITE - retrait;
-        for (let x = x0; x <= x1; x++) {
-            const bord = (x === x0 || x === x1 || y === HAUT || y === BAS);
-            px(x, y, bord ? pal.contour : (y < 14 ? pal.clair : pal.peau));
-        }
+    // L'ombre au sol, plus étroite quand la tête monte.
+    const l = o ? 5 : 6;
+    for (let x = 16 - l; x < 16 + l; x++) px(x, 30, pal.ombre);
+    for (let x = 18 - l; x < 14 + l; x++) px(x, 29, pal.ombre);
+
+    for (let i = 0; i < N * N; i++) {
+        const k = base[i];
+        if (k === null) continue;
+        const y = Math.floor(i / N);
+        px(i % N, y + o, _liveVisageCouleur(k, y, pal));
     }
 
-    // Le nez : deux narines, justes au-dessus de la bouche.
-    px(15, 18, pal.creux);
-    px(16, 18, pal.creux);
+    // Le voyant frontal : ambre à l'écoute, cyan quand NIMM parle.
+    let voyant = null;
+    if (etat === 'parle')                                 voyant = pal.phosphore[_liveVisageOuverture > 0.5 ? 0 : 1];
+    else if (etat === 'ecoute' || etat === 'veille')      voyant = pal.ambre[lent];
+    else if (etat === 'connexion' || etat === 'reflexion') voyant = pal.ambre[vite];
+    else if (etat === 'erreur')                           voyant = vite ? pal.rouge : pal.socle;
+    if (voyant) { px(15, 9 + o, voyant); px(16, 9 + o, voyant); }
 
-    // Les yeux : positions fixes, forme selon l'état.
-    const yeuxFermes = _liveVisageCligne > 0
-        || _liveVisageEtat === 'fini'
-        || _liveVisageEtat === 'erreur'
-        || _liveVisageEtat === 'sourd';
-    const hauteurOeil = (yeuxFermes || _liveVisageEtat === 'reflexion') ? 1 : 2;
-    for (const ox of [9, 20]) {
-        rect(ox, 13, 3, hauteurOeil, pal.trait);
-        if (!yeuxFermes && hauteurOeil > 1) {
-            px(ox + 2, 13, pal.clair);   // un reflet, pas une pupille fixe
-        }
-    }
-
-    // La bouche : un état, une forme.
-    const mx = 13, my = 21, mw = 6;
-    if (_liveVisageEtat === 'parle' && _liveVisageBouche > 0) {
-        rect(mx, my, mw, _liveVisageBouche, pal.trait);
-    } else if (_liveVisageEtat === 'reflexion') {
-        rect(mx + 1, my, mw - 2, 1, pal.trait);
-    } else if (_liveVisageEtat === 'ecoute') {
-        rect(mx + 1, my, 4, 1, pal.trait);
-        px(mx, my - 1, pal.trait);
-        px(mx + 5, my - 1, pal.trait);
-    } else if (_liveVisageEtat === 'fini' || _liveVisageEtat === 'erreur') {
-        rect(mx + 1, my, mw - 2, 1, pal.trait);
+    // Les yeux, dans la visière.
+    if (etat === 'connexion') {
+        // Une ligne de balayage descend la visière, les yeux pas encore là.
+        const y = 12 + Math.floor(_liveVisageTemps / 90) % 6;
+        const a = y <= 15 ? 8 : y === 16 ? 9 : 10;
+        for (let x = a; x <= 31 - a; x++) px(x, y + o, pal.phosphoreTerne);
     } else {
-        // Le sourire de veille : une ligne, deux coins relevés.
-        rect(mx + 1, my, mw - 2, 1, pal.trait);
-        px(mx, my - 1, pal.trait);
-        px(mx + mw - 1, my - 1, pal.trait);
+        for (const x0 of [10, 19]) {
+            if (etat === 'erreur') {
+                for (const [dx, dy] of [[0, 0], [2, 0], [1, 1], [0, 2], [2, 2]]) {
+                    px(x0 + dx, 13 + dy + o, pal.rouge);
+                }
+                continue;
+            }
+            const x = x0 + _liveVisageRegard;
+            const ferme = _liveVisageCligne > 90 || etat === 'fini';
+            const mi = !ferme && (_liveVisageCligne > 0 || etat === 'reflexion');
+            if (ferme) {
+                for (let i = 0; i < 3; i++) px(x + i, 15 + o, pal.phosphoreTerne);
+                continue;
+            }
+            for (const y of (mi ? [15] : [14, 15])) {
+                for (let i = 0; i < 3; i++) px(x + i, y + o, etat === 'sourd' ? pal.phosphoreTerne : ph(y));
+            }
+        }
     }
 
-    // Trois points de réflexion, détachés à droite comme une bulle de pensée.
-    if (_liveVisageEtat === 'reflexion') {
-        const phase = Math.floor(_liveVisageTemps / 260) % 3;
-        for (let i = 0; i < 3; i++) {
-            px(27 + i, 8, i <= phase ? pal.clair : pal.creux);
+    // Réflexion : trois points qui s'allument l'un après l'autre.
+    if (etat === 'reflexion') {
+        const phase = Math.floor(_liveVisageTemps / 270) % 3;
+        for (let i = 0; i < 3; i++) px(13 + 2 * i, 13 + o, i <= phase ? ph(13) : pal.phosphoreTerne);
+    }
+
+    // La bouche-égaliseur, dans sa fente.
+    for (let i = 0; i < 8; i++) {
+        const x = 12 + i, h = _liveVisageBarres[i];
+        if (h === 0) {
+            if (x > 12 && x < 19) px(x, 22 + o, etat === 'erreur' ? pal.rouge : pal.phosphoreTerne);
+        } else {
+            for (let y = 22 - h; y <= 22 + h; y++) px(x, y + o, ph(y));
+        }
+    }
+
+    // Les témoins des modules : allumés quand la voix porte, éteints micro coupé.
+    const temoin = (etat === 'parle' && _liveVisageOuverture > 0.3) ? pal.phosphore[0]
+                 : etat === 'sourd' ? pal.grille : pal.temoinEteint;
+    px(4, 17 + o, temoin);
+    px(27, 17 + o, temoin);
+}
+
+function _liveVisageDessinerHexa(ctx, pal) {
+    const N = LIVE_VISAGE_GRILLE, P = LIVE_VISAGE_CELLULE, H = pal.hexa;
+    const base = _liveVisageConstruire();
+    const etat = _liveVisageEtat;
+    const L = N / 2;   // 16 lignes de caractères, chacune couvre deux lignes de pixels
+    const lent = Math.floor(_liveVisageTemps / 450) % 2;
+    const vite = Math.floor(_liveVisageTemps / 180) % 2;
+
+    ctx.fillStyle = H.fond;
+    ctx.fillRect(0, 0, N * P, N * P);
+
+    // g[ligne][colonne] = [caractère, couleur], ou null pour un trou noir.
+    const g = [];
+    for (let l = 0; l < L; l++) {
+        const ligne = [];
+        for (let c = 0; c < N; c++) {
+            const ks = [base[2 * l * N + c], base[(2 * l + 1) * N + c]];
+            const tons = ks.filter(k => typeof k === 'number');
+            let cel = null;
+            if (ks.includes('v') || ks.includes('f')) cel = null;   // visière et bouche : le noir
+            else if (tons.length) {
+                const moy = tons.reduce((s, k) => s + k, 0) / tons.length;
+                cel = [_liveVisageHexa[l * N + c], H.tons[Math.round(moy)]];
+            }
+            else if (ks.includes('g')) cel = ['H', H.terne];
+            else if (ks.some(k => k === 'bo' || k === 'bl' || k === 'p' || k === 's')) cel = ['.', H.terne];
+            else if (ks.some(k => k === 'cl' || k === 'co')) cel = [_liveVisageHexa[l * N + c], H.contour];
+            ligne.push(cel);
+        }
+        g.push(ligne);
+    }
+    const pose = (l, c, txt, coul) => {
+        for (let i = 0; i < txt.length; i++) {
+            if (txt[i] !== ' ' && c + i >= 0 && c + i < N) g[l][c + i] = [txt[i], coul];
+        }
+    };
+
+    // Le voyant frontal.
+    let voyant = H.terne;
+    if (etat === 'parle')                                  voyant = H.cyan;
+    else if (etat === 'ecoute' || etat === 'veille')       voyant = lent ? H.tons[3] : H.terne;
+    else if (etat === 'connexion' || etat === 'reflexion') voyant = vite ? H.tons[3] : H.terne;
+    else if (etat === 'erreur')                            voyant = H.rouge;
+    pose(4, 15, '<>', voyant);
+
+    // Les yeux.
+    if (etat !== 'connexion') {
+        for (const x0 of [10, 19]) {
+            if (etat === 'erreur') { pose(7, x0, '[x]', H.rouge); continue; }
+            const ferme = _liveVisageCligne > 90 || etat === 'fini';
+            const mi = !ferme && _liveVisageCligne > 0;
+            const oeil = ferme ? '[_]' : etat === 'reflexion' ? '[-]' : mi ? '[o]' : '[O]';
+            pose(7, x0 + _liveVisageRegard, oeil, etat === 'sourd' || ferme ? H.terne : H.vif);
+        }
+    }
+    if (etat === 'reflexion') {
+        const phase = Math.floor(_liveVisageTemps / 270) % 3;
+        for (let i = 0; i < 3; i++) pose(7, 14 + i, '.', i <= phase ? H.vif : H.terne);
+    }
+
+    // La bouche-égaliseur.
+    for (let i = 0; i < 8; i++) {
+        const c = 12 + i, h = _liveVisageBarres[i];
+        if (h === 0) {
+            if (c > 12 && c < 19) pose(11, c, '-', etat === 'erreur' ? H.rouge : H.terne);
+        } else {
+            const col = h === 1 ? ".|'" : '|||';
+            for (let j = 0; j < 3; j++) pose(10 + j, c, col[j], H.vif);
+        }
+    }
+    if (etat === 'parle' && _liveVisageOuverture > 0.3) {
+        pose(8, 4, '*', H.vif);
+        pose(8, 27, '*', H.vif);
+    }
+
+    // En-tête et pied : les lignes vides du haut et du bas de la grille.
+    const hex = (v, n) => v.toString(16).toUpperCase().padStart(n, '0');
+    pose(0, 1, H.entete, H.terne);
+    pose(15, 1, 'amp=' + H.prefixe + hex(Math.round(_liveVisageOuverture * 255), 2)
+              + '  frame=' + H.prefixe + hex(_liveVisageImage & 0xffff, 4), H.tons[1]);
+
+    ctx.font = 'bold ' + Math.round(P * 1.45) + 'px ' + H.police;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let l = 0; l < L; l++) {
+        for (let c = 0; c < N; c++) {
+            const cel = g[l][c];
+            if (!cel) continue;
+            ctx.fillStyle = cel[1];
+            ctx.fillText(cel[0], c * P + P / 2, l * 2 * P + P);
         }
     }
 }
@@ -15560,6 +15939,7 @@ async function _liveChaineTour() {
         });
         const blob = await rv.blob();
         _liveAudioTTS = new Audio(URL.createObjectURL(blob));
+        _liveVisageCapterTTS(_liveAudioTTS);   // la bouche suit cette voix
         await new Promise(res => {
             _liveAudioTTS.onended = res;
             _liveAudioTTS.onpause = res;     // coupé par la voix : on enchaîne
@@ -15764,8 +16144,8 @@ function _liveReglagesRemplir(o) {
     const aideOutils = document.getElementById('live-set-outils-aide');
     if (aideOutils) aideOutils.textContent = o.outils_note || '';
 
-    const caseVisage = document.getElementById('live-set-visage');
-    if (caseVisage) caseVisage.checked = _liveVisageVisible();
+    const selVisage = document.getElementById('live-set-visage');
+    if (selVisage) selVisage.value = _liveVisageStyle();
 
     const selEcoute = document.getElementById('live-set-ecoute');
     if (selEcoute) selEcoute.value = _liveSensibilite();
@@ -15805,7 +16185,7 @@ function _liveReglagesCabler() {
     const selMoteur  = document.getElementById('live-set-moteur');
     const selVoix    = document.getElementById('live-set-voix');
     const caseOutils = document.getElementById('live-set-outils');
-    const caseVisage = document.getElementById('live-set-visage');
+    const selVisage  = document.getElementById('live-set-visage');
     const selEcoute  = document.getElementById('live-set-ecoute');
 
     selMoteur?.addEventListener('change', () => {
@@ -15818,12 +16198,13 @@ function _liveReglagesCabler() {
     caseOutils?.addEventListener('change', () => {
         _liveReglagesEnregistrer({ outils: caseOutils.checked });
     });
-    caseVisage?.addEventListener('change', () => {
+    selVisage?.addEventListener('change', () => {
         try {
-            localStorage.setItem('nimm-live-visage', caseVisage.checked ? 'oui' : 'non');
+            localStorage.setItem('nimm-live-visage', selVisage.value);
         } catch (e) { /* navigation privée : le choix ne survivra pas, tant pis */ }
         _liveVisage(_liveVisageEtat);
-        _liveReglagesStatus(caseVisage.checked ? 'Visage affiché.' : 'Visage masqué.');
+        const court = (selVisage.options[selVisage.selectedIndex].text || '').split(' — ')[0];
+        _liveReglagesStatus(selVisage.value === 'non' ? 'Visage masqué.' : 'Visage : ' + court + '.');
     });
     selEcoute?.addEventListener('change', () => {
         try {
