@@ -20,7 +20,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500;600&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20261116-studio-image">
+<link rel="stylesheet" href="/static/styles.css?v=20261121-live-anti-echo">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -1130,6 +1130,83 @@ Analyse les sentiments de : ..."
 
         <div class="settings-divider"></div>
 
+        <!-- ── CONVERSATION LIVE ──
+             Les réglages du mode Live vivent ICI, et non dans le panneau de
+             conversation : le bouton 🎙️ démarre d'un seul clic, avec ces
+             valeurs retenues. Un mode où l'on parle n'a pas le temps de poser
+             trois questions avant le premier mot.
+             Le visage, lui, est un choix d'affichage : il est gardé par le
+             navigateur (localStorage), pas par le serveur. -->
+        <details class="settings-section-details">
+        <summary class="settings-section-title">🎙️ Conversation Live</summary>
+
+        <div class="setting-group">
+            <label for="live-set-moteur">Moteur</label>
+            <select id="live-set-moteur" class="routing-select"
+                    aria-describedby="live-set-moteur-aide"
+                    style="width:100%;margin-top:6px;">
+                <option value="gemini">Gemini Live — vrai dialogue</option>
+                <option value="chaine">Whisper + ton LLM + voix NIMM</option>
+            </select>
+            <p id="live-set-moteur-aide"
+               style="font-size:0.78rem;color:var(--text-muted);margin:6px 0 0;"></p>
+        </div>
+
+        <div class="setting-group" id="live-set-voix-row">
+            <label for="live-set-voix">Voix de NIMM</label>
+            <select id="live-set-voix" class="routing-select"
+                    style="width:100%;margin-top:6px;"></select>
+        </div>
+
+        <div class="setting-group">
+            <label for="live-set-outils"
+                   style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.9rem;">
+                <input type="checkbox" id="live-set-outils" checked
+                       aria-describedby="live-set-outils-aide"
+                       style="margin-top:3px;flex:none;">
+                <span>🧰 Donner ses outils à NIMM pendant la conversation</span>
+            </label>
+            <p id="live-set-outils-aide"
+               style="font-size:0.78rem;color:var(--text-muted);margin:6px 0 0 26px;"></p>
+        </div>
+
+        <div class="setting-group">
+            <label for="live-set-ecoute">Écoute du micro</label>
+            <select id="live-set-ecoute" class="routing-select"
+                    aria-describedby="live-set-ecoute-aide"
+                    style="width:100%;margin-top:6px;">
+                <option value="normale">Normale — casque, ou téléphone qui gère l'écho</option>
+                <option value="prudente">Prudente — haut-parleurs (recommandé sur PC)</option>
+                <option value="forte">Très prudente — NIMM s'entend encore</option>
+            </select>
+            <p id="live-set-ecoute-aide"
+               style="font-size:0.78rem;color:var(--text-muted);margin:6px 0 0;">
+                Réglage propre à <strong>cet appareil</strong> : il dépend des
+                haut-parleurs et du micro, pas de ton profil. Pendant que NIMM
+                parle, le micro n'est écouté que si tu parles nettement plus fort
+                que lui — c'est ce qui l'empêche de se répondre à lui-même.
+            </p>
+        </div>
+
+        <div class="setting-group">
+            <label for="live-set-visage"
+                   style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.9rem;">
+                <input type="checkbox" id="live-set-visage" checked
+                       style="margin-top:3px;flex:none;">
+                <span>🙂 Afficher le visage pendant la conversation</span>
+            </label>
+            <p style="font-size:0.78rem;color:var(--text-muted);margin:6px 0 0 26px;">
+                Un visage de pixels, purement décoratif. Il ne remplace jamais
+                l'état écrit ni la transcription, qui restent lisibles et copiables.
+            </p>
+        </div>
+
+        <div id="live-set-status" role="status" aria-live="polite"
+             style="font-size:0.78rem;color:var(--text-muted);min-height:1.2em;"></div>
+        </details>
+
+        <div class="settings-divider"></div>
+
         <!-- ── MISE À JOUR ── -->
         <div class="setting-group" style="padding:4px 0 8px;">
             <label>🔄 Mise à jour</label>
@@ -1987,46 +2064,10 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<!-- ── Conversation Live : réglages de lancement ──
-     Volontairement court. C'est un bouton qu'on presse pour PARLER : si
-     l'ouverture demande six décisions, on renonce avant d'avoir dit un mot. -->
-<div id="live-modal" class="modal-overlay hidden">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="live-modal-title" style="max-width:380px;">
-        <h3 id="live-modal-title" style="margin:0 0 6px;">🎙️ Conversation Live</h3>
-        <p id="live-modal-note" style="font-size:0.82rem;color:var(--text-muted);margin:0 0 14px;">
-            Tu parles, NIMM répond, et tu peux le couper à tout moment.
-            Rien n'est enregistré : ni message, ni mémoire, ni carnet.
-        </p>
-
-        <label for="live-moteur" style="font-size:0.85rem;color:var(--text-muted);">Moteur</label>
-        <select id="live-moteur" class="routing-select"
-                aria-describedby="live-moteur-aide" style="width:100%;margin:4px 0 4px;">
-            <option value="gemini">— chargement —</option>
-        </select>
-        <p id="live-moteur-aide" style="font-size:0.78rem;color:var(--text-muted);margin:0 0 12px;"></p>
-
-        <div style="margin:0 0 12px;">
-            <label for="live-outils" style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.88rem;">
-                <input type="checkbox" id="live-outils" checked
-                       aria-describedby="live-outils-aide" style="margin-top:3px;flex:none;">
-                <span>🧰 Donner ses outils à NIMM</span>
-            </label>
-            <p id="live-outils-aide" style="font-size:0.78rem;color:var(--text-muted);margin:6px 0 0 26px;"></p>
-        </div>
-
-        <div id="live-voix-row">
-            <label for="live-voix" style="font-size:0.85rem;color:var(--text-muted);">Voix de NIMM</label>
-            <select id="live-voix" class="routing-select"
-                    aria-label="Voix de NIMM pendant la conversation Live"
-                    style="width:100%;margin:4px 0 12px;"></select>
-        </div>
-
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
-            <button id="live-cancel" class="btn-secondary">Annuler</button>
-            <button id="live-start"  class="btn-primary">Démarrer</button>
-        </div>
-    </div>
-</div>
+<!-- La modale de lancement du Live a été retirée le 21/11/2026 : ses réglages
+     vivent dans ⚙️ Paramètres → Conversation Live, et le bouton 🎙️ démarre la
+     session d'un seul clic, avec les valeurs retenues. Voir app.js, section
+     CONVERSATION LIVE. -->
 
 <!-- ── Conversation Live : la conversation elle-même ──
      PRINCIPE D'ACCESSIBILITÉ, ET IL EST CONTRE-INTUITIF :
@@ -2035,18 +2076,32 @@ Analyse les sentiments de : ..."
      par-dessus l'autre, et plus rien de compréhensible. Elle est donc écrite
      dans un champ de texte que l'on peut parcourir, relire et copier quand on
      veut — au braille sans un mot de synthèse. Seul l'ÉTAT (qui a la parole)
-     est annoncé, parce qu'il est court et qu'il ne recouvre rien. -->
-<div id="live-panel" class="modal-overlay hidden">
-    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="live-panel-title" style="max-width:560px;">
-        <h3 id="live-panel-title" style="margin:0 0 8px;">🎙️ Conversation Live</h3>
+     est annoncé, parce qu'il est court et qu'il ne recouvre rien.
 
-        <p id="live-etat" role="status" aria-live="polite" aria-atomic="true"
-           style="font-size:0.9rem;margin:0 0 12px;font-weight:600;">Connexion…</p>
+     LE VISAGE EST DÉCORATIF, ET C'EST UNE RÈGLE.
+     Le canvas porte aria-hidden : il ne dit jamais rien que l'état écrit ne
+     dise déjà. Il se coupe dans ⚙️ Paramètres → Conversation Live. -->
+<div id="live-panel" class="modal-overlay hidden">
+    <div class="modal-box live-box" role="dialog" aria-modal="true" aria-labelledby="live-panel-title">
+
+        <div class="live-tete">
+            <canvas id="live-visage" class="live-visage" width="256" height="256"
+                    aria-hidden="true"></canvas>
+            <div class="live-tete-texte">
+                <h3 id="live-panel-title" style="margin:0 0 6px;">🎙️ Conversation Live</h3>
+                <p id="live-etat" role="status" aria-live="polite" aria-atomic="true"
+                   style="font-size:0.95rem;margin:0 0 6px;font-weight:600;">Connexion…</p>
+                <p style="font-size:0.78rem;color:var(--text-muted);margin:0;">
+                    Rien n'est enregistré pendant la conversation. À la fin, tu
+                    décides de garder la transcription.
+                </p>
+            </div>
+        </div>
 
         <label for="live-transcript" style="font-size:0.85rem;color:var(--text-muted);">
             Transcription (lecture seule, copiable)
         </label>
-        <textarea id="live-transcript" readonly rows="12" spellcheck="false"
+        <textarea id="live-transcript" readonly rows="9" spellcheck="false"
                   aria-describedby="live-transcript-aide"
                   style="width:100%;margin:4px 0 4px;box-sizing:border-box;resize:vertical;
                          background:var(--bg-input);border:1px solid var(--border);
@@ -2570,7 +2625,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20261116-studio-image"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20261121-live-anti-echo"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

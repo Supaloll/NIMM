@@ -6756,6 +6756,11 @@ async def live_ws(ws: WebSocket):
             langue=reglages.get('langue') or 'fr-FR',
             interruption=bool(reglages.get('interruption', True)),
             outils=_decl_outils,
+            # L'interface envoie le réglage de CET appareil ; à défaut, on part
+            # sur « prudente » — le cas où NIMM s'entendait lui-même.
+            sensibilite=(reglages.get('sensibilite')
+                         or get_setting('live_sensibilite',
+                                        _live.SENSIBILITE_DEFAUT)),
         )
 
         conn, err = await _live.ouvrir_gemini(cle, setup)

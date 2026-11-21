@@ -3539,3 +3539,78 @@ body {
     color: var(--text-muted, #888);
     font-size: 0.78rem;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   CONVERSATION LIVE — la façade (21/11/2026)
+
+   Le panneau est plus large que les autres modales : il porte un visage, une
+   transcription et un champ d'écriture, et doit rester confortable sans
+   ascenseur sur un écran de portable.
+
+   Le visage est un canvas DÉCORATIF. `image-rendering: pixelated` garde les
+   pixels nets à n'importe quelle taille : sans lui, l'agrandissement les
+   lisserait et le pixel art deviendrait de la bouillie.
+   ══════════════════════════════════════════════════════════════════════ */
+
+#live-panel .live-box {
+    max-width: 720px;
+    max-height: 92vh;
+}
+
+.live-tete {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+}
+
+.live-tete-texte {
+    flex: 1 1 240px;
+    min-width: 180px;
+}
+
+.live-visage {
+    flex: none;
+    width: 176px;
+    height: 176px;
+    image-rendering: pixelated;
+    background: radial-gradient(circle at 50% 42%,
+                rgba(127, 216, 176, 0.10), transparent 68%),
+                var(--bg-input);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    transition: border-color 0.25s ease;
+}
+
+/* L'état se lit D'ABORD dans le texte (#live-etat) ; la bordure ne fait que
+   confirmer d'un coup d'œil. Elle ne porte jamais d'information seule. */
+.live-visage.etat-parle      { border-color: #7fd8b0; }
+.live-visage.etat-ecoute     { border-color: #8fb8d8; }
+.live-visage.etat-reflexion  { border-color: #d8b06f; }
+.live-visage.etat-erreur     { border-color: var(--danger); }
+.live-visage.etat-sourd      { border-color: var(--text-muted); }
+
+[data-theme="cpc"] .live-visage {
+    background: #000000;
+    border-color: #ffff00;
+}
+
+[data-theme="cpc"] .live-visage.etat-ecoute,
+[data-theme="cpc"] .live-visage.etat-reflexion {
+    border-color: #ffffff;
+}
+
+@media (max-width: 560px) {
+    .live-tete {
+        flex-direction: column;
+        text-align: center;
+    }
+    .live-visage {
+        width: 132px;
+        height: 132px;
+    }
+}
+
+/* Respect de « animations réduites » : le visage reste dessiné, mais figé. */
+@media (prefers-reduced-motion: reduce) {
+    .live-visage { transition: none; }
+}

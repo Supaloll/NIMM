@@ -87,6 +87,53 @@ MOTEURS = {
     },
 }
 
+# ══════════════════════════════════════════════════════════════════════
+#  SENSIBILITÉ DE L'ÉCOUTE — empêcher NIMM de se répondre à lui-même
+# ══════════════════════════════════════════════════════════════════════
+#
+# POURQUOI CE RÉGLAGE EXISTE
+# Sur un ordinateur portable, la voix de NIMM sort par les haut-parleurs et le
+# micro la reprend. L'annulation d'écho du navigateur est excellente sur
+# certains téléphones et insuffisante sur PC : le modèle entend sa propre voix,
+# la prend pour son interlocuteur, et la conversation tourne toute seule.
+#
+# DEUX LEVIERS, COMPLÉMENTAIRES
+#   1. ICI, on rend la détection de voix de Google moins pressée : il faut plus
+#      de parole avant de valider un début, et plus de silence avant de valider
+#      une fin. Champs relevés dans le schéma public de l'API v1beta, où seules
+#      les valeurs HIGH et LOW existent (il n'y a pas de MEDIUM).
+#   2. CÔTÉ NAVIGATEUR (app.js), on n'envoie RIEN tant que du son sort, sauf
+#      si le micro dépasse franchement ce qui sort. C'est le vrai rempart :
+#      aucun détecteur ne peut reconnaître un écho qu'on ne lui envoie pas.
+SENSIBILITES = {
+    'normale': {
+        'startOfSpeechSensitivity': 'START_SENSITIVITY_HIGH',
+        'endOfSpeechSensitivity': 'END_SENSITIVITY_HIGH',
+        'prefixPaddingMs': 150,
+        'silenceDurationMs': 600,
+    },
+    'prudente': {
+        'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
+        'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
+        'prefixPaddingMs': 350,
+        'silenceDurationMs': 900,
+    },
+    'forte': {
+        'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
+        'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
+        'prefixPaddingMs': 600,
+        'silenceDurationMs': 1200,
+    },
+}
+SENSIBILITE_DEFAUT = 'prudente'
+
+
+def sensibilite_valide(nom):
+    """Rend un nom sûr. Un nom inconnu ne doit pas produire une config que
+    Google refuserait à l'ouverture — mieux vaut la valeur prudente."""
+    nom = (nom or '').strip().lower()
+    return nom if nom in SENSIBILITES else SENSIBILITE_DEFAUT
+
 
 # ══════════════════════════════════════════════════════════════════════
 #  PARTIE PURE — testable sans réseau, sans clé, sans micro
@@ -146,7 +193,7 @@ def consigne_vocale(user_name='', memoire='', masque='', se_souvient=True):
 
 
 def construire_setup(modele=None, voix=None, consigne='', langue='fr-FR',
-                     interruption=True, outils=None):
+                     interruption=True, outils=None, sensibilite=None):
     """Le premier message du WebSocket — celui qui décide de tout le reste.
 
     Fonction PURE, donc vérifiable par un test sans jamais ouvrir de socket.
@@ -161,9 +208,12 @@ def construire_setup(modele=None, voix=None, consigne='', langue='fr-FR',
       - `activityHandling` : START_OF_ACTIVITY_INTERRUPTS est déjà le défaut,
         mais on l'écrit — un défaut non écrit est un défaut qui change un jour
         sans prévenir.
-      - `automaticActivityDetection` : laissée active. C'est Google qui décide
-        quand on a commencé et fini de parler ; le faire côté navigateur
-        supposerait une détection de voix maison, moins bonne et plus lente.
+      - `automaticActivityDetection` : active, mais RÉGLÉE. C'est Google qui
+        décide quand on a commencé et fini de parler — refaire une détection
+        maison serait moins bon et plus lent. En revanche sa sensibilité se
+        règle : « prudente » exige plus de parole avant de valider un début,
+        et plus de silence avant de valider une fin. C'est ce qui empêche un
+        écho de haut-parleur de passer pour une prise de parole.
     """
     setup = {
         'model': 'models/' + (modele or MODELE_DEFAUT),
@@ -182,7 +232,12 @@ def construire_setup(modele=None, voix=None, consigne='', langue='fr-FR',
         'inputAudioTranscription': {},
         'outputAudioTranscription': {},
         'realtimeInputConfig': {
-            'automaticActivityDetection': {'disabled': False},
+            # La détection de voix de Google, réglée moins pressée : un écho
+            # résiduel ne doit pas passer pour une prise de parole.
+            'automaticActivityDetection': {
+                'disabled': False,
+                **SENSIBILITES[sensibilite_valide(sensibilite)],
+            },
             'activityHandling': ('START_OF_ACTIVITY_INTERRUPTS' if interruption
                                  else 'NO_INTERRUPTION'),
         },

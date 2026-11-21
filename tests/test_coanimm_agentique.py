@@ -3568,18 +3568,25 @@ def test_live_accessible():
         'l’état doit être annoncé : c’est la seule chose qu’on ne peut pas voir'
 
     # (3) Chaque commande porte un nom accessible et non ambigu.
-    for ident in ('live-transcript', 'live-ecrire', 'live-moteur', 'live-voix'):
+    for ident in ('live-transcript', 'live-ecrire', 'live-set-moteur', 'live-set-voix'):
         assert ('for="%s"' % ident) in html or ('aria-label' in html[html.index('id="%s"' % ident):][:400]), \
             'commande sans étiquette : %s' % ident
-    assert 'aria-describedby="live-moteur-aide"' in html
+    assert 'aria-describedby="live-set-moteur-aide"' in html
     assert 'aria-describedby="live-transcript-aide"' in html
 
-    # (4) Les deux modales sont de vraies boîtes de dialogue.
-    for ident in ('live-modal', 'live-panel'):
-        seg = html[html.index('id="%s"' % ident):][:600]
-        assert 'role="dialog"' in seg and 'aria-modal="true"' in seg, \
-            '%s n’est pas une boîte de dialogue' % ident
-        assert 'aria-labelledby' in seg, '%s sans titre annoncé' % ident
+    # (4) Le panneau est une vraie boîte de dialogue ; les réglages vivent dans
+    # ⚙️ Paramètres, et le visage ne dit rien que l'état écrit ne dise déjà.
+    seg = html[html.index('id="live-panel"'):][:600]
+    assert 'role="dialog"' in seg and 'aria-modal="true"' in seg, \
+        'live-panel n’est pas une boîte de dialogue'
+    assert 'aria-labelledby' in seg, 'live-panel sans titre annoncé'
+    assert 'id="live-modal"' not in html, \
+        'plus de modale de lancement : 🎙️ doit démarrer d’un seul clic'
+    assert 'function _liveDemarrer' in js and '_liveOuvrirModale' not in js, \
+        'le Live doit démarrer directement, avec les réglages déjà retenus'
+    seg_visage = html[html.index('id="live-visage"'):][:200]
+    assert 'aria-hidden="true"' in seg_visage, \
+        'le visage, décoratif, doit être invisible pour le lecteur d’écran'
 
     # (5) On doit pouvoir sortir au clavier, sans chercher un bouton.
     assert "e.key === 'Escape'" in js and '_liveRaccrocher()' in js, \
@@ -3930,11 +3937,14 @@ def test_outils_en_live_cables():
     assert "'[' + t.texte.trim() + ']'" in js, \
         'on doit distinguer ce que NIMM a dit de ce qu’il est allé chercher'
 
-    # (6) Débrayable, et le réglage est ENREGISTRÉ AVANT l'ouverture : le
-    #     serveur le lit au moment de configurer la session.
-    assert 'id="live-outils"' in html and 'aria-describedby="live-outils-aide"' in html
-    assert "await fetch('/api/live/options'" in js, \
-        'réglage envoyé sans attendre : il arrivait parfois après l’ouverture'
+    # (6) Débrayable, et le choix se fait dans ⚙️ Paramètres : il est enregistré
+    #     bien avant l'ouverture, puis relu au lancement. Le lancement ne pose
+    #     plus AUCUNE question — c'est ce qui le rend immédiat.
+    assert 'id="live-set-outils"' in html and 'aria-describedby="live-set-outils-aide"' in html
+    assert 'function _liveOptionsPrecharger' in js, \
+        'les réglages doivent être chargés d’avance, pour un démarrage immédiat'
+    assert "await fetch('/api/live/options', {" in js, \
+        'le choix fait dans ⚙️ doit être enregistré'
     assert "set_setting('live_outils'" in main
 
     # (7) Chaque outil déclaré a une étiquette en français, sauf ceux qu'on
@@ -3957,6 +3967,70 @@ def test_outils_en_live_cables():
     assert not oublies, 'outils sans étiquette française : %s' % oublies
     ok("outils en Live : exécutés hors de la boucle audio, annoncés et écrits")
 
+
+
+def test_live_anti_echo():
+    """NIMM ne doit pas se répondre à lui-même par les haut-parleurs.
+
+    L'annulation d'écho du navigateur est excellente sur certains téléphones et
+    insuffisante sur PC : le micro reprend la voix de NIMM, qui se prend pour
+    son interlocuteur et la conversation tourne toute seule. Deux remparts, et
+    il en faut DEUX :
+      - côté Google, la détection de voix est rendue moins pressée ;
+      - côté navigateur, rien n'est envoyé tant que du son sort.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = open(os.path.join(racine, 'frontend', 'app.js'), encoding='utf-8').read()
+    main = open(os.path.join(racine, 'main.py'), encoding='utf-8').read()
+    html = open(os.path.join(racine, 'frontend', 'index.html'), encoding='utf-8').read()
+
+    from modules import live as L
+
+    # (1) La configuration VAD n'utilise QUE des valeurs présentes dans le
+    #     schéma public v1beta. Il n'y a pas de MEDIUM : l'inventer ferait
+    #     échouer l'ouverture de la session entière.
+    for nom, reg in L.SENSIBILITES.items():
+        assert reg['startOfSpeechSensitivity'] in (
+            'START_SENSITIVITY_HIGH', 'START_SENSITIVITY_LOW'), nom
+        assert reg['endOfSpeechSensitivity'] in (
+            'END_SENSITIVITY_HIGH', 'END_SENSITIVITY_LOW'), nom
+        assert reg['prefixPaddingMs'] > 0 and reg['silenceDurationMs'] > 0, nom
+
+    # (2) « Prudente » doit être PLUS patiente que « normale », sinon elle ne
+    #     sert à rien — et c'est elle le défaut.
+    assert (L.SENSIBILITES['prudente']['prefixPaddingMs']
+            > L.SENSIBILITES['normale']['prefixPaddingMs'])
+    assert (L.SENSIBILITES['prudente']['silenceDurationMs']
+            > L.SENSIBILITES['normale']['silenceDurationMs'])
+    assert L.SENSIBILITE_DEFAUT in L.SENSIBILITES
+    assert L.sensibilite_valide('n-importe-quoi') == L.SENSIBILITE_DEFAUT
+
+    # (3) La configuration arrive réellement dans le message d'ouverture.
+    vad = L.construire_setup(sensibilite='prudente')['setup'][
+        'realtimeInputConfig']['automaticActivityDetection']
+    assert vad['startOfSpeechSensitivity'] == 'START_SENSITIVITY_LOW'
+    assert vad['endOfSpeechSensitivity'] == 'END_SENSITIVITY_LOW'
+    assert vad['silenceDurationMs'] == L.SENSIBILITES['prudente']['silenceDurationMs']
+    assert 'automaticActivityDetection' in L.construire_setup()['setup']['realtimeInputConfig']
+
+    # (4) Le réglage traverse la passerelle : c'est le navigateur qui décide
+    #     de la sensibilité de SON appareil.
+    assert "reglages.get('sensibilite')" in main
+    assert 'sensibilite=(' in main
+
+    # (5) Le rempart client : le flux micro passe par le filtre anti-écho, et
+    #     rien ne part directement sans lui.
+    assert 'function _liveFiltrerMicro' in js
+    assert 'function _liveEnvoyerBloc' in js
+    assert '_liveNiveauSortie' in js and '_liveSortieAnalyse' in js
+    assert 'if (!_liveFiltrerMicro(f32)) return;' in js, \
+        'le micro doit passer par le filtre anti-écho'
+
+    # (6) Le réglage est dans ⚙️ Paramètres, et il est propre à l'appareil.
+    assert 'id="live-set-ecoute"' in html
+    assert 'aria-describedby="live-set-ecoute-aide"' in html
+    assert "nimm-live-sensibilite" in js
+    ok("anti-echo : VAD prudente, micro muet pendant que NIMM parle")
 
 
 def test_retouche_aiguillage():
@@ -6332,7 +6406,7 @@ if __name__ == '__main__':
                test_live_confidentialite, test_live_contrat_interface_serveur,
                test_masque_illisible_ne_bloque_pas, test_tout_est_utf8,
                test_outils_tous_atteignables, test_outils_en_live,
-               test_outils_en_live_cables,
+               test_outils_en_live_cables, test_live_anti_echo,
                test_retouche_aiguillage, test_retouche_operations_locales,
                test_retouche_cablee_et_honnete,
                test_focus_suit_l_ouverture,

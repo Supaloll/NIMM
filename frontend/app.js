@@ -12838,10 +12838,10 @@ document.getElementById('coanimm-save-cancel')?.addEventListener('click', () => 
             if (!_btnLive) return;
             e.preventDefault();
             var _enCours = (typeof _liveActif !== 'undefined') && _liveActif;
+            // Le panneau s'ouvre de lui-même et pose le focus sur « Raccrocher » :
+            // il n'y a plus de modale de réglages à traverser (21/11/2026).
             _btnLive.click();
-            if (!_enCours) {
-                setTimeout(function () { focusModal(document.getElementById('live-modal')); }, 90);
-            }
+            void _enCours;
             return;
         }
         // Alt+Maj+I est LIBRE depuis que le studio a rejoint le panneau
@@ -14766,6 +14766,329 @@ let _liveDernierQui  = '';
 const LIVE_TAUX_ENTREE = 16000;
 const LIVE_TAUX_SORTIE = 24000;
 
+// ── Anti-écho : NIMM ne doit pas s'entendre parler ────────────────────────
+//
+// POURQUOI CE FILTRE
+// Sur un ordinateur portable, la voix de NIMM sort par les haut-parleurs et le
+// micro la reprend. L'annulation d'écho du navigateur est bonne sur certains
+// téléphones et insuffisante sur PC : NIMM s'entend, se prend pour son
+// interlocuteur, et la conversation tourne toute seule.
+//
+// LA RÈGLE
+// Tant que du son sort, on N'ENVOIE RIEN au modèle, sauf si le micro dépasse
+// franchement ce qui sort. Une voix proche et volontaire passe ; l'écho, plus
+// faible et déjà atténué par les haut-parleurs, ne passe pas. Quand la parole
+// est confirmée, les morceaux retenus repartent d'un coup : le début de la
+// phrase n'est pas perdu.
+//
+// LE RÉGLAGE EST PAR APPAREIL
+// Il dépend des haut-parleurs, du micro et du volume, pas du profil : il vit
+// donc dans localStorage, à côté du choix d'afficher le visage.
+const LIVE_SENSIBILITES = {
+    normale:  { barge: 0.05, facteur: 1.4, tenue: 160 },
+    prudente: { barge: 0.08, facteur: 2.0, tenue: 240 },
+    forte:    { barge: 0.12, facteur: 2.8, tenue: 340 },
+};
+const LIVE_SENSIBILITE_DEFAUT = 'prudente';
+
+let _liveSortieAnalyse = null;   // mesure du son qui sort
+let _liveBarge = 0;              // ms de parole franche pendant que NIMM parle
+let _liveTampon = [];            // blocs retenus, pour ne pas perdre le début
+
+function _liveSensibilite() {
+    try {
+        const v = localStorage.getItem('nimm-live-sensibilite');
+        return LIVE_SENSIBILITES[v] ? v : LIVE_SENSIBILITE_DEFAUT;
+    } catch (e) { return LIVE_SENSIBILITE_DEFAUT; }
+}
+
+/** L'analyseur qui mesure ce qui sort des haut-parleurs. */
+function _livePreparerSortie() {
+    if (!_liveOutCtx || _liveSortieAnalyse) return;
+    try {
+        _liveSortieAnalyse = _liveOutCtx.createAnalyser();
+        _liveSortieAnalyse.fftSize = 256;
+        _liveSortieAnalyse.connect(_liveOutCtx.destination);
+    } catch (e) { _liveSortieAnalyse = null; }
+}
+
+function _liveNiveauBloc(f32) {
+    let somme = 0;
+    for (let i = 0; i < f32.length; i++) somme += f32[i] * f32[i];
+    return Math.sqrt(somme / (f32.length || 1));
+}
+
+function _liveNiveauSortie() {
+    if (!_liveSortieAnalyse) return 0;
+    const buf = new Uint8Array(_liveSortieAnalyse.fftSize);
+    _liveSortieAnalyse.getByteTimeDomainData(buf);
+    let somme = 0;
+    for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        somme += v * v;
+    }
+    return Math.sqrt(somme / buf.length);
+}
+
+function _liveEnvoyerBloc(f32) {
+    if (!_liveWS || _liveWS.readyState !== 1) return;
+    _liveWS.send(JSON.stringify({ audio: _liveVersBase64(_liveVersPCM16(f32)) }));
+}
+
+/**
+ * Décide si un morceau du micro part vers NIMM.
+ * Rend true quand il doit partir tel quel ; false quand il est retenu.
+ */
+function _liveFiltrerMicro(f32) {
+    const ctx = _liveOutCtx;
+    const parle = !!(ctx && _liveProchain > ctx.currentTime + 0.05);
+    if (!parle) {
+        _liveBarge = 0;
+        if (_liveTampon.length) _liveTampon = [];
+        return true;
+    }
+    const reg = LIVE_SENSIBILITES[_liveSensibilite()] || LIVE_SENSIBILITES.prudente;
+    const niveau = _liveNiveauBloc(f32);
+    const seuil = Math.max(reg.barge, _liveNiveauSortie() * reg.facteur);
+    const dt = 1000 * f32.length / LIVE_TAUX_ENTREE;   // environ 8 ms par bloc
+    _liveTampon.push(f32);
+    if (_liveTampon.length > 60) _liveTampon.shift();   // environ 480 ms
+
+    if (niveau > seuil) {
+        _liveBarge += dt;
+    } else {
+        _liveBarge = Math.max(0, _liveBarge - dt);
+    }
+    if (_liveBarge < reg.tenue) return false;
+
+    // Parole confirmée : le tampon repart d'un coup, début de phrase compris.
+    // Le serveur va interrompre NIMM (START_OF_ACTIVITY_INTERRUPTS).
+    _liveBarge = 0;
+    const tampon = _liveTampon;
+    _liveTampon = [];
+    for (const bloc of tampon) _liveEnvoyerBloc(bloc);
+    return false;   // le bloc courant est déjà dans le tampon envoyé
+}
+
+// ── Le visage ─────────────────────────────────────────────────────────────
+//
+// POURQUOI UN CANVAS, ET PAS DES IMAGES
+// Un visage pixel art doit changer de bouche et d'yeux à chaque instant. En
+// canvas, une grille de 32 cellules sur 32 se redessine en quelques
+// microsecondes, sans télécharger douze images ni les précharger. Les couleurs
+// suivent le thème, et l'ensemble tient dans ce fichier.
+//
+// LE VISAGE EST DÉCORATIF, ET C'EST UNE RÈGLE
+// Il porte aria-hidden et ne double JAMAIS une information : tout ce qu'il
+// exprime est aussi écrit dans #live-etat, qui est annoncé. Qui n'a pas envie
+// de le voir le coupe dans ⚙️ Paramètres → Conversation Live.
+//
+// CE QUE CE LOT NE FAIT PAS ENCORE
+// La bouche s'anime au rythme de la parole, mais pas encore sur le VOLUME réel
+// du son : c'est le lot suivant (lip-synch par analyse de la sortie audio). Le
+// visage ne prétend donc pas synchroniser les lèvres.
+
+const LIVE_VISAGE_GRILLE   = 32;   // cellules de la grille logique
+const LIVE_VISAGE_CELLULE  = 8;    // pixels par cellule (32 x 8 = 256)
+
+const _LIVE_PALETTES = {
+    sombre: { contour: '#245a45', peau: '#7fd8b0', clair: '#a9efcc',
+              creux: '#3f8f6b', trait: '#0d1a15' },
+    clair:  { contour: '#2f6d52', peau: '#4e9e78', clair: '#79c9a0',
+              creux: '#2f6d52', trait: '#f5f0eb' },
+    cpc:    { contour: '#ffff00', peau: '#ffff00', clair: '#ffff00',
+              creux: '#a8a800', trait: '#000000' },
+};
+
+let _liveVisageCtx           = null;
+let _liveVisageEtat          = 'veille';
+let _liveVisageAnim          = 0;
+let _liveVisageActif         = false;
+let _liveVisageDernier       = 0;
+let _liveVisageTemps         = 0;
+let _liveVisageCligne        = 0;
+let _liveVisageProchainOeil  = 2200;
+let _liveVisageBouche        = 0;
+let _liveVisageProchainBouche = 0;
+
+function _liveVisageVisible() {
+    try { return localStorage.getItem('nimm-live-visage') !== 'non'; }
+    catch (e) { return true; }
+}
+
+function _liveMouvementReduit() {
+    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    catch (e) { return false; }
+}
+
+function _liveVisageDemarrer(etat) {
+    const cv = document.getElementById('live-visage');
+    if (!cv) return;
+    if (!_liveVisageCtx) {
+        try { _liveVisageCtx = cv.getContext('2d'); } catch (e) { _liveVisageCtx = null; }
+    }
+    if (_liveVisageAnim) { cancelAnimationFrame(_liveVisageAnim); _liveVisageAnim = 0; }
+    _liveVisageActif = true;
+    _liveVisageDernier = 0;
+    _liveVisageTemps = 0;
+    _liveVisageCligne = 0;
+    _liveVisageProchainOeil = 1800;
+    _liveVisageBouche = 0;
+    _liveVisageProchainBouche = 0;
+    _liveVisage(etat || 'veille');
+    // _liveVisage lance la boucle si elle doit tourner (visage visible et
+    // animations autorisées) ; sinon on dessine une seule image figée.
+    if (!_liveVisageAnim) _liveVisageDessiner();
+}
+
+function _liveVisageArreter() {
+    _liveVisageActif = false;
+    if (_liveVisageAnim) { cancelAnimationFrame(_liveVisageAnim); _liveVisageAnim = 0; }
+}
+
+function _liveVisage(etat) {
+    etat = etat || 'veille';
+    // L'événement « audio » arrive plusieurs fois par seconde : on ne touche au
+    // DOM que si l'état change vraiment.
+    const change = etat !== _liveVisageEtat;
+    _liveVisageEtat = etat;
+    const cv = document.getElementById('live-visage');
+    if (cv) {
+        cv.hidden = !_liveVisageVisible();
+        if (change) cv.className = 'live-visage etat-' + etat;
+    }
+    if (!_liveVisageActif) return;
+    if (_liveMouvementReduit()) {
+        _liveVisageDessiner();
+    } else if (!_liveVisageAnim && _liveVisageVisible() && !document.hidden) {
+        // Visage réaffiché en cours de session : la boucle était arrêtée, on la
+        // relance. Le garde _liveVisageAnim empêche toute boucle en double, et
+        // document.hidden empêche de la relancer dans un onglet en arrière-plan.
+        _liveVisageDernier = 0;
+        _liveVisageAnim = requestAnimationFrame(_liveVisageAnimer);
+    }
+}
+
+function _liveVisageAnimer(ts) {
+    if (!_liveVisageActif) return;
+    const dt = _liveVisageDernier ? Math.min(120, ts - _liveVisageDernier) : 16;
+    _liveVisageDernier = ts;
+    _liveVisageTemps += dt;
+
+    // Clignement : seulement au repos ou à l'écoute. Un visage qui cligne
+    // pendant qu'il parle a l'air de cligner des yeux sans raison.
+    if (_liveVisageEtat === 'veille' || _liveVisageEtat === 'ecoute') {
+        if (_liveVisageTemps > _liveVisageProchainOeil) {
+            _liveVisageCligne = 150;
+            _liveVisageProchainOeil = _liveVisageTemps + 2200 + Math.random() * 3600;
+        }
+        if (_liveVisageCligne > 0) _liveVisageCligne -= dt;
+    } else {
+        _liveVisageCligne = 0;
+    }
+
+    // Bouche : tant que NIMM parle, une forme change toutes les 90 à 180 ms.
+    // Provisoire — le lot 2 la synchronisera sur le volume réel du son.
+    if (_liveVisageEtat === 'parle') {
+        if (_liveVisageTemps > _liveVisageProchainBouche) {
+            _liveVisageBouche = Math.random() < 0.15 ? 0 : 1 + Math.floor(Math.random() * 4);
+            _liveVisageProchainBouche = _liveVisageTemps + 90 + Math.random() * 90;
+        }
+    } else {
+        _liveVisageBouche = 0;
+    }
+
+    _liveVisageDessiner();
+    _liveVisageAnim = requestAnimationFrame(_liveVisageAnimer);
+}
+
+function _liveVisageDessiner() {
+    const cv = document.getElementById('live-visage');
+    if (!cv || cv.hidden) return;
+    if (!_liveVisageCtx) {
+        try { _liveVisageCtx = cv.getContext('2d'); } catch (e) { return; }
+    }
+    const ctx = _liveVisageCtx;
+    const P = LIVE_VISAGE_CELLULE, N = LIVE_VISAGE_GRILLE;
+    const theme = document.documentElement.getAttribute('data-theme') || 'sombre';
+    const pal = _LIVE_PALETTES[theme] || _LIVE_PALETTES.sombre;
+
+    ctx.clearRect(0, 0, N * P, N * P);
+    const px = (x, y, c) => { ctx.fillStyle = c; ctx.fillRect(x * P, y * P, P, P); };
+    const rect = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(x * P, y * P, w * P, h * P); };
+
+    // La tête : un carré aux coins coupés en escalier, à la manière du pixel
+    // art. Ni cheveux, ni barbe, ni accessoire : ni homme ni femme.
+    const HAUT = 4, BAS = 27, GAUCHE = 6, DROITE = 25;
+    const COINS = [3, 2, 1, 1];   // retrait de chaque côté, ligne par ligne
+    for (let y = HAUT; y <= BAS; y++) {
+        const retrait = COINS[Math.min(y - HAUT, BAS - y)] || 0;
+        const x0 = GAUCHE + retrait, x1 = DROITE - retrait;
+        for (let x = x0; x <= x1; x++) {
+            const bord = (x === x0 || x === x1 || y === HAUT || y === BAS);
+            px(x, y, bord ? pal.contour : (y < 14 ? pal.clair : pal.peau));
+        }
+    }
+
+    // Le nez : deux narines, justes au-dessus de la bouche.
+    px(15, 18, pal.creux);
+    px(16, 18, pal.creux);
+
+    // Les yeux : positions fixes, forme selon l'état.
+    const yeuxFermes = _liveVisageCligne > 0
+        || _liveVisageEtat === 'fini'
+        || _liveVisageEtat === 'erreur'
+        || _liveVisageEtat === 'sourd';
+    const hauteurOeil = (yeuxFermes || _liveVisageEtat === 'reflexion') ? 1 : 2;
+    for (const ox of [9, 20]) {
+        rect(ox, 13, 3, hauteurOeil, pal.trait);
+        if (!yeuxFermes && hauteurOeil > 1) {
+            px(ox + 2, 13, pal.clair);   // un reflet, pas une pupille fixe
+        }
+    }
+
+    // La bouche : un état, une forme.
+    const mx = 13, my = 21, mw = 6;
+    if (_liveVisageEtat === 'parle' && _liveVisageBouche > 0) {
+        rect(mx, my, mw, _liveVisageBouche, pal.trait);
+    } else if (_liveVisageEtat === 'reflexion') {
+        rect(mx + 1, my, mw - 2, 1, pal.trait);
+    } else if (_liveVisageEtat === 'ecoute') {
+        rect(mx + 1, my, 4, 1, pal.trait);
+        px(mx, my - 1, pal.trait);
+        px(mx + 5, my - 1, pal.trait);
+    } else if (_liveVisageEtat === 'fini' || _liveVisageEtat === 'erreur') {
+        rect(mx + 1, my, mw - 2, 1, pal.trait);
+    } else {
+        // Le sourire de veille : une ligne, deux coins relevés.
+        rect(mx + 1, my, mw - 2, 1, pal.trait);
+        px(mx, my - 1, pal.trait);
+        px(mx + mw - 1, my - 1, pal.trait);
+    }
+
+    // Trois points de réflexion, détachés à droite comme une bulle de pensée.
+    if (_liveVisageEtat === 'reflexion') {
+        const phase = Math.floor(_liveVisageTemps / 260) % 3;
+        for (let i = 0; i < 3; i++) {
+            px(27 + i, 8, i <= phase ? pal.clair : pal.creux);
+        }
+    }
+}
+
+// Le visage s'arrête quand l'onglet passe à l'arrière : une animation qui
+// tourne pour personne vide la batterie et chauffe la machine.
+document.addEventListener('visibilitychange', () => {
+    if (!_liveVisageActif) return;
+    if (document.hidden) {
+        if (_liveVisageAnim) { cancelAnimationFrame(_liveVisageAnim); _liveVisageAnim = 0; }
+    } else if (!_liveMouvementReduit()) {
+        _liveVisageDernier = 0;
+        _liveVisageAnim = requestAnimationFrame(_liveVisageAnimer);
+    } else {
+        _liveVisageDessiner();
+    }
+});
+
 function _liveEtat(texte) {
     const el = document.getElementById('live-etat');
     if (el && el.textContent !== texte) el.textContent = texte;
@@ -14902,7 +15225,9 @@ function _liveJouer(b64) {
     for (let i = 0; i < pcm.length; i++) canal[i] = pcm[i] / 0x8000;
     const src = _liveOutCtx.createBufferSource();
     src.buffer = buf;
-    src.connect(_liveOutCtx.destination);
+    // Tout le son passe par l'analyseur, qui sert au filtre anti-écho : c'est
+    // lui qui dit au micro si NIMM est en train de parler.
+    src.connect(_liveSortieAnalyse || _liveOutCtx.destination);
     // Les morceaux arrivent plus vite qu'ils ne se jouent : on les met bout à
     // bout sur une horloge, sinon ils se superposeraient tous à l'instant zéro.
     const maintenant = _liveOutCtx.currentTime;
@@ -14996,28 +15321,37 @@ async function _liveGemini(reglages) {
         try { evt = JSON.parse(ev.data); } catch (e) { return; }
         switch (evt.type) {
             case 'connectee':
-                _liveOutCtx = new (window.AudioContext || window.webkitAudioContext)(
-                    { sampleRate: LIVE_TAUX_SORTIE });
+                // Le contexte a été créé au clic (voir _liveLancer) ; on ne le
+                // recrée ici que si le navigateur l'a refusé, et on le réveille.
+                if (!_liveOutCtx) {
+                    _liveOutCtx = new (window.AudioContext || window.webkitAudioContext)(
+                        { sampleRate: LIVE_TAUX_SORTIE });
+                }
+                try { _liveOutCtx.resume(); } catch (e) {}
+                _livePreparerSortie();
                 _liveProchain = 0;
                 try {
                     await _liveDemarrerMicro((f32) => {
                         if (_liveMicCoupe || !_liveWS || _liveWS.readyState !== 1) return;
-                        _liveWS.send(JSON.stringify(
-                            { audio: _liveVersBase64(_liveVersPCM16(f32)) }));
+                        if (!_liveFiltrerMicro(f32)) return;
+                        _liveEnvoyerBloc(f32);
                     });
                 } catch (e) {
                     _liveEtat('Micro refusé : ' + e.message);
+                    _liveVisage('erreur');
                     _liveTranscrire('nimm',
                         '[Le micro n’a pas pu être ouvert : ' + e.message +
                         '. Tu peux quand même écrire dans le champ ci-dessous.]');
                     return;
                 }
                 _liveEtat('À toi de parler.');
+                _liveVisage('ecoute');
                 break;
             case 'prete':
                 break;
             case 'audio':
                 _liveEtat('NIMM parle — coupe-le quand tu veux.');
+                _liveVisage('parle');
                 _liveJouer(evt.donnees);
                 break;
             case 'transcription':
@@ -15026,9 +15360,11 @@ async function _liveGemini(reglages) {
             case 'interrompu':
                 _liveViderLecture();
                 _liveEtat('Tu as coupé NIMM. À toi.');
+                _liveVisage('ecoute');
                 break;
             case 'tour_fini':
                 _liveEtat('À toi de parler.');
+                _liveVisage('ecoute');
                 break;
             case 'bientot_fini':
                 _liveEtat('La session va se fermer côté serveur.');
@@ -15041,10 +15377,12 @@ async function _liveGemini(reglages) {
                 const _q = _liveNomOutil(evt.nom);
                 _liveEtat('NIMM consulte ' + _q + '\u2026');
                 _liveNoterOutil('NIMM consulte ' + _q);
+                _liveVisage('reflexion');
                 break;
             }
             case 'outil_fini':
                 _liveEtat('NIMM a ce qu\u2019il cherchait. Il r\u00e9pond.');
+                _liveVisage('parle');
                 break;
             case 'outil_annule':
             case 'outil_abandonne':
@@ -15052,17 +15390,25 @@ async function _liveGemini(reglages) {
                 // silence passerait pour un outil en panne.
                 _liveNoterOutil('Recherche abandonn\u00e9e : tu as repris la parole');
                 _liveEtat('\u00c0 toi de parler.');
+                _liveVisage('ecoute');
                 break;
             case 'erreur':
                 _liveEtat('Incident : ' + (evt.texte || ''));
                 _liveTranscrire('nimm', '[' + (evt.texte || 'incident') + ']');
+                _liveVisage('erreur');
                 break;
         }
     };
 
-    _liveWS.onerror = () => { _liveEtat('La liaison vocale a échoué.'); };
+    _liveWS.onerror = () => {
+        _liveEtat('La liaison vocale a échoué.');
+        _liveVisage('erreur');
+    };
     _liveWS.onclose  = () => {
-        if (_liveActif) _liveEtat('Liaison fermée. Tu peux raccrocher.');
+        if (_liveActif) {
+            _liveEtat('Liaison fermée. Tu peux raccrocher.');
+            _liveVisage('fini');
+        }
     };
 }
 
@@ -15084,6 +15430,7 @@ async function _liveChaine() {
         _liveFilEphemere = (await r.json()).thread_id;
     } catch (e) {
         _liveEtat('Impossible de préparer la session : ' + e.message);
+        _liveVisage('erreur');
         return;
     }
 
@@ -15091,12 +15438,17 @@ async function _liveChaine() {
         audio: { echoCancellation: true, noiseSuppression: true }
     });
     _liveMicCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Même précaution qu'en sortie : un contexte créé hors du clic peut naître
+    // suspendu, et l'analyse du micro rendrait alors toujours zéro — NIMM
+    // n'entendrait rien, sans le moindre message d'erreur.
+    try { _liveMicCtx.resume(); } catch (e) {}
     const src = _liveMicCtx.createMediaStreamSource(_liveFlux);
     _liveAnalyse = _liveMicCtx.createAnalyser();
     _liveAnalyse.fftSize = 512;
     src.connect(_liveAnalyse);
 
     _liveEtat('À toi de parler.');
+    _liveVisage('ecoute');
     _liveChaineTour();
 }
 
@@ -15135,6 +15487,7 @@ async function _liveChaineTour() {
                 if (_liveAudioTTS && !_liveAudioTTS.paused) {
                     try { _liveAudioTTS.pause(); } catch (e) {}
                     _liveEtat('Tu as coupé NIMM. À toi.');
+                    _liveVisage('ecoute');
                 }
             } else if (aParle) {
                 silence += 120;
@@ -15147,6 +15500,7 @@ async function _liveChaineTour() {
     if (!_liveActif || !aParle) { if (_liveActif) _liveChaineTour(); return; }
 
     _liveEtat('NIMM écoute et réfléchit…');
+    _liveVisage('reflexion');
     await new Promise(r => setTimeout(r, 250));   // laisse le dernier morceau arriver
 
     let texte = '';
@@ -15158,7 +15512,12 @@ async function _liveChaineTour() {
         texte = ((await r.json()).text || '').trim();
     } catch (e) { texte = ''; }
 
-    if (!texte) { _liveEtat('Je n’ai rien compris. Reprends.'); _liveChaineTour(); return; }
+    if (!texte) {
+        _liveEtat('Je n’ai rien compris. Reprends.');
+        _liveVisage('ecoute');
+        _liveChaineTour();
+        return;
+    }
     _liveTranscrire('moi', texte);
 
     let reponse = '';
@@ -15183,10 +15542,16 @@ async function _liveChaineTour() {
     } catch (e) { reponse = 'Je n’ai pas pu répondre : ' + e.message; }
 
     reponse = (reponse || '').trim();
-    if (!reponse) { _liveEtat('Pas de réponse. Reprends.'); _liveChaineTour(); return; }
+    if (!reponse) {
+        _liveEtat('Pas de réponse. Reprends.');
+        _liveVisage('erreur');
+        _liveChaineTour();
+        return;
+    }
     _liveTranscrire('nimm', reponse);
 
     _liveEtat('NIMM parle — coupe-le quand tu veux.');
+    _liveVisage('parle');
     try {
         const rv = await fetch('/api/tts/speak', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -15203,7 +15568,11 @@ async function _liveChaineTour() {
         });
     } catch (e) { /* la transcription reste lisible : on continue */ }
 
-    if (_liveActif) { _liveEtat('À toi de parler.'); _liveChaineTour(); }
+    if (_liveActif) {
+        _liveEtat('À toi de parler.');
+        _liveVisage('ecoute');
+        _liveChaineTour();
+    }
 }
 
 // ── Lancement, arrêt, conservation ───────────────────────────────────────
@@ -15217,10 +15586,27 @@ async function _liveLancer(moteur, voix) {
     if (zone) zone.value = '';
     _liveFocusAvant = document.activeElement;
 
+    // LE SON D'ABORD. Un contexte audio ne démarre que sur un geste de
+    // l'utilisateur : on le crée ici, pendant que le clic est encore frais, et
+    // pas dans le gestionnaire du WebSocket où le geste a expiré. Sans cela,
+    // Chrome le laisse en pause et le panneau reste muet — l'incident le plus
+    // difficile à diagnostiquer, parce que tout le reste a l'air de marcher.
+    if (!_liveOutCtx) {
+        try {
+            _liveOutCtx = new (window.AudioContext || window.webkitAudioContext)(
+                { sampleRate: LIVE_TAUX_SORTIE });
+        } catch (e) { _liveOutCtx = null; }
+    }
+    try {
+        if (_liveOutCtx && _liveOutCtx.state === 'suspended') _liveOutCtx.resume();
+    } catch (e) {}
+    _livePreparerSortie();
+    _liveTampon = [];
+    _liveBarge = 0;
+
     document.getElementById('live-panel')?.classList.remove('hidden');
     _liveEtat('Connexion…');
-    document.getElementById('live-voix-row').style.display =
-        moteur === 'gemini' ? '' : 'none';
+    _liveVisageDemarrer('connexion');
     setTimeout(() => { document.getElementById('live-raccrocher')?.focus(); }, 60);
 
     try {
@@ -15228,18 +15614,21 @@ async function _liveLancer(moteur, voix) {
             // « Il te connaît, mais n'écrit rien » : NIMM part avec la mémoire
             // longue et le prénom, et ne consigne rien de l'échange.
             await _liveGemini({ voix, se_souvient: true, langue: 'fr-FR',
-                                interruption: true });
+                                interruption: true,
+                                sensibilite: _liveSensibilite() });
         } else {
             await _liveChaine();
         }
     } catch (e) {
         _liveEtat('Impossible de démarrer : ' + e.message);
+        _liveVisage('erreur');
     }
 }
 
 async function _liveRaccrocher() {
     if (!_liveActif) return;
     _liveActif = false;
+    _liveVisageArreter();
     _liveEtat('Terminé.');
 
     try { if (_liveWS && _liveWS.readyState === 1) _liveWS.send(JSON.stringify({ raccrocher: true })); } catch (e) {}
@@ -15250,6 +15639,9 @@ async function _liveRaccrocher() {
     _liveViderLecture();
     try { if (_liveOutCtx) _liveOutCtx.close(); } catch (e) {}
     _liveOutCtx = null;
+    _liveSortieAnalyse = null;
+    _liveTampon = [];
+    _liveBarge = 0;
     _liveArreterMicro();
 
     // Le fil support du moteur « chaîne » n'a servi qu'à faire transiter les
@@ -15293,68 +15685,156 @@ async function _liveRaccrocher() {
     setTimeout(() => { _liveFocusAvant?.focus(); }, 0);
 }
 
-// ── Modale de lancement ──────────────────────────────────────────────────
-async function _liveOuvrirModale() {
-    const modal = document.getElementById('live-modal');
-    if (!modal) return;
-    let o = {};
-    try { o = await (await fetch('/api/live/options')).json(); } catch (e) { o = {}; }
+// ── Le lancement : un clic, et on parle ───────────────────────────────────
+//
+// POURQUOI LES OPTIONS SONT CHARGÉES D'AVANCE
+// Le premier mot doit pouvoir être dit tout de suite. Un aller-retour réseau
+// au moment du clic retarderait l'ouverture du micro — et surtout, il ferait
+// perdre au navigateur le geste qui autorise le son. On précharge donc les
+// réglages avec la page, et on les rafraîchit après chaque session.
+let _liveOptions = null;
 
-    const selMoteur = document.getElementById('live-moteur');
-    const selVoix   = document.getElementById('live-voix');
-    const aide      = document.getElementById('live-moteur-aide');
-    const rangVoix  = document.getElementById('live-voix-row');
-    const caseOutils = document.getElementById('live-outils');
-    const aideOutils = document.getElementById('live-outils-aide');
-    if (caseOutils) caseOutils.checked = o.outils !== false;
-    if (aideOutils) aideOutils.textContent = o.outils_note || '';
+function _liveOptionsPrecharger() {
+    fetch('/api/live/options')
+        .then(r => r.json())
+        .then(o => {
+            _liveOptions = o;
+            _liveReglagesRemplir(o);
+        })
+        .catch(() => { /* hors ligne : on partira sur les défauts du serveur */ });
+}
 
-    selMoteur.innerHTML = (o.moteurs || []).map(m =>
-        `<option value="${m.nom}"${m.ouvert ? '' : ' disabled'}>` +
-        `${m.libelle}${m.ouvert ? '' : ' — indisponible'}</option>`).join('');
+async function _liveDemarrer() {
+    if (_liveActif) return;
+    // Pas de réglages préchargés (page ouverte hors ligne, serveur qui vient de
+    // démarrer) : on les demande maintenant, une fois. C'est le seul cas où le
+    // démarrage attend une réponse.
+    if (!_liveOptions) {
+        try { _liveOptions = await (await fetch('/api/live/options')).json(); }
+        catch (e) { _liveOptions = {}; }
+        _liveReglagesRemplir(_liveOptions);
+    }
+    const o = _liveOptions || {};
+    const moteur = o.moteur_defaut || 'chaine';
+    const voix   = o.voix_enregistree || o.voix_defaut || '';
+    await _liveLancer(moteur, voix);
+    // Les réglages ont pu changer dans ⚙️ entre-temps : on repart du serveur
+    // pour la prochaine session, sans bloquer celle qui vient de s'ouvrir.
+    _liveOptionsPrecharger();
+}
+
+// ── Les réglages, dans ⚙️ Paramètres ───────────────────────────────────────
+//
+// Le serveur retient le moteur, la voix, le modèle et les outils (routes
+// /api/live/options, déjà en place). Le navigateur ne retient qu'une chose :
+// l'affichage du visage, qui est un choix d'interface, pas un réglage de NIMM.
+
+function _liveReglagesStatus(texte) {
+    const el = document.getElementById('live-set-status');
+    if (el && el.textContent !== texte) el.textContent = texte;
+}
+
+function _liveReglagesRemplir(o) {
+    o = o || _liveOptions || {};
+    const selMoteur = document.getElementById('live-set-moteur');
+    const selVoix   = document.getElementById('live-set-voix');
+    const aide      = document.getElementById('live-set-moteur-aide');
+    if (!selMoteur) return;
+
+    const moteurs = o.moteurs || [];
+    if (moteurs.length) {
+        selMoteur.innerHTML = moteurs.map(m =>
+            `<option value="${m.nom}"${m.ouvert ? '' : ' disabled'}>` +
+            `${m.libelle}${m.ouvert ? '' : ' — indisponible'}</option>`).join('');
+    }
     selMoteur.value = o.moteur_defaut || 'chaine';
 
-    selVoix.innerHTML = (o.voix || []).map(v =>
-        `<option value="${v.nom}">${v.libelle}</option>`).join('');
-    if (o.voix_enregistree) selVoix.value = o.voix_enregistree;
-
-    const majAide = () => {
-        const m = (o.moteurs || []).find(x => x.nom === selMoteur.value);
+    if (selVoix && (o.voix || []).length) {
+        selVoix.innerHTML = o.voix.map(v =>
+            `<option value="${v.nom}">${v.libelle}</option>`).join('');
+        selVoix.value = o.voix_enregistree || o.voix_defaut || selVoix.value;
+    }
+    if (aide) {
+        const m = moteurs.find(x => x.nom === selMoteur.value);
         aide.textContent = m ? m.description : '';
-        rangVoix.style.display = selMoteur.value === 'gemini' ? '' : 'none';
-        // Les outils ne se déclarent que dans la session Gemini Live ; le
-        // repli Whisper passe par le chat de NIMM, qui les a déjà tous.
-        const _ro = caseOutils ? caseOutils.closest('div') : null;
-        if (_ro) _ro.style.display = selMoteur.value === 'gemini' ? '' : 'none';
-    };
-    selMoteur.onchange = majAide;
-    majAide();
+    }
 
-    const prevFocus = document.activeElement;
-    modal.classList.remove('hidden');
-    setTimeout(() => selMoteur.focus(), 50);
+    const caseOutils = document.getElementById('live-set-outils');
+    if (caseOutils) caseOutils.checked = o.outils !== false;
+    const aideOutils = document.getElementById('live-set-outils-aide');
+    if (aideOutils) aideOutils.textContent = o.outils_note || '';
 
-    const fermer = () => {
-        modal.classList.add('hidden');
-        setTimeout(() => prevFocus?.focus(), 0);
-    };
-    document.getElementById('live-cancel').onclick = fermer;
-    document.getElementById('live-start').onclick = async () => {
-        const moteur = selMoteur.value, voix = selVoix.value;
-        // On ATTEND l'enregistrement avant d'ouvrir la session : le serveur
-        // lit ces réglages au moment de configurer la session Live, et une
-        // requête lancée sans attendre arrivait parfois après. La case
-        // « outils » aurait alors été sans effet une fois sur deux.
+    const caseVisage = document.getElementById('live-set-visage');
+    if (caseVisage) caseVisage.checked = _liveVisageVisible();
+
+    const selEcoute = document.getElementById('live-set-ecoute');
+    if (selEcoute) selEcoute.value = _liveSensibilite();
+
+    _liveReglagesAfficherSelonMoteur();
+}
+
+function _liveReglagesAfficherSelonMoteur() {
+    const selMoteur = document.getElementById('live-set-moteur');
+    if (!selMoteur) return;
+    const gemini = selMoteur.value === 'gemini';
+    const rangVoix = document.getElementById('live-set-voix-row');
+    if (rangVoix) rangVoix.style.display = gemini ? '' : 'none';
+    // Les outils ne se déclarent que dans la session Gemini Live ; le repli
+    // Whisper passe par le chat de NIMM, qui les a déjà tous.
+    const caseOutils = document.getElementById('live-set-outils');
+    const groupe = caseOutils ? caseOutils.closest('.setting-group') : null;
+    if (groupe) groupe.style.display = gemini ? '' : 'none';
+}
+
+async function _liveReglagesEnregistrer(champs) {
+    try {
+        const r = await fetch('/api/live/options', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(champs)
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        _liveOptions = null;          // la prochaine lecture repart du serveur
+        _liveOptionsPrecharger();
+        _liveReglagesStatus('Réglage retenu.');
+    } catch (e) {
+        _liveReglagesStatus('Réglage non retenu : ' + e.message);
+    }
+}
+
+function _liveReglagesCabler() {
+    const selMoteur  = document.getElementById('live-set-moteur');
+    const selVoix    = document.getElementById('live-set-voix');
+    const caseOutils = document.getElementById('live-set-outils');
+    const caseVisage = document.getElementById('live-set-visage');
+    const selEcoute  = document.getElementById('live-set-ecoute');
+
+    selMoteur?.addEventListener('change', () => {
+        _liveReglagesAfficherSelonMoteur();
+        _liveReglagesEnregistrer({ moteur: selMoteur.value });
+    });
+    selVoix?.addEventListener('change', () => {
+        _liveReglagesEnregistrer({ voix: selVoix.value });
+    });
+    caseOutils?.addEventListener('change', () => {
+        _liveReglagesEnregistrer({ outils: caseOutils.checked });
+    });
+    caseVisage?.addEventListener('change', () => {
         try {
-            await fetch('/api/live/options', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ moteur, voix,
-                                       outils: caseOutils ? caseOutils.checked : true })
-            });
-        } catch (e) { /* réglage non retenu : la session s'ouvre quand même */ }
-        modal.classList.add('hidden');
-        await _liveLancer(moteur, voix);
-    };
+            localStorage.setItem('nimm-live-visage', caseVisage.checked ? 'oui' : 'non');
+        } catch (e) { /* navigation privée : le choix ne survivra pas, tant pis */ }
+        _liveVisage(_liveVisageEtat);
+        _liveReglagesStatus(caseVisage.checked ? 'Visage affiché.' : 'Visage masqué.');
+    });
+    selEcoute?.addEventListener('change', () => {
+        try {
+            localStorage.setItem('nimm-live-sensibilite', selEcoute.value);
+        } catch (e) { /* navigation privée : le choix ne survivra pas, tant pis */ }
+        const court = (selEcoute.options[selEcoute.selectedIndex].text || '')
+            .split(' — ')[0];
+        _liveReglagesStatus('Écoute réglée sur « ' + court + ' » pour cet appareil.');
+    });
+
+    _liveOptionsPrecharger();
 }
 
 // ── Le bouton, à la place laissée par le mode fantôme ────────────────────
@@ -15370,7 +15850,7 @@ async function _liveOuvrirModale() {
     btn.setAttribute('aria-haspopup', 'dialog');
     btn.addEventListener('click', () => {
         if (_liveActif) { _liveRaccrocher(); return; }
-        _liveOuvrirModale();
+        _liveDemarrer();
     });
     const topRight = document.getElementById('top-right');
     if (topRight) topRight.insertBefore(btn, topRight.firstChild);
@@ -15390,6 +15870,8 @@ async function _liveOuvrirModale() {
             micBtn.textContent = _liveMicCoupe ? '🎤 Rouvrir le micro' : '🎤 Couper le micro';
             _liveEtat(_liveMicCoupe ? 'Micro coupé — NIMM ne t’entend plus.'
                                     : 'Micro ouvert. À toi de parler.');
+            _liveVisage(_liveMicCoupe ? 'sourd' : 'ecoute');
+            if (_liveMicCoupe) { _liveTampon = []; _liveBarge = 0; }
             if (_liveMicCoupe && _liveWS && _liveWS.readyState === 1) {
                 try { _liveWS.send(JSON.stringify({ fin_audio: true })); } catch (e) {}
             }
@@ -15412,9 +15894,13 @@ async function _liveOuvrirModale() {
         });
     };
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', _liveCabler, { once: true });
+        document.addEventListener('DOMContentLoaded', () => {
+            _liveCabler();
+            _liveReglagesCabler();
+        }, { once: true });
     } else {
         _liveCabler();
+        _liveReglagesCabler();
     }
 })();
 
