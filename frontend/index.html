@@ -20,7 +20,7 @@
 <title>NIMM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@400;500;600&family=DM+Sans:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Nunito:wght@400;500&family=Outfit:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500&family=Special+Elite&family=VT323&family=Playfair+Display:wght@400;500&family=Lora:wght@400;500&family=Merriweather:wght@300;400&family=Dancing+Script:wght@400;600&family=Permanent+Marker&family=Pacifico&family=Press+Start+2P&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20261121-live-visage-css">
+<link rel="stylesheet" href="/static/styles.css?v=20261122-live-mobile">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.7/purify.min.js"></script>
 </head>
@@ -2095,7 +2095,7 @@ Analyse les sentiments de : ..."
                 <h3 id="live-panel-title" style="margin:0 0 6px;">🎙️ Conversation Live</h3>
                 <p id="live-etat" role="status" aria-live="polite" aria-atomic="true"
                    style="font-size:0.95rem;margin:0 0 6px;font-weight:600;">Connexion…</p>
-                <p style="font-size:0.78rem;color:var(--text-muted);margin:0;">
+                <p class="live-aide" style="font-size:0.78rem;color:var(--text-muted);margin:0;">
                     Rien n'est enregistré pendant la conversation. À la fin, tu
                     décides de garder la transcription.
                 </p>
@@ -2111,7 +2111,7 @@ Analyse les sentiments de : ..."
                          background:var(--bg-input);border:1px solid var(--border);
                          border-radius:8px;padding:8px 12px;color:var(--text);
                          font-size:0.9rem;line-height:1.5;"></textarea>
-        <p id="live-transcript-aide" style="font-size:0.75rem;color:var(--text-muted);margin:0 0 12px;">
+        <p id="live-transcript-aide" class="live-aide" style="font-size:0.75rem;color:var(--text-muted);margin:0 0 12px;">
             Elle s'écrit au fil de la conversation. Rien n'est lu à voix haute ici,
             pour ne pas couvrir NIMM : entre dans le champ pour relire ou copier.
         </p>
@@ -2125,7 +2125,7 @@ Analyse les sentiments de : ..."
                style="width:100%;margin:4px 0 4px;box-sizing:border-box;
                       background:var(--bg-input);border:1px solid var(--border);
                       border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.9rem;">
-        <p id="live-ecrire-aide" style="font-size:0.75rem;color:var(--text-muted);margin:0 0 14px;">
+        <p id="live-ecrire-aide" class="live-aide" style="font-size:0.75rem;color:var(--text-muted);margin:0 0 14px;">
             La réponse revient en voix, comme le reste. Utile quand un mot passe mal à l'oral.
         </p>
 
@@ -2629,7 +2629,7 @@ Analyse les sentiments de : ..."
     </div>
 </div>
 
-<script src="/static/app.js?v=20261121-live-visage-hexa"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
+<script src="/static/app.js?v=20261122-live-mobile"></script><!-- Zone d'annonce pour lecteurs d'écran (toujours dans le DOM) -->
 <div id="coanimm-status-announce" aria-live="polite" aria-atomic="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;" tabindex="-1"></div>
 </body>
 </html>

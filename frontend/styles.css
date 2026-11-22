@@ -3614,6 +3614,34 @@ body {
         width: min(64vw, 240px);
         height: min(64vw, 240px);
     }
+    /* En colonne, la base de 240 px du bloc texte s'appliquait à sa HAUTEUR :
+       c'était la grande zone vide sous le titre. */
+    .live-tete-texte {
+        flex: none;
+        min-width: 0;
+    }
+    /* Les aides sont masquées à l'œil sur téléphone, mais restent lues par le
+       lecteur d'écran (elles sont reliées aux champs par aria-describedby). */
+    .live-aide {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+    #live-panel .live-box {
+        gap: 10px;
+        padding: 14px;
+    }
+    /* La transcription ne se laisse plus écraser à une ligne par le panneau. */
+    #live-transcript {
+        flex: none;
+        height: 9em;
+    }
 }
 
 /* Respect de « animations réduites » : le visage reste dessiné, mais figé. */

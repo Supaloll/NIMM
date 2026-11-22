@@ -15987,7 +15987,9 @@ async function _liveLancer(moteur, voix) {
     document.getElementById('live-panel')?.classList.remove('hidden');
     _liveEtat('Connexion…');
     _liveVisageDemarrer('connexion');
-    setTimeout(() => { document.getElementById('live-raccrocher')?.focus(); }, 60);
+    // preventScroll : le focus va sur Raccrocher, en bas, sans faire défiler le
+    // panneau — sinon, sur un petit écran, le visage partait hors de vue.
+    setTimeout(() => { document.getElementById('live-raccrocher')?.focus({ preventScroll: true }); }, 60);
 
     try {
         if (moteur === 'gemini') {
