@@ -1,3 +1,17 @@
+Au début de chaque session : 
+
+Attache le dépôt GitHub Supaloll/NIMM (branche main),
+puis lis-y CLAUDE.md et .clinerules. Ces deux fichiers font foi ; le dépôt est la
+seule source du code. Ne demande pas de fichiers collés.
+
+
+
+
+
+
+
+
+
 Bonjour Claude.
 Je suis Laurent, créateur du projet NIMM.
 CONTEXTE :
